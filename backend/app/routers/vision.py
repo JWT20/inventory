@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.schemas import MatchResult
-from app.services.embedding import generate_embedding
+from app.services.embedding import process_image
 from app.services.matching import find_best_match
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ async def identify_box(file: UploadFile, db: Session = Depends(get_db)):
     Useful for ad-hoc identification or testing.
     """
     image_bytes = await file.read()
-    embedding = generate_embedding(image_bytes)
+    _description, embedding = process_image(image_bytes)
     matched_sku, confidence = find_best_match(db, embedding)
 
     if matched_sku is None:

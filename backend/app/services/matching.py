@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import ReferenceImage, SKU
+from app.models import SKU
 
 logger = logging.getLogger(__name__)
 

@@ -9,7 +9,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import OrderLine, PickLog
 from app.schemas import PickResult
-from app.services.embedding import generate_embedding
+from app.services.embedding import process_image
 from app.services.matching import find_best_match
 
 logger = logging.getLogger(__name__)
@@ -36,8 +36,8 @@ async def validate_pick(
     with open(scan_path, "wb") as f:
         f.write(image_bytes)
 
-    # Generate embedding and find match
-    embedding = generate_embedding(image_bytes)
+    # Vision API: describe scanned box → generate text embedding → match
+    _description, embedding = process_image(image_bytes)
     matched_sku, confidence = find_best_match(db, embedding)
 
     correct = matched_sku is not None and matched_sku.id == expected_sku.id

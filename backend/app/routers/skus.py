@@ -9,7 +9,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import SKU, ReferenceImage
 from app.schemas import ReferenceImageResponse, SKUCreate, SKUResponse, SKUUpdate
-from app.services.embedding import generate_embedding
+from app.services.embedding import process_image
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/skus", tags=["skus"])
@@ -96,13 +96,14 @@ async def upload_reference_image(
     with open(image_path, "wb") as f:
         f.write(image_bytes)
 
-    # Generate embedding
-    logger.info("Generating embedding for SKU %s", sku.sku_code)
-    embedding = generate_embedding(image_bytes)
+    # Vision API: describe image → generate text embedding
+    logger.info("Processing reference image for SKU %s via OpenAI Vision", sku.sku_code)
+    description, embedding = process_image(image_bytes)
 
     ref_image = ReferenceImage(
         sku_id=sku_id,
         image_path=image_path,
+        vision_description=description,
         embedding=embedding,
     )
     db.add(ref_image)

@@ -5,14 +5,23 @@ Elimineert persoonsafhankelijkheid in het wijn-pickproces door dozen te herkenne
 ## Architectuur
 
 ```
-┌──────────┐     ┌──────────┐     ┌──────────────┐     ┌───────────────┐
-│  Telefoon │────▶│  Nginx   │────▶│  FastAPI      │────▶│  PostgreSQL   │
-│  (Camera) │◀────│  :80     │◀────│  + CLIP model │◀────│  + pgvector   │
-└──────────┘     └──────────┘     └──────────────┘     └───────────────┘
+┌──────────┐     ┌──────────┐     ┌──────────┐     ┌───────────────┐
+│  Telefoon │────▶│  Nginx   │────▶│  FastAPI  │────▶│  PostgreSQL   │
+│  (Camera) │◀────│  :80     │◀────│          │◀────│  + pgvector   │
+└──────────┘     └──────────┘     └────┬─────┘     └───────────────┘
+                                       │
+                                       ▼
+                                  ┌──────────┐
+                                  │  OpenAI  │
+                                  │  Vision  │
+                                  │  + Embed │
+                                  └──────────┘
 ```
 
 - **Frontend**: Mobiele webapp met camera-scan
-- **Backend**: FastAPI + OpenCLIP (ViT-B/32) voor image embeddings
+- **Backend**: FastAPI (lightweight, geen PyTorch/ML lokaal)
+- **Vision**: OpenAI GPT-4o-mini voor beeldbeschrijving
+- **Embeddings**: OpenAI text-embedding-3-small voor vector matching
 - **Database**: PostgreSQL 16 + pgvector voor vector similarity search
 - **Hosting**: Docker Compose, geschikt voor Oracle Cloud Always Free
 
@@ -21,7 +30,7 @@ Elimineert persoonsafhankelijkheid in het wijn-pickproces door dozen te herkenne
 ```bash
 # 1. Clone en configureer
 cp .env.example .env
-# Pas .env aan (minimaal POSTGRES_PASSWORD en SECRET_KEY)
+# Pas .env aan (minimaal OPENAI_API_KEY, POSTGRES_PASSWORD en SECRET_KEY)
 
 # 2. Start alles
 docker compose up -d
@@ -47,19 +56,15 @@ docker compose up -d
 
 ## Oracle Cloud Deployment
 
-### VM Setup (Always Free Tier)
+Zie `deploy/` map voor automatische provisioning scripts.
+
 ```bash
-# Ampere A1 - 4 OCPU, 24GB RAM
-sudo apt update && sudo apt install -y docker.io docker-compose-v2
-sudo usermod -aG docker $USER
-
-# Firewall
-sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT
-sudo iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+# 1. Pas deploy/terraform.tfvars aan
+# 2. Provision VM
+cd deploy && ./provision.sh
+# 3. Setup op de VM
+./setup.sh
 ```
-
-### DuckDNS + HTTPS
-Voeg een Caddy reverse proxy toe of gebruik certbot met nginx voor HTTPS via DuckDNS.
 
 ## API Endpoints
 

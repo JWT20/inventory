@@ -1,0 +1,52 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - docker
+  - git
+  - firewalld
+
+runcmd:
+  # Enable and start Docker
+  - systemctl enable docker
+  - systemctl start docker
+  - usermod -aG docker opc
+
+  # Install Docker Compose
+  - curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64 -o /usr/local/bin/docker-compose
+  - chmod +x /usr/local/bin/docker-compose
+  - ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
+
+  # Firewall rules
+  - firewall-cmd --permanent --add-port=80/tcp
+  - firewall-cmd --permanent --add-port=443/tcp
+  - firewall-cmd --reload
+
+  # DuckDNS setup
+  - mkdir -p /opt/duckdns
+  - |
+    cat > /opt/duckdns/duck.sh << 'DUCKEOF'
+    #!/bin/bash
+    echo url="https://www.duckdns.org/update?domains=${duckdns_domain}&token=${duckdns_token}&ip=" | curl -k -o /opt/duckdns/duck.log -K -
+    DUCKEOF
+  - chmod +x /opt/duckdns/duck.sh
+  - /opt/duckdns/duck.sh
+  - echo "*/5 * * * * /opt/duckdns/duck.sh >/dev/null 2>&1" | crontab -
+
+  # Clone and deploy app
+  - mkdir -p /opt/wijnpick
+  - |
+    cat > /opt/wijnpick/.env << 'ENVEOF'
+    POSTGRES_USER=wijnpick
+    POSTGRES_PASSWORD=$(openssl rand -hex 16)
+    POSTGRES_DB=wijnpick
+    SECRET_KEY=$(openssl rand -hex 32)
+    OPENAI_API_KEY=${openai_api_key}
+    OPENAI_VISION_MODEL=gpt-4o-mini
+    OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+    MATCH_THRESHOLD=0.75
+    DUCKDNS_DOMAIN=${duckdns_domain}
+    DUCKDNS_TOKEN=${duckdns_token}
+    ENVEOF
+  - chown opc:opc -R /opt/wijnpick

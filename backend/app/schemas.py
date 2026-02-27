@@ -35,6 +35,7 @@ class ReferenceImageResponse(BaseModel):
     id: int
     sku_id: int
     image_path: str
+    vision_description: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -24,5 +24,12 @@ docker-compose.override.yml
 .DS_Store
 Thumbs.db
 
-# Model cache
-.cache/
+# Terraform
+deploy/*.tfstate
+deploy/*.tfstate.backup
+deploy/.terraform/
+deploy/.terraform.lock.hcl
+deploy/terraform.tfvars
+
+# OCI keys (never commit)
+*.pem

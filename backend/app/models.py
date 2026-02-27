@@ -15,7 +15,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
-EMBEDDING_DIM = 512
+# text-embedding-3-small produces 1536-dimensional vectors
+EMBEDDING_DIM = 1536
 
 
 class SKU(Base):
@@ -45,6 +46,7 @@ class ReferenceImage(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="CASCADE"))
     image_path: Mapped[str] = mapped_column(String(500))
+    vision_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     embedding = mapped_column(Vector(EMBEDDING_DIM))
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
