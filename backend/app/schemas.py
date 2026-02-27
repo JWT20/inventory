@@ -51,6 +51,7 @@ class SKUResponse(BaseModel):
     sku_code: str
     name: str
     description: str | None
+    stock_quantity: int
     active: bool
     created_at: datetime
     updated_at: datetime
@@ -70,56 +71,34 @@ class ReferenceImageResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# --- Order ---
-class OrderLineCreate(BaseModel):
-    sku_code: str
-    quantity: int
-
-
-class OrderCreate(BaseModel):
-    order_number: str
-    customer_name: str
-    lines: list[OrderLineCreate]
-
-
-class OrderLineResponse(BaseModel):
-    id: int
-    sku_id: int
-    sku_code: str
-    sku_name: str
-    quantity: int
-    picked_quantity: int
-    status: str
-
-    model_config = {"from_attributes": True}
-
-
-class OrderResponse(BaseModel):
-    id: int
-    order_number: str
-    customer_name: str
-    status: str
-    created_at: datetime
-    updated_at: datetime
-    lines: list[OrderLineResponse] = []
-
-    model_config = {"from_attributes": True}
-
-
-# --- Pick ---
-class PickResult(BaseModel):
-    correct: bool
-    confidence: float
-    matched_sku_code: str | None = None
-    matched_sku_name: str | None = None
-    expected_sku_code: str
-    expected_sku_name: str
-    message: str
-
-
-# --- Vision ---
+# --- Vision / Identification ---
 class MatchResult(BaseModel):
     sku_id: int
     sku_code: str
     sku_name: str
+    stock_quantity: int
     confidence: float
+
+
+# --- Receiving ---
+class ReceiveConfirm(BaseModel):
+    sku_id: int
+    quantity: int = Field(..., gt=0)
+    confidence: float | None = None
+    scan_image_path: str | None = None
+    notes: str | None = None
+
+
+class StockMovementResponse(BaseModel):
+    id: int
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    quantity: int
+    movement_type: str
+    confidence: float | None
+    notes: str | None
+    username: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

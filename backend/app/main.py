@@ -8,15 +8,15 @@ from app.auth import hash_password
 from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.models import User
-from app.routers import auth, orders, picks, skus, vision
+from app.routers import auth, labels, receiving, skus, vision
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="WijnPick API",
-    description="Vision-based wine box identification for order picking",
-    version="1.0.0",
+    title="Warehouse Receiving API",
+    description="Vision-based product identification for warehouse receiving and labeling",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -29,8 +29,8 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(skus.router, prefix="/api")
-app.include_router(orders.router, prefix="/api")
-app.include_router(picks.router, prefix="/api")
+app.include_router(receiving.router, prefix="/api")
+app.include_router(labels.router, prefix="/api")
 app.include_router(vision.router, prefix="/api")
 
 

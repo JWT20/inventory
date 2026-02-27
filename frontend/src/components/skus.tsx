@@ -20,6 +20,7 @@ interface SKU {
   sku_code: string;
   name: string;
   description: string | null;
+  stock_quantity: number;
   active: boolean;
   image_count: number;
 }
@@ -52,7 +53,7 @@ export function SKUsPage() {
   return (
     <>
       <div className="flex justify-between items-center mb-4">
-        <h2 className="text-xl font-bold">SKU Beheer</h2>
+        <h2 className="text-xl font-bold">Producten</h2>
         {user?.is_admin && (
           <Button size="sm" onClick={() => setShowNew(true)}>
             + Nieuw
@@ -78,7 +79,9 @@ export function SKUsPage() {
                   {s.active ? "Actief" : "Inactief"}
                 </Badge>
               </div>
-              <p className="text-sm text-muted-foreground">{s.sku_code}</p>
+              <p className="text-sm text-muted-foreground">
+                {s.sku_code} &bull; {s.stock_quantity} op voorraad
+              </p>
               <p className="text-sm text-muted-foreground mt-1">
                 {s.image_count} referentiebeeld
                 {s.image_count !== 1 ? "en" : ""}

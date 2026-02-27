@@ -22,6 +22,7 @@ def _sku_to_response(sku: SKU) -> SKUResponse:
         sku_code=sku.sku_code,
         name=sku.name,
         description=sku.description,
+        stock_quantity=sku.stock_quantity,
         active=sku.active,
         created_at=sku.created_at,
         updated_at=sku.updated_at,
