@@ -11,8 +11,11 @@ runcmd:
   - iptables -I INPUT -p tcp --dport 443 -j ACCEPT
   - iptables-save > /etc/sysconfig/iptables || true
 
-  # Install Docker CE from official repo
-  - dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+  # Remove conflicting Podman/Buildah packages (Oracle Linux 9 ships these by default)
+  - dnf remove -y podman podman-docker buildah containers-common || true
+
+  # Install Docker CE from official repo (use centos repo for Oracle Linux compatibility)
+  - dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
   - dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
   - systemctl enable docker
   - systemctl start docker
