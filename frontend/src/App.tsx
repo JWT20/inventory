@@ -2,19 +2,18 @@ import { useState } from "react";
 import { Toaster, toast } from "sonner";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { LoginPage } from "@/components/login";
-import { OrdersPage } from "@/components/orders";
-import { ScanPage } from "@/components/scan";
+import { ReceivePage } from "@/components/receive";
 import { SKUsPage } from "@/components/skus";
 import { AccountsPage } from "@/components/accounts";
 import { LogOut } from "lucide-react";
 
 export { toast };
 
-type Page = "orders" | "scan" | "skus" | "accounts";
+type Page = "receive" | "skus" | "accounts";
 
 function Main() {
   const { user, loading, logout } = useAuth();
-  const [page, setPage] = useState<Page>("orders");
+  const [page, setPage] = useState<Page>("receive");
 
   if (loading) {
     return (
@@ -27,9 +26,8 @@ function Main() {
   if (!user) return <LoginPage />;
 
   const tabs: { id: Page; label: string; adminOnly?: boolean }[] = [
-    { id: "orders", label: "Orders" },
-    { id: "scan", label: "Scan" },
-    { id: "skus", label: "SKU's" },
+    { id: "receive", label: "Scan & Label" },
+    { id: "skus", label: "Producten" },
     { id: "accounts", label: "Accounts", adminOnly: true },
   ];
 
@@ -39,7 +37,7 @@ function Main() {
     <div className="min-h-screen flex flex-col">
       <header className="sticky top-0 z-50 bg-background border-b border-border px-4 pt-3 pb-0">
         <div className="flex justify-between items-center mb-2">
-          <h1 className="text-lg font-bold">WijnPick</h1>
+          <h1 className="text-lg font-bold">Magazijn</h1>
           <button
             onClick={logout}
             className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -66,8 +64,7 @@ function Main() {
       </header>
 
       <main className="flex-1 p-4 pb-20">
-        {page === "orders" && <OrdersPage />}
-        {page === "scan" && <ScanPage />}
+        {page === "receive" && <ReceivePage />}
         {page === "skus" && <SKUsPage />}
         {page === "accounts" && user.is_admin && <AccountsPage />}
       </main>

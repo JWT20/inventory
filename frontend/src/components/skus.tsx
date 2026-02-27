@@ -52,7 +52,7 @@ export function SKUsPage() {
   return (
     <>
       <div className="flex justify-between items-center mb-4">
-        <h2 className="text-xl font-bold">SKU Beheer</h2>
+        <h2 className="text-xl font-bold">Producten</h2>
         {user?.is_admin && (
           <Button size="sm" onClick={() => setShowNew(true)}>
             + Nieuw

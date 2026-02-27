@@ -49,6 +49,20 @@ function upload(path: string, file: Blob, filename = "file") {
   return request(path, { method: "POST", body: form });
 }
 
+function uploadWithFields(
+  path: string,
+  file: Blob,
+  fields: Record<string, string>,
+  filename = "file",
+) {
+  const form = new FormData();
+  form.append("file", file, filename);
+  for (const [k, v] of Object.entries(fields)) {
+    form.append(k, v);
+  }
+  return request(path, { method: "POST", body: form });
+}
+
 export const api = {
   // Auth
   login: (username: string, password: string) =>
@@ -76,19 +90,30 @@ export const api = {
   deleteImage: (skuId: number, imageId: number) =>
     request(`/skus/${skuId}/images/${imageId}`, { method: "DELETE" }),
 
-  // Orders
-  listOrders: (status = "") =>
-    request(`/orders${status ? `?status=${status}` : ""}`),
-  createOrder: (data: unknown) => json("/orders", "POST", data),
-  getOrder: (id: number) => request(`/orders/${id}`),
-  deleteOrder: (id: number) => request(`/orders/${id}`, { method: "DELETE" }),
-  updateOrderStatus: (id: number, status: string) =>
-    request(`/orders/${id}/status?status=${status}`, { method: "PATCH" }),
+  // Receiving
+  identifyBox: (blob: Blob) =>
+    upload("/receiving/identify", blob, "scan.jpg"),
+  createNewProduct: (
+    blob: Blob,
+    skuCode: string,
+    name: string,
+    description?: string,
+  ) => {
+    const fields: Record<string, string> = { sku_code: skuCode, name };
+    if (description) fields.description = description;
+    return uploadWithFields(
+      "/receiving/new-product",
+      blob,
+      fields,
+      "image.jpg",
+    );
+  },
 
-  // Picks
-  validatePick: (orderLineId: number, blob: Blob) =>
-    upload(`/picks/validate/${orderLineId}`, blob, "scan.jpg"),
+  // Labels
+  barcodeUrl: (skuId: number) => `/api/labels/${skuId}/barcode.png`,
+  labelPdfUrl: (skuId: number) => `/api/labels/${skuId}/label.pdf`,
+  labelZplUrl: (skuId: number) => `/api/labels/${skuId}/label.zpl`,
 
-  // Vision
+  // Vision (ad-hoc)
   identify: (blob: Blob) => upload("/vision/identify", blob, "scan.jpg"),
 };
