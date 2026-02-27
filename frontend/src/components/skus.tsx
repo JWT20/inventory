@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -115,6 +115,7 @@ function SKUDialog({
   onSaved: () => void;
 }) {
   const { user } = useAuth();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [skuCode, setSkuCode] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -265,18 +266,24 @@ function SKUDialog({
               </div>
             )}
             {user?.is_admin && (
-              <label className="cursor-pointer">
-                <Button variant="secondary" size="sm" type="button" className="pointer-events-none">
+              <>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                >
                   Foto uploaden
                 </Button>
                 <input
+                  ref={fileInputRef}
                   type="file"
                   accept="image/*"
                   capture="environment"
                   className="hidden"
                   onChange={handleUpload}
                 />
-              </label>
+              </>
             )}
           </div>
         )}
