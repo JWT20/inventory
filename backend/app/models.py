@@ -19,25 +19,6 @@ from app.database import Base
 EMBEDDING_DIM = 1536
 
 
-class User(Base):
-    __tablename__ = "users"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    username: Mapped[str] = mapped_column(String(100), unique=True, index=True)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255))
-    role: Mapped[str] = mapped_column(
-        String(20), default="picker"
-    )  # admin, picker, viewer
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, server_default=func.now()
-    )
-    updated_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now()
-    )
-
-
 class SKU(Base):
     __tablename__ = "skus"
 

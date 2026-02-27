@@ -1,9 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.auth import require_admin, require_picker, require_viewer
 from app.database import get_db
-from app.models import Order, OrderLine, SKU, User
+from app.models import Order, OrderLine, SKU
 from app.schemas import OrderCreate, OrderLineResponse, OrderResponse
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -34,11 +33,7 @@ def _order_to_response(order: Order) -> OrderResponse:
 
 
 @router.get("", response_model=list[OrderResponse])
-def list_orders(
-    status: str | None = None,
-    db: Session = Depends(get_db),
-    _user: User = Depends(require_viewer),
-):
+def list_orders(status: str | None = None, db: Session = Depends(get_db)):
     query = db.query(Order)
     if status:
         query = query.filter(Order.status == status)
@@ -47,11 +42,7 @@ def list_orders(
 
 
 @router.post("", response_model=OrderResponse, status_code=201)
-def create_order(
-    data: OrderCreate,
-    db: Session = Depends(get_db),
-    _user: User = Depends(require_picker),
-):
+def create_order(data: OrderCreate, db: Session = Depends(get_db)):
     existing = db.query(Order).filter(Order.order_number == data.order_number).first()
     if existing:
         raise HTTPException(400, f"Order '{data.order_number}' already exists")
@@ -80,11 +71,7 @@ def create_order(
 
 
 @router.get("/{order_id}", response_model=OrderResponse)
-def get_order(
-    order_id: int,
-    db: Session = Depends(get_db),
-    _user: User = Depends(require_viewer),
-):
+def get_order(order_id: int, db: Session = Depends(get_db)):
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, "Order not found")
@@ -92,12 +79,7 @@ def get_order(
 
 
 @router.patch("/{order_id}/status")
-def update_order_status(
-    order_id: int,
-    status: str,
-    db: Session = Depends(get_db),
-    _user: User = Depends(require_picker),
-):
+def update_order_status(order_id: int, status: str, db: Session = Depends(get_db)):
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, "Order not found")
@@ -109,11 +91,7 @@ def update_order_status(
 
 
 @router.delete("/{order_id}", status_code=204)
-def delete_order(
-    order_id: int,
-    db: Session = Depends(get_db),
-    _user: User = Depends(require_admin),
-):
+def delete_order(order_id: int, db: Session = Depends(get_db)):
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, "Order not found")

@@ -1,42 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field
-
-
-# --- Auth ---
-class UserCreate(BaseModel):
-    username: str = Field(..., min_length=3, max_length=100)
-    email: EmailStr
-    password: str = Field(..., min_length=8, max_length=128)
-    role: str = Field(default="picker", pattern="^(admin|picker|viewer)$")
-
-
-class UserUpdate(BaseModel):
-    email: EmailStr | None = None
-    role: str | None = Field(default=None, pattern="^(admin|picker|viewer)$")
-    is_active: bool | None = None
-
-
-class UserResponse(BaseModel):
-    id: int
-    username: str
-    email: str
-    role: str
-    is_active: bool
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-class TokenResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-
-
-class TokenRefreshRequest(BaseModel):
-    refresh_token: str
+from pydantic import BaseModel
 
 
 # --- SKU ---
