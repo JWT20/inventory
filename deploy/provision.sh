@@ -36,7 +36,12 @@ fi
 
 echo ""
 echo "3/3 Terraform apply..."
-terraform apply -auto-approve
+until terraform apply -auto-approve; do
+    echo ""
+    echo "Terraform apply mislukt (waarschijnlijk 'Out of host capacity')."
+    echo "Opnieuw proberen over 2 minuten... ($(date))"
+    sleep 120
+done
 
 echo ""
 echo "=== Provisioning compleet! ==="
