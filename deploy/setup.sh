@@ -46,7 +46,7 @@ sudo dnf install -y caddy || {
 sudo mkdir -p /etc/caddy
 sudo tee /etc/caddy/Caddyfile > /dev/null << CADDYEOF
 ${DUCKDNS_DOMAIN}.duckdns.org {
-    reverse_proxy localhost:80
+    reverse_proxy localhost:8080
 }
 CADDYEOF
 
