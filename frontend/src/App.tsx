@@ -1,0 +1,94 @@
+import { useState } from "react";
+import { Toaster, toast } from "sonner";
+import { AuthProvider, useAuth } from "@/lib/auth";
+import { LoginPage } from "@/components/login";
+import { OrdersPage } from "@/components/orders";
+import { ScanPage } from "@/components/scan";
+import { SKUsPage } from "@/components/skus";
+import { AccountsPage } from "@/components/accounts";
+import { LogOut } from "lucide-react";
+
+export { toast };
+
+type Page = "orders" | "scan" | "skus" | "accounts";
+
+function Main() {
+  const { user, loading, logout } = useAuth();
+  const [page, setPage] = useState<Page>("orders");
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-muted-foreground">Laden...</p>
+      </div>
+    );
+  }
+
+  if (!user) return <LoginPage />;
+
+  const tabs: { id: Page; label: string; adminOnly?: boolean }[] = [
+    { id: "orders", label: "Orders" },
+    { id: "scan", label: "Scan" },
+    { id: "skus", label: "SKU's" },
+    { id: "accounts", label: "Accounts", adminOnly: true },
+  ];
+
+  const visibleTabs = tabs.filter((t) => !t.adminOnly || user.is_admin);
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      <header className="sticky top-0 z-50 bg-background border-b border-border px-4 pt-3 pb-0">
+        <div className="flex justify-between items-center mb-2">
+          <h1 className="text-lg font-bold">WijnPick</h1>
+          <button
+            onClick={logout}
+            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <span>{user.username}</span>
+            <LogOut className="h-4 w-4" />
+          </button>
+        </div>
+        <nav className="flex gap-1">
+          {visibleTabs.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setPage(t.id)}
+              className={`flex-1 py-2.5 text-sm font-semibold border-b-2 transition-colors ${
+                page === t.id
+                  ? "text-primary border-primary"
+                  : "text-muted-foreground border-transparent hover:text-foreground"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
+      </header>
+
+      <main className="flex-1 p-4 pb-20">
+        {page === "orders" && <OrdersPage />}
+        {page === "scan" && <ScanPage />}
+        {page === "skus" && <SKUsPage />}
+        {page === "accounts" && user.is_admin && <AccountsPage />}
+      </main>
+    </div>
+  );
+}
+
+export function App() {
+  return (
+    <AuthProvider>
+      <Main />
+      <Toaster
+        position="bottom-center"
+        toastOptions={{
+          style: {
+            background: "hsl(217 33% 17%)",
+            color: "hsl(210 40% 96%)",
+            border: "1px solid hsl(215 19% 35%)",
+          },
+        }}
+      />
+    </AuthProvider>
+  );
+}
