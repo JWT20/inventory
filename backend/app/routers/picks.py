@@ -5,9 +5,10 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from app.auth import require_picker
 from app.config import settings
 from app.database import get_db
-from app.models import OrderLine, PickLog
+from app.models import OrderLine, PickLog, User
 from app.schemas import PickResult
 from app.services.embedding import process_image
 from app.services.matching import find_best_match
@@ -18,7 +19,10 @@ router = APIRouter(prefix="/picks", tags=["picks"])
 
 @router.post("/validate/{order_line_id}", response_model=PickResult)
 async def validate_pick(
-    order_line_id: int, file: UploadFile, db: Session = Depends(get_db)
+    order_line_id: int,
+    file: UploadFile,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_picker),
 ):
     """Validate a pick by scanning a wine box and comparing to expected SKU."""
     order_line = db.get(OrderLine, order_line_id)

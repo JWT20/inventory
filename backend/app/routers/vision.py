@@ -3,7 +3,9 @@ import logging
 from fastapi import APIRouter, Depends, UploadFile
 from sqlalchemy.orm import Session
 
+from app.auth import require_picker
 from app.database import get_db
+from app.models import User
 from app.schemas import MatchResult
 from app.services.embedding import process_image
 from app.services.matching import find_best_match
@@ -13,7 +15,11 @@ router = APIRouter(prefix="/vision", tags=["vision"])
 
 
 @router.post("/identify", response_model=MatchResult | None)
-async def identify_box(file: UploadFile, db: Session = Depends(get_db)):
+async def identify_box(
+    file: UploadFile,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_picker),
+):
     """Identify a wine box by image without order context.
 
     Useful for ad-hoc identification or testing.
