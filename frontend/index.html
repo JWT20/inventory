@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>WijnPick</title>
+    <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+    <header>
+        <h1 id="page-title">WijnPick</h1>
+        <nav id="main-nav">
+            <button class="nav-btn active" data-page="orders">Orders</button>
+            <button class="nav-btn" data-page="scan">Scan</button>
+            <button class="nav-btn" data-page="skus">SKU's</button>
+        </nav>
+    </header>
+
+    <main id="app">
+        <!-- Orders Page -->
+        <section id="page-orders" class="page active">
+            <div class="page-header">
+                <h2>Orders</h2>
+                <button id="btn-new-order" class="btn btn-primary">+ Nieuw</button>
+            </div>
+            <div class="filter-bar">
+                <button class="filter-btn active" data-filter="">Alle</button>
+                <button class="filter-btn" data-filter="pending">Open</button>
+                <button class="filter-btn" data-filter="picking">Bezig</button>
+                <button class="filter-btn" data-filter="completed">Klaar</button>
+            </div>
+            <div id="orders-list" class="list"></div>
+        </section>
+
+        <!-- Scan / Pick Page -->
+        <section id="page-scan" class="page">
+            <div id="scan-select-order">
+                <h2>Selecteer order om te picken</h2>
+                <div id="pickable-orders" class="list"></div>
+            </div>
+            <div id="scan-active" class="hidden">
+                <div id="pick-info">
+                    <div id="pick-order-info"></div>
+                    <div id="pick-current-item" class="pick-item"></div>
+                    <div id="pick-progress"></div>
+                </div>
+                <div id="camera-container">
+                    <video id="camera-feed" autoplay playsinline></video>
+                    <canvas id="camera-canvas" class="hidden"></canvas>
+                    <div id="scan-overlay">
+                        <div id="scan-frame"></div>
+                    </div>
+                </div>
+                <div id="scan-result" class="hidden"></div>
+                <div class="scan-actions">
+                    <button id="btn-capture" class="btn btn-large btn-primary">Scan</button>
+                    <button id="btn-next-item" class="btn btn-large btn-secondary hidden">Volgende</button>
+                    <button id="btn-stop-picking" class="btn btn-text">Stop picken</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- SKU Management Page -->
+        <section id="page-skus" class="page">
+            <div class="page-header">
+                <h2>SKU Beheer</h2>
+                <button id="btn-new-sku" class="btn btn-primary">+ Nieuw</button>
+            </div>
+            <div id="skus-list" class="list"></div>
+        </section>
+    </main>
+
+    <!-- Modal: New Order -->
+    <div id="modal-order" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Nieuwe Order</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <form id="form-order">
+                <label>Ordernummer
+                    <input type="text" name="order_number" required>
+                </label>
+                <label>Klant
+                    <input type="text" name="customer_name" required>
+                </label>
+                <div id="order-lines">
+                    <h4>Orderregels</h4>
+                    <div id="order-lines-list"></div>
+                    <button type="button" id="btn-add-line" class="btn btn-secondary btn-small">+ Regel</button>
+                </div>
+                <button type="submit" class="btn btn-primary">Opslaan</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: New/Edit SKU -->
+    <div id="modal-sku" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-sku-title">Nieuwe SKU</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <form id="form-sku">
+                <input type="hidden" name="id" value="">
+                <label>SKU Code
+                    <input type="text" name="sku_code" required>
+                </label>
+                <label>Naam
+                    <input type="text" name="name" required>
+                </label>
+                <label>Omschrijving
+                    <textarea name="description" rows="2"></textarea>
+                </label>
+                <button type="submit" class="btn btn-primary">Opslaan</button>
+            </form>
+            <div id="sku-images" class="hidden">
+                <h4>Referentiebeelden</h4>
+                <div id="sku-images-list"></div>
+                <div class="upload-area">
+                    <label class="btn btn-secondary">
+                        Foto uploaden
+                        <input type="file" id="ref-image-input" accept="image/*" capture="environment" class="hidden">
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/camera.js"></script>
+    <script src="/js/ui.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>
