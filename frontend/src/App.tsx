@@ -3,14 +3,13 @@ import { Toaster, toast } from "sonner";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { LoginPage } from "@/components/login";
 import { ReceivePage } from "@/components/receive";
-import { StockPage } from "@/components/stock";
 import { SKUsPage } from "@/components/skus";
 import { AccountsPage } from "@/components/accounts";
 import { LogOut } from "lucide-react";
 
 export { toast };
 
-type Page = "receive" | "stock" | "skus" | "accounts";
+type Page = "receive" | "skus" | "accounts";
 
 function Main() {
   const { user, loading, logout } = useAuth();
@@ -27,8 +26,7 @@ function Main() {
   if (!user) return <LoginPage />;
 
   const tabs: { id: Page; label: string; adminOnly?: boolean }[] = [
-    { id: "receive", label: "Ontvangst" },
-    { id: "stock", label: "Voorraad" },
+    { id: "receive", label: "Scan & Label" },
     { id: "skus", label: "Producten" },
     { id: "accounts", label: "Accounts", adminOnly: true },
   ];
@@ -67,7 +65,6 @@ function Main() {
 
       <main className="flex-1 p-4 pb-20">
         {page === "receive" && <ReceivePage />}
-        {page === "stock" && <StockPage />}
         {page === "skus" && <SKUsPage />}
         {page === "accounts" && user.is_admin && <AccountsPage />}
       </main>

@@ -4,7 +4,6 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     DateTime,
-    Float,
     ForeignKey,
     Integer,
     String,
@@ -39,7 +38,6 @@ class SKU(Base):
     sku_code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    stock_quantity: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
@@ -49,9 +47,6 @@ class SKU(Base):
     )
 
     reference_images: Mapped[list["ReferenceImage"]] = relationship(
-        back_populates="sku", cascade="all, delete-orphan"
-    )
-    stock_movements: Mapped[list["StockMovement"]] = relationship(
         back_populates="sku", cascade="all, delete-orphan"
     )
 
@@ -69,24 +64,3 @@ class ReferenceImage(Base):
     )
 
     sku: Mapped["SKU"] = relationship(back_populates="reference_images")
-
-
-class StockMovement(Base):
-    __tablename__ = "stock_movements"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="CASCADE"))
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    quantity: Mapped[int] = mapped_column(Integer)
-    movement_type: Mapped[str] = mapped_column(
-        String(20), default="received"
-    )  # received, adjusted, shipped
-    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-    scan_image_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, server_default=func.now()
-    )
-
-    sku: Mapped["SKU"] = relationship(back_populates="stock_movements")
-    user: Mapped["User"] = relationship()

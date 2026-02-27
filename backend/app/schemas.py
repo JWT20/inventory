@@ -51,7 +51,6 @@ class SKUResponse(BaseModel):
     sku_code: str
     name: str
     description: str | None
-    stock_quantity: int
     active: bool
     created_at: datetime
     updated_at: datetime
@@ -76,29 +75,4 @@ class MatchResult(BaseModel):
     sku_id: int
     sku_code: str
     sku_name: str
-    stock_quantity: int
     confidence: float
-
-
-# --- Receiving ---
-class ReceiveConfirm(BaseModel):
-    sku_id: int
-    quantity: int = Field(..., gt=0)
-    confidence: float | None = None
-    scan_image_path: str | None = None
-    notes: str | None = None
-
-
-class StockMovementResponse(BaseModel):
-    id: int
-    sku_id: int
-    sku_code: str
-    sku_name: str
-    quantity: int
-    movement_type: str
-    confidence: float | None
-    notes: str | None
-    username: str
-    created_at: datetime
-
-    model_config = {"from_attributes": True}

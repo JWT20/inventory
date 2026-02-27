@@ -1,7 +1,7 @@
 import io
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -60,12 +60,11 @@ def barcode_png(
 @router.get("/{sku_id}/label.zpl")
 def label_zpl(
     sku_id: int,
-    quantity: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
     """Generate ZPL label for a Zebra printer.
 
-    Includes: SKU code (barcode), product name, stock quantity.
+    Includes: SKU code (barcode) and product name.
     """
     sku = _get_sku(db, sku_id)
 
@@ -75,10 +74,8 @@ def label_zpl(
 ^FO50,30^FD{sku.name}^FS
 ^CF0,20
 ^FO50,70^FDSKU: {sku.sku_code}^FS
-^FO50,100^FDOntvangen: {quantity}^FS
-^FO50,130^FDVoorraad: {sku.stock_quantity}^FS
 ^BY2,2,80
-^FO50,170^BC,,Y,N^FD{sku.sku_code}^FS
+^FO50,120^BC,,Y,N^FD{sku.sku_code}^FS
 ^XZ"""
 
     return Response(
@@ -93,7 +90,6 @@ def label_zpl(
 @router.get("/{sku_id}/label.pdf")
 def label_pdf(
     sku_id: int,
-    quantity: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
     """Generate a printable PDF label with barcode.
@@ -121,8 +117,6 @@ def label_pdf(
     code.write(barcode_buf)
     barcode_buf.seek(0)
 
-    # Build a simple HTML label and convert to printable page
-    from PIL import Image
     import base64
 
     barcode_buf.seek(0)
@@ -143,7 +137,6 @@ def label_pdf(
 <body>
   <div class="name">{sku.name}</div>
   <div class="info">SKU: {sku.sku_code}</div>
-  <div class="info">Ontvangen: {quantity} | Voorraad: {sku.stock_quantity}</div>
   <div class="barcode">
     <img src="data:image/png;base64,{barcode_b64}" />
   </div>

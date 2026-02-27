@@ -93,13 +93,6 @@ export const api = {
   // Receiving
   identifyBox: (blob: Blob) =>
     upload("/receiving/identify", blob, "scan.jpg"),
-  confirmReceiving: (data: {
-    sku_id: number;
-    quantity: number;
-    confidence?: number;
-    scan_image_path?: string;
-    notes?: string;
-  }) => json("/receiving/confirm", "POST", data),
   createNewProduct: (
     blob: Blob,
     skuCode: string,
@@ -115,15 +108,11 @@ export const api = {
       "image.jpg",
     );
   },
-  receivingHistory: (limit = 50) =>
-    request(`/receiving/history?limit=${limit}`),
 
   // Labels
   barcodeUrl: (skuId: number) => `/api/labels/${skuId}/barcode.png`,
-  labelPdfUrl: (skuId: number, quantity: number) =>
-    `/api/labels/${skuId}/label.pdf?quantity=${quantity}`,
-  labelZplUrl: (skuId: number, quantity: number) =>
-    `/api/labels/${skuId}/label.zpl?quantity=${quantity}`,
+  labelPdfUrl: (skuId: number) => `/api/labels/${skuId}/label.pdf`,
+  labelZplUrl: (skuId: number) => `/api/labels/${skuId}/label.zpl`,
 
   // Vision (ad-hoc)
   identify: (blob: Blob) => upload("/vision/identify", blob, "scan.jpg"),

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -11,84 +11,50 @@ interface MatchResult {
   sku_id: number;
   sku_code: string;
   sku_name: string;
-  stock_quantity: number;
   confidence: number;
 }
 
-interface StockMovement {
-  id: number;
-  sku_id: number;
-  sku_code: string;
-  sku_name: string;
-  quantity: number;
-  movement_type: string;
-  confidence: number | null;
-  notes: string | null;
-  username: string;
-  created_at: string;
-}
-
-type Step = "scan" | "confirm" | "label" | "new-product";
+type Step = "scan" | "label" | "new-product";
 
 export function ReceivePage() {
   const [step, setStep] = useState<Step>("scan");
   const [match, setMatch] = useState<MatchResult | null>(null);
-  const [confirmedMovement, setConfirmedMovement] =
-    useState<StockMovement | null>(null);
-  const [confirmedQuantity, setConfirmedQuantity] = useState(0);
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null);
 
   function handleMatch(result: MatchResult | null, blob: Blob) {
     setCapturedBlob(blob);
     if (result) {
       setMatch(result);
-      setStep("confirm");
+      setStep("label");
     } else {
       setStep("new-product");
     }
   }
 
-  function handleConfirmed(movement: StockMovement, quantity: number) {
-    setConfirmedMovement(movement);
-    setConfirmedQuantity(quantity);
-    setStep("label");
-  }
-
-  function handleNewProductCreated(skuId: number, skuName: string) {
+  function handleNewProductCreated(sku: { id: number; sku_code: string; name: string }) {
     setMatch({
-      sku_id: skuId,
-      sku_code: "",
-      sku_name: skuName,
-      stock_quantity: 0,
+      sku_id: sku.id,
+      sku_code: sku.sku_code,
+      sku_name: sku.name,
       confidence: 1.0,
     });
-    setStep("confirm");
+    setStep("label");
   }
 
   function reset() {
     setStep("scan");
     setMatch(null);
-    setConfirmedMovement(null);
-    setConfirmedQuantity(0);
     setCapturedBlob(null);
   }
 
   return (
     <div>
-      <h2 className="text-xl font-bold mb-4">Goederen ontvangen</h2>
+      <h2 className="text-xl font-bold mb-4">Scan & Label</h2>
 
       {step === "scan" && <ScanStep onResult={handleMatch} />}
 
-      {step === "confirm" && match && (
-        <ConfirmStep match={match} onConfirmed={handleConfirmed} onBack={reset} />
-      )}
-
-      {step === "label" && confirmedMovement && (
-        <LabelStep
-          movement={confirmedMovement}
-          quantity={confirmedQuantity}
-          onDone={reset}
-        />
+      {step === "label" && match && (
+        <LabelStep match={match} onDone={reset} />
       )}
 
       {step === "new-product" && capturedBlob && (
@@ -195,36 +161,25 @@ function ScanStep({
   );
 }
 
-/* ---------- Step 2: Confirm Receiving ---------- */
+/* ---------- Step 2: Print Label ---------- */
 
-function ConfirmStep({
+function LabelStep({
   match,
-  onConfirmed,
-  onBack,
+  onDone,
 }: {
   match: MatchResult;
-  onConfirmed: (movement: StockMovement, quantity: number) => void;
-  onBack: () => void;
+  onDone: () => void;
 }) {
-  const [quantity, setQuantity] = useState(1);
-  const [submitting, setSubmitting] = useState(false);
+  const barcodeUrl = api.barcodeUrl(match.sku_id);
+  const pdfUrl = api.labelPdfUrl(match.sku_id);
+  const zplUrl = api.labelZplUrl(match.sku_id);
 
-  async function confirm() {
-    setSubmitting(true);
-    try {
-      const movement: StockMovement = await api.confirmReceiving({
-        sku_id: match.sku_id,
-        quantity,
-        confidence: match.confidence,
+  function openPrintLabel() {
+    const win = window.open(pdfUrl, "_blank");
+    if (win) {
+      win.addEventListener("load", () => {
+        win.print();
       });
-      toast.success(
-        `${quantity}x ${match.sku_name} ontvangen`,
-      );
-      onConfirmed(movement, quantity);
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Fout bij ontvangst");
-    } finally {
-      setSubmitting(false);
     }
   }
 
@@ -240,76 +195,7 @@ function ConfirmStep({
             {Math.round(match.confidence * 100)}% match
           </Badge>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Huidige voorraad: <strong>{match.stock_quantity}</strong>
-        </p>
       </Card>
-
-      <div className="space-y-3 mb-4">
-        <div className="space-y-2">
-          <Label>Aantal ontvangen</Label>
-          <Input
-            type="number"
-            min={1}
-            value={quantity}
-            onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-            className="text-center text-2xl h-14"
-          />
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-3">
-        <Button
-          size="lg"
-          className="w-full text-lg h-14"
-          onClick={confirm}
-          disabled={submitting}
-        >
-          {submitting ? "Verwerken..." : "Bevestig ontvangst"}
-        </Button>
-        <button
-          onClick={onBack}
-          className="text-sm text-muted-foreground underline text-center"
-        >
-          Terug naar scanner
-        </button>
-      </div>
-    </>
-  );
-}
-
-/* ---------- Step 3: Print Label ---------- */
-
-function LabelStep({
-  movement,
-  quantity,
-  onDone,
-}: {
-  movement: StockMovement;
-  quantity: number;
-  onDone: () => void;
-}) {
-  const barcodeUrl = api.barcodeUrl(movement.sku_id);
-  const pdfUrl = api.labelPdfUrl(movement.sku_id, quantity);
-  const zplUrl = api.labelZplUrl(movement.sku_id, quantity);
-
-  function openPrintLabel() {
-    const win = window.open(pdfUrl, "_blank");
-    if (win) {
-      win.addEventListener("load", () => {
-        win.print();
-      });
-    }
-  }
-
-  return (
-    <>
-      <div className="p-4 rounded-lg bg-green-600/20 border-2 border-green-600 text-center mb-4">
-        <p className="text-green-500 font-bold text-lg">Ontvangst bevestigd</p>
-        <p className="text-green-400 text-sm mt-1">
-          {quantity}x {movement.sku_name} — voorraad bijgewerkt
-        </p>
-      </div>
 
       <Card className="p-4 mb-4">
         <Label className="mb-2 block text-sm text-muted-foreground">
@@ -318,12 +204,12 @@ function LabelStep({
         <div className="flex justify-center bg-white rounded-lg p-4 mb-3">
           <img
             src={barcodeUrl}
-            alt={`Barcode ${movement.sku_code}`}
+            alt={`Barcode ${match.sku_code}`}
             className="max-w-full h-auto"
           />
         </div>
         <p className="text-center text-sm font-mono text-muted-foreground">
-          {movement.sku_code}
+          {match.sku_code}
         </p>
       </Card>
 
@@ -354,7 +240,7 @@ function NewProductStep({
   onBack,
 }: {
   blob: Blob;
-  onCreated: (skuId: number, skuName: string) => void;
+  onCreated: (sku: { id: number; sku_code: string; name: string }) => void;
   onBack: () => void;
 }) {
   const [skuCode, setSkuCode] = useState("");
@@ -378,7 +264,7 @@ function NewProductStep({
         description || undefined,
       );
       toast.success(`Nieuw product "${name}" aangemaakt`);
-      onCreated(sku.id, sku.name);
+      onCreated({ id: sku.id, sku_code: sku.sku_code, name: sku.name });
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Fout bij aanmaken");
     } finally {

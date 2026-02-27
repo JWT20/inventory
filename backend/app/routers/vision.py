@@ -32,6 +32,5 @@ async def identify_box(file: UploadFile, db: Session = Depends(get_db)):
         sku_id=matched_sku.id,
         sku_code=matched_sku.sku_code,
         sku_name=matched_sku.name,
-        stock_quantity=matched_sku.stock_quantity,
         confidence=confidence,
     )
