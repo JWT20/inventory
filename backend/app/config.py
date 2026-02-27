@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     match_threshold: float = 0.75
     upload_dir: str = "/app/uploads"
 
+    # Auth
+    admin_password: str = "changeme_in_production"
+    token_expire_days: int = 90
+
     class Config:
         env_file = ".env"
 

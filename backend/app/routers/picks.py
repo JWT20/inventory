@@ -5,6 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.config import settings
 from app.database import get_db
 from app.models import OrderLine, PickLog
@@ -13,7 +14,9 @@ from app.services.embedding import process_image
 from app.services.matching import find_best_match
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/picks", tags=["picks"])
+router = APIRouter(
+    prefix="/picks", tags=["picks"], dependencies=[Depends(get_current_user)]
+)
 
 
 @router.post("/validate/{order_line_id}", response_model=PickResult)

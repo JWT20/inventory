@@ -3,13 +3,16 @@ import logging
 from fastapi import APIRouter, Depends, UploadFile
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.database import get_db
 from app.schemas import MatchResult
 from app.services.embedding import process_image
 from app.services.matching import find_best_match
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/vision", tags=["vision"])
+router = APIRouter(
+    prefix="/vision", tags=["vision"], dependencies=[Depends(get_current_user)]
+)
 
 
 @router.post("/identify", response_model=MatchResult | None)

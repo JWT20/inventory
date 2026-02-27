@@ -5,9 +5,10 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user, require_admin
 from app.config import settings
 from app.database import get_db
-from app.models import SKU, ReferenceImage
+from app.models import SKU, ReferenceImage, User
 from app.schemas import ReferenceImageResponse, SKUCreate, SKUResponse, SKUUpdate
 from app.services.embedding import process_image
 
@@ -29,7 +30,11 @@ def _sku_to_response(sku: SKU) -> SKUResponse:
 
 
 @router.get("", response_model=list[SKUResponse])
-def list_skus(active_only: bool = False, db: Session = Depends(get_db)):
+def list_skus(
+    active_only: bool = False,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     query = db.query(SKU)
     if active_only:
         query = query.filter(SKU.active.is_(True))
@@ -38,7 +43,11 @@ def list_skus(active_only: bool = False, db: Session = Depends(get_db)):
 
 
 @router.post("", response_model=SKUResponse, status_code=201)
-def create_sku(data: SKUCreate, db: Session = Depends(get_db)):
+def create_sku(
+    data: SKUCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
     existing = db.query(SKU).filter(SKU.sku_code == data.sku_code).first()
     if existing:
         raise HTTPException(400, f"SKU code '{data.sku_code}' already exists")
@@ -50,7 +59,11 @@ def create_sku(data: SKUCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/{sku_id}", response_model=SKUResponse)
-def get_sku(sku_id: int, db: Session = Depends(get_db)):
+def get_sku(
+    sku_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU not found")
@@ -58,7 +71,12 @@ def get_sku(sku_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/{sku_id}", response_model=SKUResponse)
-def update_sku(sku_id: int, data: SKUUpdate, db: Session = Depends(get_db)):
+def update_sku(
+    sku_id: int,
+    data: SKUUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU not found")
@@ -70,7 +88,11 @@ def update_sku(sku_id: int, data: SKUUpdate, db: Session = Depends(get_db)):
 
 
 @router.delete("/{sku_id}", status_code=204)
-def delete_sku(sku_id: int, db: Session = Depends(get_db)):
+def delete_sku(
+    sku_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU not found")
@@ -80,7 +102,10 @@ def delete_sku(sku_id: int, db: Session = Depends(get_db)):
 
 @router.post("/{sku_id}/images", response_model=ReferenceImageResponse, status_code=201)
 async def upload_reference_image(
-    sku_id: int, file: UploadFile, db: Session = Depends(get_db)
+    sku_id: int,
+    file: UploadFile,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
 ):
     sku = db.get(SKU, sku_id)
     if not sku:
@@ -113,7 +138,11 @@ async def upload_reference_image(
 
 
 @router.get("/{sku_id}/images", response_model=list[ReferenceImageResponse])
-def list_reference_images(sku_id: int, db: Session = Depends(get_db)):
+def list_reference_images(
+    sku_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU not found")
@@ -122,7 +151,10 @@ def list_reference_images(sku_id: int, db: Session = Depends(get_db)):
 
 @router.delete("/{sku_id}/images/{image_id}", status_code=204)
 def delete_reference_image(
-    sku_id: int, image_id: int, db: Session = Depends(get_db)
+    sku_id: int,
+    image_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
 ):
     image = (
         db.query(ReferenceImage)

@@ -1,11 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.database import get_db
 from app.models import Order, OrderLine, SKU
 from app.schemas import OrderCreate, OrderLineResponse, OrderResponse
 
-router = APIRouter(prefix="/orders", tags=["orders"])
+router = APIRouter(
+    prefix="/orders", tags=["orders"], dependencies=[Depends(get_current_user)]
+)
 
 
 def _line_to_response(line: OrderLine) -> OrderLineResponse:

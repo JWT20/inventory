@@ -4,9 +4,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app.auth import hash_password
 from app.config import settings
-from app.database import Base, engine
-from app.routers import orders, picks, skus, vision
+from app.database import Base, SessionLocal, engine
+from app.models import User
+from app.routers import auth, orders, picks, skus, vision
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,6 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router, prefix="/api")
 app.include_router(skus.router, prefix="/api")
 app.include_router(orders.router, prefix="/api")
 app.include_router(picks.router, prefix="/api")
@@ -36,6 +39,21 @@ def on_startup():
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables ready")
+
+    # Seed admin account if no users exist yet
+    db = SessionLocal()
+    try:
+        if db.query(User).first() is None:
+            admin = User(
+                username="admin",
+                password_hash=hash_password(settings.admin_password),
+                is_admin=True,
+            )
+            db.add(admin)
+            db.commit()
+            logger.info("Created default admin user — change the password!")
+    finally:
+        db.close()
 
 
 @app.get("/api/health")

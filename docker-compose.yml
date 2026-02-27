@@ -26,6 +26,8 @@ services:
       OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
       MATCH_THRESHOLD: ${MATCH_THRESHOLD:-0.75}
       UPLOAD_DIR: /app/uploads
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme_in_production}
+      TOKEN_EXPIRE_DAYS: ${TOKEN_EXPIRE_DAYS:-90}
     volumes:
       - uploads:/app/uploads
     depends_on:
