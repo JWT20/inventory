@@ -1,0 +1,33 @@
+name: Deploy to server
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync files to server
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -avz --delete --exclude='.git' --exclude='.env' --exclude='deploy' --exclude='__pycache__'
+          path: ./
+          remote_path: /opt/wijnpick/
+          remote_host: ${{ secrets.SERVER_IP }}
+          remote_user: opc
+          remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Rebuild and restart containers
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: opc
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/wijnpick
+            sudo docker compose build
+            sudo docker compose up -d
+            sudo docker compose ps
