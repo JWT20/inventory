@@ -160,7 +160,7 @@ output "vm_public_ip" {
 }
 
 output "app_url" {
-  value = "https://${var.duckdns_domain}.duckdns.org"
+  value = "http://${var.duckdns_domain}.duckdns.org"
 }
 
 output "ssh_command" {

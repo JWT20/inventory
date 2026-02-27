@@ -3,20 +3,16 @@ package_update: true
 package_upgrade: true
 
 packages:
-  - docker
   - git
   - firewalld
 
 runcmd:
-  # Enable and start Docker
+  # Install Docker CE from official repo
+  - dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+  - dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
   - systemctl enable docker
   - systemctl start docker
   - usermod -aG docker opc
-
-  # Install Docker Compose
-  - curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64 -o /usr/local/bin/docker-compose
-  - chmod +x /usr/local/bin/docker-compose
-  - ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
 
   # Firewall rules
   - firewall-cmd --permanent --add-port=80/tcp
@@ -34,10 +30,12 @@ runcmd:
   - /opt/duckdns/duck.sh
   - echo "*/5 * * * * /opt/duckdns/duck.sh >/dev/null 2>&1" | crontab -
 
-  # Clone and deploy app
-  - mkdir -p /opt/wijnpick
+  # Clone the app repo
+  - git clone -b claude/automate-wine-picking-9IFX7 https://github.com/JWT20/inventory.git /opt/wijnpick
+
+  # Generate .env with real random passwords (unquoted heredoc so shell expands $(...))
   - |
-    cat > /opt/wijnpick/.env << 'ENVEOF'
+    cat > /opt/wijnpick/.env << ENVEOF
     POSTGRES_USER=wijnpick
     POSTGRES_PASSWORD=$(openssl rand -hex 16)
     POSTGRES_DB=wijnpick
@@ -49,4 +47,7 @@ runcmd:
     DUCKDNS_DOMAIN=${duckdns_domain}
     DUCKDNS_TOKEN=${duckdns_token}
     ENVEOF
-  - chown opc:opc -R /opt/wijnpick
+  - chown -R opc:opc /opt/wijnpick
+
+  # Deploy the app
+  - cd /opt/wijnpick && docker compose up -d
