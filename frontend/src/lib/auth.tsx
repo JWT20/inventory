@@ -1,10 +1,12 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { api, setToken, clearToken } from "./api";
 
+type Role = "admin" | "merchant" | "courier";
+
 interface AuthUser {
   id: number;
   username: string;
-  is_admin: boolean;
+  role: Role;
 }
 
 interface AuthCtx {
@@ -36,7 +38,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function login(username: string, password: string) {
     const resp = await api.login(username, password);
     setToken(resp.access_token);
-    setUser({ id: 0, username: resp.username, is_admin: resp.is_admin });
+    setUser({ id: 0, username: resp.username, role: resp.role });
     // Refresh full user data
     const me = await api.me();
     setUser(me);

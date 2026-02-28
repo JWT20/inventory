@@ -54,3 +54,10 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
     if not user.is_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
     return user
+
+
+def require_product_manager(user: User = Depends(get_current_user)) -> User:
+    """Must be admin or merchant."""
+    if not user.can_manage_products:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Merchant or admin access required")
+    return user

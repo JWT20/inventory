@@ -53,7 +53,7 @@ export function SKUsPage() {
     <>
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Producten</h2>
-        {user?.is_admin && (
+        {user && user.role !== "courier" && (
           <Button size="sm" onClick={() => setShowNew(true)}>
             + Nieuw
           </Button>
@@ -148,7 +148,7 @@ function SKUDialog({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!user?.is_admin) return;
+    if (!user || user.role === "courier") return;
     try {
       if (currentId) {
         await api.updateSKU(currentId, {
@@ -227,7 +227,7 @@ function SKUDialog({
               rows={2}
             />
           </div>
-          {user?.is_admin && (
+          {user && user.role !== "courier" && (
             <Button type="submit" className="w-full">
               Opslaan
             </Button>
@@ -253,7 +253,7 @@ function SKUDialog({
                       alt="ref"
                       className="w-full h-full object-cover"
                     />
-                    {user?.is_admin && (
+                    {user && user.role !== "courier" && (
                       <button
                         onClick={() => deleteImage(img.id)}
                         className="absolute top-1 right-1 bg-red-600/80 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center"
@@ -265,7 +265,7 @@ function SKUDialog({
                 ))}
               </div>
             )}
-            {user?.is_admin && (
+            {user && user.role !== "courier" && (
               <>
                 <Button
                   variant="secondary"
