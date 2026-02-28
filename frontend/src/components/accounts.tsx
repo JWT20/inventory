@@ -18,10 +18,16 @@ import { Trash2 } from "lucide-react";
 interface User {
   id: number;
   username: string;
-  is_admin: boolean;
+  role: string;
   is_active: boolean;
   created_at: string;
 }
+
+const ROLE_LABELS: Record<string, string> = {
+  admin: "Admin",
+  merchant: "Wijnhandelaar",
+  courier: "Koerier",
+};
 
 export function AccountsPage() {
   const { user: me } = useAuth();
@@ -71,8 +77,8 @@ export function AccountsPage() {
               <div>
                 <p className="font-semibold">{u.username}</p>
                 <div className="flex gap-2 mt-1">
-                  <Badge variant={u.is_admin ? "default" : "secondary"}>
-                    {u.is_admin ? "Admin" : "Picker"}
+                  <Badge variant={u.role === "admin" ? "default" : "secondary"}>
+                    {ROLE_LABELS[u.role] || u.role}
                   </Badge>
                 </div>
               </div>
@@ -110,20 +116,20 @@ function NewUserDialog({
 }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [role, setRole] = useState("courier");
 
   useEffect(() => {
     if (open) {
       setUsername("");
       setPassword("");
-      setIsAdmin(false);
+      setRole("courier");
     }
   }, [open]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     try {
-      await api.createUser({ username, password, is_admin: isAdmin });
+      await api.createUser({ username, password, role });
       toast.success(`Gebruiker '${username}' aangemaakt`);
       onClose();
       onCreated();
@@ -159,15 +165,18 @@ function NewUserDialog({
               required
             />
           </div>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={isAdmin}
-              onChange={(e) => setIsAdmin(e.target.checked)}
-              className="rounded"
-            />
-            <span className="text-sm">Admin rechten</span>
-          </label>
+          <div className="space-y-2">
+            <Label>Rol</Label>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              <option value="courier">Koerier</option>
+              <option value="merchant">Wijnhandelaar</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
           <Button type="submit" className="w-full">
             Aanmaken
           </Button>

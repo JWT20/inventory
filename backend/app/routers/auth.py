@@ -30,7 +30,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     return TokenResponse(
         access_token=create_token(user.id),
         username=user.username,
-        is_admin=user.is_admin,
+        role=user.role,
     )
 
 
@@ -57,7 +57,7 @@ def create_user(
     user = User(
         username=data.username,
         password_hash=hash_password(data.password),
-        is_admin=data.is_admin,
+        role=data.role,
     )
     db.add(user)
     db.commit()

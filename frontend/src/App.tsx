@@ -31,7 +31,7 @@ function Main() {
     { id: "accounts", label: "Accounts", adminOnly: true },
   ];
 
-  const visibleTabs = tabs.filter((t) => !t.adminOnly || user.is_admin);
+  const visibleTabs = tabs.filter((t) => !t.adminOnly || user.role === "admin");
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -66,7 +66,7 @@ function Main() {
       <main className="flex-1 p-4 pb-20">
         {page === "receive" && <ReceivePage />}
         {page === "skus" && <SKUsPage />}
-        {page === "accounts" && user.is_admin && <AccountsPage />}
+        {page === "accounts" && user.role === "admin" && <AccountsPage />}
       </main>
     </div>
   );

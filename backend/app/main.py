@@ -47,7 +47,7 @@ def on_startup():
             admin = User(
                 username="admin",
                 password_hash=hash_password(settings.admin_password),
-                is_admin=True,
+                role="admin",
             )
             db.add(admin)
             db.commit()

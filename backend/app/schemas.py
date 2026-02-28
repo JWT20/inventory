@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -13,19 +15,19 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     username: str
-    is_admin: bool
+    role: str
 
 
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=100)
     password: str = Field(..., min_length=6, max_length=128)
-    is_admin: bool = False
+    role: Literal["admin", "merchant", "courier"] = "courier"
 
 
 class UserResponse(BaseModel):
     id: int
     username: str
-    is_admin: bool
+    role: str
     is_active: bool
     created_at: datetime
 

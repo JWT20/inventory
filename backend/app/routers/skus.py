@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, require_admin
+from app.auth import get_current_user, require_admin, require_product_manager
 from app.config import settings
 from app.database import get_db
 from app.models import SKU, ReferenceImage, User
@@ -46,7 +46,7 @@ def list_skus(
 def create_sku(
     data: SKUCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_product_manager),
 ):
     existing = db.query(SKU).filter(SKU.sku_code == data.sku_code).first()
     if existing:
@@ -75,7 +75,7 @@ def update_sku(
     sku_id: int,
     data: SKUUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_product_manager),
 ):
     sku = db.get(SKU, sku_id)
     if not sku:
@@ -105,7 +105,7 @@ async def upload_reference_image(
     sku_id: int,
     file: UploadFile,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_product_manager),
 ):
     sku = db.get(SKU, sku_id)
     if not sku:
@@ -154,7 +154,7 @@ def delete_reference_image(
     sku_id: int,
     image_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    _: User = Depends(require_product_manager),
 ):
     image = (
         db.query(ReferenceImage)
