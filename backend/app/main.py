@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from sqlalchemy import inspect, text
+
 from app.auth import hash_password
 from app.config import settings
 from app.database import Base, SessionLocal, engine
@@ -34,8 +36,31 @@ app.include_router(labels.router, prefix="/api")
 app.include_router(vision.router, prefix="/api")
 
 
+def _migrate_is_admin_to_role():
+    """One-time migration: convert is_admin boolean column to role string column."""
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("users")}
+    if "is_admin" not in columns:
+        return  # already migrated or fresh install
+
+    logger.info("Migrating users table: is_admin → role ...")
+    with engine.begin() as conn:
+        if "role" not in columns:
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN role VARCHAR(20) NOT NULL DEFAULT 'courier'"
+            ))
+        conn.execute(text("UPDATE users SET role = 'admin' WHERE is_admin = true"))
+        conn.execute(text("UPDATE users SET role = 'courier' WHERE is_admin = false"))
+        conn.execute(text("ALTER TABLE users DROP COLUMN is_admin"))
+    logger.info("Migration complete: users.is_admin → users.role")
+
+
 @app.on_event("startup")
 def on_startup():
+    _migrate_is_admin_to_role()
+
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables ready")
