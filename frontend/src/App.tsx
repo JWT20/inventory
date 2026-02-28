@@ -76,16 +76,7 @@ export function App() {
   return (
     <AuthProvider>
       <Main />
-      <Toaster
-        position="bottom-center"
-        toastOptions={{
-          style: {
-            background: "hsl(217 33% 17%)",
-            color: "hsl(210 40% 96%)",
-            border: "1px solid hsl(215 19% 35%)",
-          },
-        }}
-      />
+      <Toaster position="bottom-center" />
     </AuthProvider>
   );
 }
