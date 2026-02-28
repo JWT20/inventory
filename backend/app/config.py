@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_vision_model: str = "gpt-4o"
     openai_embedding_model: str = "text-embedding-3-small"
-    match_threshold: float = 0.85
+    match_threshold: float = 0.92
     upload_dir: str = "/app/uploads"
 
     # Auth

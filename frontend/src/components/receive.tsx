@@ -41,6 +41,11 @@ export function ReceivePage() {
     setStep("label");
   }
 
+  function rejectMatch() {
+    setMatch(null);
+    setStep("new-product");
+  }
+
   function reset() {
     setStep("scan");
     setMatch(null);
@@ -54,7 +59,7 @@ export function ReceivePage() {
       {step === "scan" && <ScanStep onResult={handleMatch} />}
 
       {step === "label" && match && (
-        <LabelStep match={match} onDone={reset} />
+        <LabelStep match={match} onDone={reset} onReject={rejectMatch} />
       )}
 
       {step === "new-product" && capturedBlob && (
@@ -166,9 +171,11 @@ function ScanStep({
 function LabelStep({
   match,
   onDone,
+  onReject,
 }: {
   match: MatchResult;
   onDone: () => void;
+  onReject: () => void;
 }) {
   const [barcodeUrl, setBarcodeUrl] = useState<string | null>(null);
 
@@ -267,6 +274,12 @@ function LabelStep({
         <Button variant="secondary" size="lg" className="w-full" onClick={onDone}>
           Volgende doos scannen
         </Button>
+        <button
+          onClick={onReject}
+          className="text-sm text-muted-foreground underline"
+        >
+          Niet correct? Nieuw product aanmaken
+        </button>
       </div>
     </>
   );
