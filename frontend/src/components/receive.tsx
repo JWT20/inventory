@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -170,16 +170,52 @@ function LabelStep({
   match: MatchResult;
   onDone: () => void;
 }) {
-  const barcodeUrl = api.barcodeUrl(match.sku_id);
-  const pdfUrl = api.labelPdfUrl(match.sku_id);
-  const zplUrl = api.labelZplUrl(match.sku_id);
+  const [barcodeUrl, setBarcodeUrl] = useState<string | null>(null);
 
-  function openPrintLabel() {
-    const win = window.open(pdfUrl, "_blank");
-    if (win) {
-      win.addEventListener("load", () => {
-        win.print();
+  const loadBarcode = useCallback(async () => {
+    try {
+      const url = await api.fetchBarcode(match.sku_id);
+      setBarcodeUrl(url);
+    } catch {
+      /* barcode preview is non-critical */
+    }
+  }, [match.sku_id]);
+
+  useEffect(() => {
+    loadBarcode();
+    return () => {
+      setBarcodeUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
       });
+    };
+  }, [loadBarcode]);
+
+  async function openPrintLabel() {
+    try {
+      const html = await api.fetchLabelHtml(match.sku_id);
+      const win = window.open("", "_blank");
+      if (win) {
+        win.document.write(html);
+        win.document.close();
+        win.addEventListener("load", () => win.print());
+      }
+    } catch {
+      toast.error("Kan label niet laden");
+    }
+  }
+
+  async function downloadZpl() {
+    try {
+      const blob = await api.fetchZpl(match.sku_id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${match.sku_code}.zpl`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error("Kan ZPL niet downloaden");
     }
   }
 
@@ -202,11 +238,15 @@ function LabelStep({
           Barcode label
         </Label>
         <div className="flex justify-center bg-white rounded-lg p-4 mb-3">
-          <img
-            src={barcodeUrl}
-            alt={`Barcode ${match.sku_code}`}
-            className="max-w-full h-auto"
-          />
+          {barcodeUrl ? (
+            <img
+              src={barcodeUrl}
+              alt={`Barcode ${match.sku_code}`}
+              className="max-w-full h-auto"
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground">Laden...</p>
+          )}
         </div>
         <p className="text-center text-sm font-mono text-muted-foreground">
           {match.sku_code}
@@ -217,13 +257,13 @@ function LabelStep({
         <Button size="lg" className="w-full h-14 text-lg" onClick={openPrintLabel}>
           Label printen
         </Button>
-        <a
-          href={zplUrl}
-          download
-          className="inline-flex items-center justify-center h-10 px-4 text-sm font-medium rounded-md border border-border text-muted-foreground hover:text-foreground transition-colors text-center"
+        <Button
+          variant="outline"
+          onClick={downloadZpl}
+          className="h-10 text-sm font-medium text-muted-foreground hover:text-foreground"
         >
           Download ZPL (Zebra printer)
-        </a>
+        </Button>
         <Button variant="secondary" size="lg" className="w-full" onClick={onDone}>
           Volgende doos scannen
         </Button>
