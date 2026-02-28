@@ -35,6 +35,24 @@ async function request(path: string, options: RequestInit = {}) {
   return text ? JSON.parse(text) : null;
 }
 
+async function requestRaw(path: string): Promise<Response> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const resp = await fetch(`${BASE}${path}`, { headers });
+
+  if (resp.status === 401) {
+    clearToken();
+    window.location.reload();
+    throw new Error("Sessie verlopen");
+  }
+  if (!resp.ok) {
+    throw new Error(`Request failed: ${resp.status}`);
+  }
+  return resp;
+}
+
 function json(path: string, method: string, data: unknown) {
   return request(path, {
     method,
@@ -109,10 +127,20 @@ export const api = {
     );
   },
 
-  // Labels
-  barcodeUrl: (skuId: number) => `/api/labels/${skuId}/barcode.png`,
-  labelPdfUrl: (skuId: number) => `/api/labels/${skuId}/label.pdf`,
-  labelZplUrl: (skuId: number) => `/api/labels/${skuId}/label.zpl`,
+  // Labels (fetched with auth)
+  fetchBarcode: async (skuId: number): Promise<string> => {
+    const resp = await requestRaw(`/labels/${skuId}/barcode.png`);
+    const blob = await resp.blob();
+    return URL.createObjectURL(blob);
+  },
+  fetchLabelHtml: async (skuId: number): Promise<string> => {
+    const resp = await requestRaw(`/labels/${skuId}/label.pdf`);
+    return resp.text();
+  },
+  fetchZpl: async (skuId: number): Promise<Blob> => {
+    const resp = await requestRaw(`/labels/${skuId}/label.zpl`);
+    return resp.blob();
+  },
 
   // Vision (ad-hoc)
   identify: (blob: Blob) => upload("/vision/identify", blob, "scan.jpg"),
