@@ -1,10 +1,16 @@
 # WijnPick — Production Readiness Plan
 
 Current state: the app works end-to-end for warehouse receiving and labeling.
-It has Docker Compose deployment, role-based auth, and CI/CD via GitHub Actions.
-However, several areas need hardening before this is production-grade software.
+It has Docker Compose deployment, role-based auth, CI/CD via GitHub Actions,
+and **HTTPS via Caddy + DuckDNS** (automatic TLS certificates).
 
-This plan is ordered by priority — highest impact and risk items first.
+What's already solid:
+- HTTPS termination via Caddy reverse proxy (`deploy/setup.sh`)
+- DuckDNS dynamic DNS with cron-based IP updates (`deploy/cloud-init.yaml`)
+- Auto-generated secrets (random passwords) during provisioning
+- Docker healthchecks with dependency ordering
+
+This plan covers what's still needed, ordered by priority.
 
 ---
 
@@ -20,8 +26,9 @@ can make authenticated API calls on behalf of a logged-in user.
 # CURRENT (dangerous)
 allow_origins=["*"]
 
-# FIX: restrict to your actual domain(s)
-allow_origins=["https://yourapp.duckdns.org"]
+# FIX: restrict to your DuckDNS domain
+allow_origins=[f"https://{os.environ['DUCKDNS_DOMAIN']}.duckdns.org"]
+# or hardcode: allow_origins=["https://yoursubdomain.duckdns.org"]
 ```
 
 **Effort:** 15 min | **Risk if skipped:** High — enables cross-site request forgery
@@ -62,10 +69,14 @@ and decodable by Pillow before storing.
 **Effort:** 3-4 hours | **Risk if skipped:** Medium — stolen tokens stay valid for months
 
 ### 1.5 Add security headers
-**File:** `frontend/nginx.conf` or a new middleware in FastAPI
+**File:** Caddyfile (`deploy/setup.sh`) or `frontend/nginx.conf`
 
-Add headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
-`Strict-Transport-Security`, `Content-Security-Policy`.
+Caddy already handles HTTPS and sets HSTS automatically. Add the remaining
+headers either in the Caddyfile or in the Nginx config inside the frontend
+container:
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `Content-Security-Policy`
 
 **Effort:** 1 hour | **Risk if skipped:** Medium — clickjacking, MIME sniffing
 
