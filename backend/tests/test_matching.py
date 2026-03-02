@@ -86,40 +86,39 @@ class TestDescribeImage:
     def test_returns_vision_description(self):
         from app.services.embedding import describe_image
 
-        mock_model = MagicMock()
+        mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.text = "Château Margaux 2015 Bordeaux"
-        mock_model.generate_content.return_value = mock_response
+        mock_client.models.generate_content.return_value = mock_response
 
-        with patch("app.services.embedding.genai") as mock_genai, \
+        with patch("app.services.embedding._get_client", return_value=mock_client), \
              patch("app.services.embedding.Image") as mock_pil:
-            mock_genai.GenerativeModel.return_value = mock_model
             mock_pil.open.return_value = MagicMock()
             result = describe_image(b"fake-image-bytes")
 
         assert result == "Château Margaux 2015 Bordeaux"
-        mock_model.generate_content.assert_called_once()
+        mock_client.models.generate_content.assert_called_once()
 
     def test_sends_image_to_model(self):
         from app.services.embedding import describe_image
 
-        mock_model = MagicMock()
+        mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.text = "description"
-        mock_model.generate_content.return_value = mock_response
+        mock_client.models.generate_content.return_value = mock_response
         fake_image = MagicMock()
 
-        with patch("app.services.embedding.genai") as mock_genai, \
+        with patch("app.services.embedding._get_client", return_value=mock_client), \
              patch("app.services.embedding.Image") as mock_pil:
-            mock_genai.GenerativeModel.return_value = mock_model
             mock_pil.open.return_value = fake_image
             describe_image(b"test")
 
-        # generate_content should receive a list containing the prompt and image
-        call_args = mock_model.generate_content.call_args[0][0]
-        assert isinstance(call_args, list)
-        assert len(call_args) == 2
-        assert call_args[1] is fake_image
+        # generate_content should receive contents list with prompt and image
+        call_kwargs = mock_client.models.generate_content.call_args[1]
+        contents = call_kwargs["contents"]
+        assert isinstance(contents, list)
+        assert len(contents) == 2
+        assert contents[1] is fake_image
 
 
 # ---------------------------------------------------------------------------
@@ -132,8 +131,14 @@ class TestGenerateEmbedding:
 
         fake_embedding = [0.01] * 768
 
-        with patch("app.services.embedding.genai") as mock_genai:
-            mock_genai.embed_content.return_value = {"embedding": fake_embedding}
+        mock_client = MagicMock()
+        mock_embedding = MagicMock()
+        mock_embedding.values = fake_embedding
+        mock_result = MagicMock()
+        mock_result.embeddings = [mock_embedding]
+        mock_client.models.embed_content.return_value = mock_result
+
+        with patch("app.services.embedding._get_client", return_value=mock_client):
             result = generate_embedding("Château Margaux 2015")
 
         assert result == fake_embedding
