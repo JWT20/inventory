@@ -14,8 +14,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
-# gemini-embedding-001 with output_dimensionality=768
-EMBEDDING_DIM = 768
+# gemini-embedding-001 default full-fidelity output
+EMBEDDING_DIM = 3072
 
 
 VALID_ROLES = ("admin", "merchant", "courier")
