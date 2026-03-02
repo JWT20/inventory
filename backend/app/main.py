@@ -61,9 +61,48 @@ def _migrate_is_admin_to_role():
     logger.info("Migration complete: users.is_admin → users.role")
 
 
+def _migrate_embedding_dimension():
+    """One-time migration: change embedding vector dimension (e.g. 1536 → 768).
+
+    Detects a mismatch between the current column dimension and the expected
+    EMBEDDING_DIM, then drops and recreates the column.  Also truncates
+    reference_images and skus because old embeddings are incompatible.
+    """
+    from app.models import EMBEDDING_DIM
+
+    inspector = inspect(engine)
+    if "reference_images" not in inspector.get_table_names():
+        return  # fresh install, nothing to migrate
+
+    # pgvector stores dimension in the column's UDT; query pg catalog
+    with engine.begin() as conn:
+        row = conn.execute(text(
+            "SELECT atttypmod FROM pg_attribute "
+            "WHERE attrelid = 'reference_images'::regclass AND attname = 'embedding'"
+        )).first()
+        if row is None:
+            return  # column doesn't exist yet
+        current_dim = row[0]
+        if current_dim == EMBEDDING_DIM:
+            return  # dimensions match, nothing to do
+
+        logger.info(
+            "Embedding dimension changed (%d → %d). Clearing old data and recreating column...",
+            current_dim, EMBEDDING_DIM,
+        )
+        conn.execute(text("TRUNCATE reference_images CASCADE"))
+        conn.execute(text("TRUNCATE skus CASCADE"))
+        conn.execute(text("ALTER TABLE reference_images DROP COLUMN embedding"))
+        conn.execute(text(
+            f"ALTER TABLE reference_images ADD COLUMN embedding vector({EMBEDDING_DIM})"
+        ))
+        logger.info("Embedding migration complete — old SKUs and images cleared")
+
+
 @app.on_event("startup")
 def on_startup():
     _migrate_is_admin_to_role()
+    _migrate_embedding_dimension()
 
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)

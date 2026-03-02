@@ -33,7 +33,7 @@ runcmd:
   - echo "*/5 * * * * /opt/duckdns/duck.sh >/dev/null 2>&1" | crontab -
 
   # Clone the app repo
-  - git clone -b claude/automate-wine-picking-9IFX7 https://github.com/JWT20/inventory.git /opt/wijnpick
+  - git clone -b main https://github.com/JWT20/inventory.git /opt/wijnpick
 
   # Generate .env with real random passwords (unquoted heredoc so shell expands $(...))
   - |
@@ -42,9 +42,9 @@ runcmd:
     POSTGRES_PASSWORD=$(openssl rand -hex 16)
     POSTGRES_DB=wijnpick
     SECRET_KEY=$(openssl rand -hex 32)
-    OPENAI_API_KEY=${openai_api_key}
-    OPENAI_VISION_MODEL=gpt-4o-mini
-    OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+    GEMINI_API_KEY=${gemini_api_key}
+    GEMINI_VISION_MODEL=gemini-2.5-flash
+    GEMINI_EMBEDDING_MODEL=text-embedding-004
     MATCH_THRESHOLD=0.75
     DUCKDNS_DOMAIN=${duckdns_domain}
     DUCKDNS_TOKEN=${duckdns_token}
