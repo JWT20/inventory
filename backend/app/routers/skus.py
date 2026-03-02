@@ -122,7 +122,7 @@ async def upload_reference_image(
         f.write(image_bytes)
 
     # Vision API: describe image → generate text embedding
-    logger.info("Processing reference image for SKU %s via OpenAI Vision", sku.sku_code)
+    logger.info("Processing reference image for SKU %s via Gemini Vision", sku.sku_code)
     description, embedding = process_image(image_bytes)
 
     ref_image = ReferenceImage(

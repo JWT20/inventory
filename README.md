@@ -12,7 +12,7 @@ Elimineert persoonsafhankelijkheid in het wijn-pickproces door dozen te herkenne
                                        │
                                        ▼
                                   ┌──────────┐
-                                  │  OpenAI  │
+                                  │  Gemini  │
                                   │  Vision  │
                                   │  + Embed │
                                   └──────────┘
@@ -20,8 +20,8 @@ Elimineert persoonsafhankelijkheid in het wijn-pickproces door dozen te herkenne
 
 - **Frontend**: Mobiele webapp met camera-scan
 - **Backend**: FastAPI (lightweight, geen PyTorch/ML lokaal)
-- **Vision**: OpenAI GPT-4o-mini voor beeldbeschrijving
-- **Embeddings**: OpenAI text-embedding-3-small voor vector matching
+- **Vision**: Google Gemini 2.5 Flash voor beeldbeschrijving
+- **Embeddings**: Gemini text-embedding-004 voor vector matching
 - **Database**: PostgreSQL 16 + pgvector voor vector similarity search
 - **Hosting**: Docker Compose, geschikt voor Oracle Cloud Always Free
 
@@ -30,7 +30,7 @@ Elimineert persoonsafhankelijkheid in het wijn-pickproces door dozen te herkenne
 ```bash
 # 1. Clone en configureer
 cp .env.example .env
-# Pas .env aan (minimaal OPENAI_API_KEY, POSTGRES_PASSWORD en SECRET_KEY)
+# Pas .env aan (minimaal GEMINI_API_KEY, POSTGRES_PASSWORD en SECRET_KEY)
 
 # 2. Start alles
 docker compose up -d

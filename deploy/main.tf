@@ -17,7 +17,7 @@ variable "compartment_ocid" {}
 variable "ssh_public_key_path" {}
 variable "duckdns_domain" {}
 variable "duckdns_token" {}
-variable "openai_api_key" {}
+variable "gemini_api_key" {}
 
 # --- Provider ---
 provider "oci" {
@@ -179,7 +179,7 @@ resource "oci_core_instance" "wijnpick_vm" {
     user_data = base64encode(templatefile("${path.module}/cloud-init.yaml", {
       duckdns_domain = var.duckdns_domain
       duckdns_token  = var.duckdns_token
-      openai_api_key = var.openai_api_key
+      gemini_api_key = var.gemini_api_key
     }))
   }
 }
