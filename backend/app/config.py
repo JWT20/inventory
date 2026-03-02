@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     secret_key: str = "changeme_in_production"
     gemini_api_key: str = ""
     gemini_vision_model: str = "gemini-2.5-flash"
-    gemini_embedding_model: str = "text-embedding-004"
+    gemini_embedding_model: str = "gemini-embedding-001"
     match_threshold: float = 0.92
     upload_dir: str = "/app/uploads"
 
