@@ -1,6 +1,6 @@
 """Tests for the matching service and embedding service.
 
-These are pure unit tests — the OpenAI API and pgvector DB calls are mocked.
+These are pure unit tests — the Gemini API and pgvector DB calls are mocked.
 """
 
 from unittest.mock import MagicMock, patch
@@ -86,34 +86,40 @@ class TestDescribeImage:
     def test_returns_vision_description(self):
         from app.services.embedding import describe_image
 
-        mock_client = MagicMock()
+        mock_model = MagicMock()
         mock_response = MagicMock()
-        mock_response.choices[0].message.content = "Château Margaux 2015 Bordeaux"
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_response.text = "Château Margaux 2015 Bordeaux"
+        mock_model.generate_content.return_value = mock_response
 
-        with patch("app.services.embedding.get_client", return_value=mock_client):
+        with patch("app.services.embedding.genai") as mock_genai, \
+             patch("app.services.embedding.Image") as mock_pil:
+            mock_genai.GenerativeModel.return_value = mock_model
+            mock_pil.open.return_value = MagicMock()
             result = describe_image(b"fake-image-bytes")
 
         assert result == "Château Margaux 2015 Bordeaux"
-        mock_client.chat.completions.create.assert_called_once()
+        mock_model.generate_content.assert_called_once()
 
-    def test_sends_base64_image(self):
+    def test_sends_image_to_model(self):
         from app.services.embedding import describe_image
 
-        mock_client = MagicMock()
+        mock_model = MagicMock()
         mock_response = MagicMock()
-        mock_response.choices[0].message.content = "description"
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_response.text = "description"
+        mock_model.generate_content.return_value = mock_response
+        fake_image = MagicMock()
 
-        with patch("app.services.embedding.get_client", return_value=mock_client):
+        with patch("app.services.embedding.genai") as mock_genai, \
+             patch("app.services.embedding.Image") as mock_pil:
+            mock_genai.GenerativeModel.return_value = mock_model
+            mock_pil.open.return_value = fake_image
             describe_image(b"test")
 
-        call_args = mock_client.chat.completions.create.call_args
-        messages = call_args.kwargs["messages"]
-        user_content = messages[1]["content"]
-        # Second element should be the base64 image
-        assert user_content[1]["type"] == "image_url"
-        assert "base64" in user_content[1]["image_url"]["url"]
+        # generate_content should receive a list containing the prompt and image
+        call_args = mock_model.generate_content.call_args[0][0]
+        assert isinstance(call_args, list)
+        assert len(call_args) == 2
+        assert call_args[1] is fake_image
 
 
 # ---------------------------------------------------------------------------
@@ -124,17 +130,14 @@ class TestGenerateEmbedding:
     def test_returns_embedding_vector(self):
         from app.services.embedding import generate_embedding
 
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        fake_embedding = [0.01] * 1536
-        mock_response.data[0].embedding = fake_embedding
-        mock_client.embeddings.create.return_value = mock_response
+        fake_embedding = [0.01] * 768
 
-        with patch("app.services.embedding.get_client", return_value=mock_client):
+        with patch("app.services.embedding.genai") as mock_genai:
+            mock_genai.embed_content.return_value = {"embedding": fake_embedding}
             result = generate_embedding("Château Margaux 2015")
 
         assert result == fake_embedding
-        assert len(result) == 1536
+        assert len(result) == 768
 
 
 # ---------------------------------------------------------------------------
@@ -146,10 +149,10 @@ class TestProcessImage:
         from app.services.embedding import process_image
 
         with patch("app.services.embedding.describe_image", return_value="A fine Bordeaux") as mock_desc, \
-             patch("app.services.embedding.generate_embedding", return_value=[0.5] * 1536) as mock_emb:
+             patch("app.services.embedding.generate_embedding", return_value=[0.5] * 768) as mock_emb:
             description, embedding = process_image(b"image-data")
 
         assert description == "A fine Bordeaux"
-        assert len(embedding) == 1536
+        assert len(embedding) == 768
         mock_desc.assert_called_once_with(b"image-data")
         mock_emb.assert_called_once_with("A fine Bordeaux")
