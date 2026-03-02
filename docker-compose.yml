@@ -23,7 +23,7 @@ services:
       SECRET_KEY: ${SECRET_KEY:-changeme_in_production}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-2.5-flash}
-      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-text-embedding-004}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
       MATCH_THRESHOLD: ${MATCH_THRESHOLD:-0.75}
       UPLOAD_DIR: /app/uploads
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme_in_production}
