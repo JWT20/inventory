@@ -129,7 +129,7 @@ class TestGenerateEmbedding:
     def test_returns_embedding_vector(self):
         from app.services.embedding import generate_embedding
 
-        fake_embedding = [0.01] * 768
+        fake_embedding = [0.01] * 3072
 
         mock_client = MagicMock()
         mock_embedding = MagicMock()
@@ -142,7 +142,7 @@ class TestGenerateEmbedding:
             result = generate_embedding("Château Margaux 2015")
 
         assert result == fake_embedding
-        assert len(result) == 768
+        assert len(result) == 3072
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ class TestProcessImage:
         from app.services.embedding import process_image
 
         with patch("app.services.embedding.describe_image", return_value="A fine Bordeaux") as mock_desc, \
-             patch("app.services.embedding.generate_embedding", return_value=[0.5] * 768) as mock_emb:
+             patch("app.services.embedding.generate_embedding", return_value=[0.5] * 3072) as mock_emb:
             description, embedding = process_image(b"image-data")
 
         assert description == "A fine Bordeaux"
