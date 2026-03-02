@@ -8,7 +8,8 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_client: genai.Client | None = None
+_vision_client: genai.Client | None = None
+_embed_client: genai.Client | None = None
 
 VISION_PROMPT = """You are identifying a wine box or bottle for inventory matching. Produce a precise, structured description that uniquely distinguishes this product from similar ones.
 
@@ -24,16 +25,28 @@ Extract and report EXACTLY what you see — do not guess or infer missing inform
 Format as a compact paragraph optimized for text-similarity search. Start with the most distinctive identifiers (brand + wine name + vintage) and work toward less unique details. Be specific and literal — transcribe text exactly as printed."""
 
 
-def _get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=settings.gemini_api_key)
-    return _client
+def _get_vision_client() -> genai.Client:
+    """Client for Gemini vision models (uses v1beta API)."""
+    global _vision_client
+    if _vision_client is None:
+        _vision_client = genai.Client(api_key=settings.gemini_api_key)
+    return _vision_client
+
+
+def _get_embed_client() -> genai.Client:
+    """Client for embedding models (uses v1 API — text-embedding-004 is not on v1beta)."""
+    global _embed_client
+    if _embed_client is None:
+        _embed_client = genai.Client(
+            api_key=settings.gemini_api_key,
+            http_options={"api_version": "v1"},
+        )
+    return _embed_client
 
 
 def describe_image(image_bytes: bytes) -> str:
     """Use Gemini Vision to generate a detailed description of a wine box."""
-    client = _get_client()
+    client = _get_vision_client()
 
     image = Image.open(io.BytesIO(image_bytes))
 
@@ -56,7 +69,7 @@ def describe_image(image_bytes: bytes) -> str:
 
 def generate_embedding(text: str) -> list[float]:
     """Generate a text embedding using Google text-embedding-004."""
-    client = _get_client()
+    client = _get_embed_client()
 
     result = client.models.embed_content(
         model=settings.gemini_embedding_model,
