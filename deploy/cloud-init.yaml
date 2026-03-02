@@ -51,5 +51,23 @@ runcmd:
     ENVEOF
   - chown -R opc:opc /opt/wijnpick
 
+  # Install OCI CLI for backups (as opc user)
+  - |
+    sudo -u opc bash -c 'bash -c "$(curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh)" -- --accept-all-defaults'
+  # Instance principal auth (no config file needed, uses VM's identity)
+  - |
+    cat > /etc/oci-cli.env << 'OCIEOF'
+    OCI_CLI_AUTH=instance_principal
+    OCIEOF
+
+  # Copy backup script and set up nightly cron (2:30 AM)
+  - cp /opt/wijnpick/deploy/backup-db.sh /opt/wijnpick/backup-db.sh
+  - chmod +x /opt/wijnpick/backup-db.sh
+  - |
+    cat > /etc/cron.d/wijnpick-backup << 'CRONEOF'
+    30 2 * * * root source /opt/wijnpick/.env && export OCI_CLI_AUTH=instance_principal && /opt/wijnpick/backup-db.sh >> /var/log/wijnpick-backup.log 2>&1
+    CRONEOF
+  - chmod 644 /etc/cron.d/wijnpick-backup
+
   # Deploy the app
   - cd /opt/wijnpick && docker compose up -d
