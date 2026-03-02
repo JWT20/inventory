@@ -1,13 +1,15 @@
 import base64
 import logging
 
-from openai import OpenAI
+import google.generativeai as genai
+from PIL import Image
+import io
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_client = None
+_configured = False
 
 VISION_PROMPT = """You are identifying a wine box or bottle for inventory matching. Produce a precise, structured description that uniquely distinguishes this product from similar ones.
 
@@ -23,61 +25,46 @@ Extract and report EXACTLY what you see — do not guess or infer missing inform
 Format as a compact paragraph optimized for text-similarity search. Start with the most distinctive identifiers (brand + wine name + vintage) and work toward less unique details. Be specific and literal — transcribe text exactly as printed."""
 
 
-def get_client() -> OpenAI:
-    global _client
-    if _client is None:
-        _client = OpenAI(api_key=settings.openai_api_key)
-    return _client
+def _ensure_configured():
+    global _configured
+    if not _configured:
+        genai.configure(api_key=settings.gemini_api_key)
+        _configured = True
 
 
 def describe_image(image_bytes: bytes) -> str:
-    """Use OpenAI Vision to generate a detailed description of a wine box."""
-    client = get_client()
-    b64_image = base64.b64encode(image_bytes).decode("utf-8")
+    """Use Gemini Vision to generate a detailed description of a wine box."""
+    _ensure_configured()
 
-    response = client.chat.completions.create(
-        model=settings.openai_vision_model,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a wine product identification specialist. "
-                "Your descriptions will be embedded and matched against a database "
-                "of reference product descriptions using cosine similarity. "
-                "Accuracy and specificity are critical — a wrong match means the "
-                "wrong product gets shipped.",
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": VISION_PROMPT},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{b64_image}",
-                            "detail": "high",
-                        },
-                    },
-                ],
-            },
+    model = genai.GenerativeModel(settings.gemini_vision_model)
+    image = Image.open(io.BytesIO(image_bytes))
+
+    response = model.generate_content(
+        [
+            "You are a wine product identification specialist. "
+            "Your descriptions will be embedded and matched against a database "
+            "of reference product descriptions using cosine similarity. "
+            "Accuracy and specificity are critical — a wrong match means the "
+            "wrong product gets shipped.\n\n" + VISION_PROMPT,
+            image,
         ],
-        max_tokens=800,
     )
 
-    description = response.choices[0].message.content
+    description = response.text
     logger.info("Vision description: %s", description[:100])
     return description
 
 
 def generate_embedding(text: str) -> list[float]:
-    """Generate a text embedding using OpenAI text-embedding-3-small."""
-    client = get_client()
+    """Generate a text embedding using Google text-embedding-004."""
+    _ensure_configured()
 
-    response = client.embeddings.create(
-        model=settings.openai_embedding_model,
-        input=text,
+    result = genai.embed_content(
+        model=f"models/{settings.gemini_embedding_model}",
+        content=text,
     )
 
-    return response.data[0].embedding
+    return result["embedding"]
 
 
 def process_image(image_bytes: bytes) -> tuple[str, list[float]]:

@@ -14,8 +14,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
-# text-embedding-3-small produces 1536-dimensional vectors
-EMBEDDING_DIM = 1536
+# Google text-embedding-004 produces 768-dimensional vectors
+EMBEDDING_DIM = 768
 
 
 VALID_ROLES = ("admin", "merchant", "courier")

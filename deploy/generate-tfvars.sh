@@ -75,7 +75,7 @@ echo ""
 # --- Prompt for missing values ---
 read -p "DuckDNS subdomain (bijv. 'wijnpick'): " DUCKDNS_DOMAIN
 read -p "DuckDNS token: " DUCKDNS_TOKEN
-read -p "OpenAI API key (sk-...): " OPENAI_KEY
+read -p "Gemini API key: " GEMINI_KEY
 echo ""
 
 # --- Compartment: default to tenancy (root) ---
@@ -101,8 +101,8 @@ ssh_public_key_path = "${SSH_PUB}"
 duckdns_domain = "${DUCKDNS_DOMAIN}"
 duckdns_token  = "${DUCKDNS_TOKEN}"
 
-# OpenAI
-openai_api_key = "${OPENAI_KEY}"
+# Gemini
+gemini_api_key = "${GEMINI_KEY}"
 EOF
 
 echo "=== terraform.tfvars gegenereerd! ==="
