@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     admin_password: str = "changeme_in_production"
     token_expire_days: int = 90
 
+    # Domain (used for CORS)
+    duckdns_domain: str = ""
+
     class Config:
         env_file = ".env"
 
