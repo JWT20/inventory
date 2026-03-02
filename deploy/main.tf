@@ -121,6 +121,36 @@ resource "oci_core_subnet" "public_subnet" {
   dns_label         = "public"
 }
 
+# --- Object Storage (Always Free 20 GB for backups) ---
+data "oci_objectstorage_namespace" "ns" {
+  compartment_id = var.compartment_ocid
+}
+
+# Dynamic group + policy so the VM can write to Object Storage (instance principal)
+resource "oci_identity_dynamic_group" "wijnpick_vm" {
+  compartment_id = var.tenancy_ocid
+  name           = "wijnpick-vm-group"
+  description    = "Wijnpick VM instance for backup access"
+  matching_rule  = "instance.id = '${oci_core_instance.wijnpick_vm.id}'"
+}
+
+resource "oci_identity_policy" "backup_policy" {
+  compartment_id = var.tenancy_ocid
+  name           = "wijnpick-backup-policy"
+  description    = "Allow wijnpick VM to manage backup bucket"
+  statements = [
+    "Allow dynamic-group wijnpick-vm-group to manage objects in compartment id ${var.compartment_ocid} where target.bucket.name='wijnpick-backups'",
+  ]
+}
+
+resource "oci_objectstorage_bucket" "backups" {
+  compartment_id = var.compartment_ocid
+  namespace      = data.oci_objectstorage_namespace.ns.namespace
+  name           = "wijnpick-backups"
+  access_type    = "NoPublicAccess"
+  storage_tier   = "Standard"
+}
+
 # --- Compute (Always Free Ampere A1) ---
 resource "oci_core_instance" "wijnpick_vm" {
   compartment_id      = var.compartment_ocid
