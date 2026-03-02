@@ -91,7 +91,7 @@ class TestDescribeImage:
         mock_response.text = "Château Margaux 2015 Bordeaux"
         mock_client.models.generate_content.return_value = mock_response
 
-        with patch("app.services.embedding._get_vision_client", return_value=mock_client), \
+        with patch("app.services.embedding._get_client", return_value=mock_client), \
              patch("app.services.embedding.Image") as mock_pil:
             mock_pil.open.return_value = MagicMock()
             result = describe_image(b"fake-image-bytes")
@@ -108,7 +108,7 @@ class TestDescribeImage:
         mock_client.models.generate_content.return_value = mock_response
         fake_image = MagicMock()
 
-        with patch("app.services.embedding._get_vision_client", return_value=mock_client), \
+        with patch("app.services.embedding._get_client", return_value=mock_client), \
              patch("app.services.embedding.Image") as mock_pil:
             mock_pil.open.return_value = fake_image
             describe_image(b"test")
@@ -138,7 +138,7 @@ class TestGenerateEmbedding:
         mock_result.embeddings = [mock_embedding]
         mock_client.models.embed_content.return_value = mock_result
 
-        with patch("app.services.embedding._get_embed_client", return_value=mock_client):
+        with patch("app.services.embedding._get_client", return_value=mock_client):
             result = generate_embedding("Château Margaux 2015")
 
         assert result == fake_embedding

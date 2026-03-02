@@ -14,7 +14,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
-# Google text-embedding-004 produces 768-dimensional vectors
+# gemini-embedding-001 with output_dimensionality=768
 EMBEDDING_DIM = 768
 
 
