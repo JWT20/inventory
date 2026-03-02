@@ -158,6 +158,6 @@ class TestProcessImage:
             description, embedding = process_image(b"image-data")
 
         assert description == "A fine Bordeaux"
-        assert len(embedding) == 768
+        assert len(embedding) == 3072
         mock_desc.assert_called_once_with(b"image-data")
         mock_emb.assert_called_once_with("A fine Bordeaux")
