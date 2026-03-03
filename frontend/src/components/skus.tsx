@@ -123,6 +123,7 @@ function SKUDialog({
   const [images, setImages] = useState<RefImage[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [stagedFiles, setStagedFiles] = useState<{ file: File; preview: string }[]>([]);
 
   useEffect(() => {
     if (open && sku) {
@@ -137,6 +138,12 @@ function SKUDialog({
       setDescription("");
       setCurrentId(null);
       setImages([]);
+    }
+    if (!open) {
+      setStagedFiles((prev) => {
+        prev.forEach((s) => URL.revokeObjectURL(s.preview));
+        return [];
+      });
     }
   }, [open, sku]);
 
@@ -153,8 +160,9 @@ function SKUDialog({
     if (!user || user.role === "courier") return;
     setSubmitting(true);
     try {
-      if (currentId) {
-        await api.updateSKU(currentId, {
+      let skuId = currentId;
+      if (skuId) {
+        await api.updateSKU(skuId, {
           name,
           description: description || null,
         });
@@ -165,9 +173,34 @@ function SKUDialog({
           name,
           description: description || undefined,
         });
-        setCurrentId(created.id);
-        toast.success("SKU aangemaakt — voeg nu referentiebeelden toe");
+        skuId = created.id;
+        setCurrentId(skuId);
+        toast.success("SKU aangemaakt");
       }
+
+      if (stagedFiles.length > 0) {
+        setUploading(true);
+        const infoToast = toast("Beelden uploaden en verwerken...");
+        let uploadErrors = 0;
+        for (const staged of stagedFiles) {
+          try {
+            await api.uploadImage(skuId, staged.file);
+          } catch {
+            uploadErrors++;
+          }
+        }
+        toast.dismiss(infoToast);
+        if (uploadErrors > 0) {
+          toast.error(`${uploadErrors} beeld(en) niet geüpload`);
+        } else {
+          toast.success(`${stagedFiles.length} referentiebeeld(en) toegevoegd`);
+        }
+        stagedFiles.forEach((s) => URL.revokeObjectURL(s.preview));
+        setStagedFiles([]);
+        setUploading(false);
+        loadImages(skuId);
+      }
+
       onSaved();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Fout");
@@ -176,24 +209,19 @@ function SKUDialog({
     }
   }
 
-  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file || !currentId) return;
-    setUploading(true);
-    const infoToast = toast("Beeld uploaden en verwerken...");
-    try {
-      await api.uploadImage(currentId, file);
-      loadImages(currentId);
-      onSaved();
-      toast.dismiss(infoToast);
-      toast.success("Referentiebeeld toegevoegd");
-    } catch (err: unknown) {
-      toast.dismiss(infoToast);
-      toast.error(err instanceof Error ? err.message : "Uploadfout");
-    } finally {
-      setUploading(false);
-    }
+    if (!file) return;
+    const preview = URL.createObjectURL(file);
+    setStagedFiles((prev) => [...prev, { file, preview }]);
     e.target.value = "";
+  }
+
+  function removeStagedFile(index: number) {
+    setStagedFiles((prev) => {
+      URL.revokeObjectURL(prev[index].preview);
+      return prev.filter((_, i) => i !== index);
+    });
   }
 
   async function deleteImage(imageId: number) {
@@ -252,60 +280,76 @@ function SKUDialog({
           )}
         </form>
 
-        {currentId && (
-          <div className="mt-6">
-            <Label className="mb-2 block">Referentiebeelden</Label>
-            {images.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Nog geen referentiebeelden
-              </p>
-            ) : (
-              <div className="grid grid-cols-4 gap-2 mb-3">
-                {images.map((img) => (
-                  <div
-                    key={img.id}
-                    className="relative aspect-square rounded-lg overflow-hidden border border-border"
-                  >
-                    <img
-                      src={`/api/uploads/reference_images/${img.sku_id}/${img.image_path.split("/").pop()}`}
-                      alt="ref"
-                      className="w-full h-full object-cover"
-                    />
-                    {user && user.role !== "courier" && (
-                      <button
-                        onClick={() => deleteImage(img.id)}
-                        className="absolute top-1 right-1 bg-red-600/80 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center"
-                      >
-                        &times;
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-            {user && user.role !== "courier" && (
-              <>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  type="button"
-                  disabled={uploading}
-                  onClick={() => fileInputRef.current?.click()}
+        <div className="mt-6">
+          <Label className="mb-2 block">Referentiebeelden</Label>
+          {images.length === 0 && stagedFiles.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Nog geen referentiebeelden
+            </p>
+          ) : (
+            <div className="grid grid-cols-4 gap-2 mb-3">
+              {images.map((img) => (
+                <div
+                  key={img.id}
+                  className="relative aspect-square rounded-lg overflow-hidden border border-border"
                 >
-                  {uploading ? "Uploaden..." : "Foto uploaden"}
-                </Button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  className="hidden"
-                  onChange={handleUpload}
-                />
-              </>
-            )}
-          </div>
-        )}
+                  <img
+                    src={`/api/uploads/reference_images/${img.sku_id}/${img.image_path.split("/").pop()}`}
+                    alt="ref"
+                    className="w-full h-full object-cover"
+                  />
+                  {user && user.role !== "courier" && (
+                    <button
+                      onClick={() => deleteImage(img.id)}
+                      className="absolute top-1 right-1 bg-red-600/80 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center"
+                    >
+                      &times;
+                    </button>
+                  )}
+                </div>
+              ))}
+              {stagedFiles.map((staged, i) => (
+                <div
+                  key={`staged-${i}`}
+                  className="relative aspect-square rounded-lg overflow-hidden border-2 border-dashed border-primary/50"
+                >
+                  <img
+                    src={staged.preview}
+                    alt="preview"
+                    className="w-full h-full object-cover opacity-80"
+                  />
+                  <button
+                    onClick={() => removeStagedFile(i)}
+                    className="absolute top-1 right-1 bg-red-600/80 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center"
+                  >
+                    &times;
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {user && user.role !== "courier" && (
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                disabled={uploading}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {uploading ? "Uploaden..." : "Foto toevoegen"}
+              </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={handleUpload}
+              />
+            </>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );
