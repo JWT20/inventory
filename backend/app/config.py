@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     token_expire_days: int = 90
 
     # Domain (used for CORS)
-    duckdns_domain: str = ""
+    domain: str = ""
 
     class Config:
         env_file = ".env"

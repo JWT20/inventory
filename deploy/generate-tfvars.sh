@@ -73,8 +73,7 @@ echo "SSH public key: ${SSH_PUB}"
 echo ""
 
 # --- Prompt for missing values ---
-read -p "DuckDNS subdomain (bijv. 'wijnpick'): " DUCKDNS_DOMAIN
-read -p "DuckDNS token: " DUCKDNS_TOKEN
+read -p "Domein (bijv. 'dockscan.nl'): " DOMAIN
 read -p "Gemini API key: " GEMINI_KEY
 echo ""
 
@@ -97,9 +96,8 @@ compartment_ocid = "${COMPARTMENT}"
 
 ssh_public_key_path = "${SSH_PUB}"
 
-# DuckDNS
-duckdns_domain = "${DUCKDNS_DOMAIN}"
-duckdns_token  = "${DUCKDNS_TOKEN}"
+# Domain
+domain = "${DOMAIN}"
 
 # Gemini
 gemini_api_key = "${GEMINI_KEY}"

@@ -15,8 +15,7 @@ variable "private_key_path" {}
 variable "region" { default = "eu-amsterdam-1" }
 variable "compartment_ocid" {}
 variable "ssh_public_key_path" {}
-variable "duckdns_domain" {}
-variable "duckdns_token" {}
+variable "domain" { default = "dockscan.nl" }
 variable "gemini_api_key" {}
 
 # --- Provider ---
@@ -177,8 +176,7 @@ resource "oci_core_instance" "wijnpick_vm" {
   metadata = {
     ssh_authorized_keys = file(var.ssh_public_key_path)
     user_data = base64encode(templatefile("${path.module}/cloud-init.yaml", {
-      duckdns_domain = var.duckdns_domain
-      duckdns_token  = var.duckdns_token
+      domain         = var.domain
       gemini_api_key = var.gemini_api_key
     }))
   }
@@ -190,7 +188,7 @@ output "vm_public_ip" {
 }
 
 output "app_url" {
-  value = "http://${var.duckdns_domain}.duckdns.org"
+  value = "https://${var.domain}"
 }
 
 output "ssh_command" {

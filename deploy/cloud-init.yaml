@@ -21,17 +21,6 @@ runcmd:
   - systemctl start docker
   - usermod -aG docker opc
 
-  # DuckDNS setup
-  - mkdir -p /opt/duckdns
-  - |
-    cat > /opt/duckdns/duck.sh << 'DUCKEOF'
-    #!/bin/bash
-    echo url="https://www.duckdns.org/update?domains=${duckdns_domain}&token=${duckdns_token}&ip=" | curl -k -o /opt/duckdns/duck.log -K -
-    DUCKEOF
-  - chmod +x /opt/duckdns/duck.sh
-  - /opt/duckdns/duck.sh
-  - echo "*/5 * * * * /opt/duckdns/duck.sh >/dev/null 2>&1" | crontab -
-
   # Clone the app repo
   - git clone -b main https://github.com/JWT20/inventory.git /opt/wijnpick
 
@@ -46,8 +35,7 @@ runcmd:
     GEMINI_VISION_MODEL=gemini-2.5-flash
     GEMINI_EMBEDDING_MODEL=gemini-embedding-001
     MATCH_THRESHOLD=0.75
-    DUCKDNS_DOMAIN=${duckdns_domain}
-    DUCKDNS_TOKEN=${duckdns_token}
+    DOMAIN=${domain}
     ENVEOF
   - chown -R opc:opc /opt/wijnpick
 

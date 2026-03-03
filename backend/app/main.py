@@ -22,8 +22,8 @@ app = FastAPI(
 )
 
 cors_origins = ["http://localhost:5173"]  # Vite dev server
-if settings.duckdns_domain:
-    cors_origins = [f"https://{settings.duckdns_domain}.duckdns.org"]
+if settings.domain:
+    cors_origins = [f"https://{settings.domain}"]
 
 app.add_middleware(
     CORSMiddleware,
