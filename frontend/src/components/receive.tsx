@@ -199,15 +199,20 @@ function LabelStep({
   }, [loadBarcode]);
 
   async function openPrintLabel() {
+    const win = window.open("", "_blank");
+    if (!win) {
+      toast.error("Pop-up geblokkeerd — sta pop-ups toe voor deze site");
+      return;
+    }
+    win.document.write("<p>Label laden...</p>");
     try {
       const html = await api.fetchLabelHtml(match.sku_id);
-      const win = window.open("", "_blank");
-      if (win) {
-        win.document.write(html);
-        win.document.close();
-        win.addEventListener("load", () => win.print());
-      }
+      win.document.open();
+      win.document.write(html);
+      win.document.close();
+      win.addEventListener("load", () => win.print());
     } catch {
+      win.close();
       toast.error("Kan label niet laden");
     }
   }
