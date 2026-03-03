@@ -210,7 +210,11 @@ function LabelStep({
       win.document.open();
       win.document.write(html);
       win.document.close();
-      win.addEventListener("load", () => win.print());
+      // Small delay to let the browser render before triggering print
+      setTimeout(() => {
+        win.focus();
+        win.print();
+      }, 300);
     } catch {
       win.close();
       toast.error("Kan label niet laden");
