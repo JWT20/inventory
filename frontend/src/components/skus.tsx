@@ -121,6 +121,8 @@ function SKUDialog({
   const [description, setDescription] = useState("");
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [images, setImages] = useState<RefImage[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     if (open && sku) {
@@ -149,6 +151,7 @@ function SKUDialog({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!user || user.role === "courier") return;
+    setSubmitting(true);
     try {
       if (currentId) {
         await api.updateSKU(currentId, {
@@ -168,30 +171,41 @@ function SKUDialog({
       onSaved();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Fout");
+    } finally {
+      setSubmitting(false);
     }
   }
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file || !currentId) return;
-    toast("Beeld uploaden en verwerken...");
+    setUploading(true);
+    const infoToast = toast("Beeld uploaden en verwerken...");
     try {
       await api.uploadImage(currentId, file);
       loadImages(currentId);
       onSaved();
+      toast.dismiss(infoToast);
       toast.success("Referentiebeeld toegevoegd");
     } catch (err: unknown) {
+      toast.dismiss(infoToast);
       toast.error(err instanceof Error ? err.message : "Uploadfout");
+    } finally {
+      setUploading(false);
     }
     e.target.value = "";
   }
 
   async function deleteImage(imageId: number) {
     if (!currentId) return;
-    await api.deleteImage(currentId, imageId);
-    loadImages(currentId);
-    onSaved();
-    toast.success("Beeld verwijderd");
+    try {
+      await api.deleteImage(currentId, imageId);
+      loadImages(currentId);
+      onSaved();
+      toast.success("Beeld verwijderd");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Kan beeld niet verwijderen");
+    }
   }
 
   return (
@@ -228,8 +242,12 @@ function SKUDialog({
             />
           </div>
           {user && user.role !== "courier" && (
-            <Button type="submit" className="w-full">
-              Opslaan
+            <Button type="submit" className="w-full" disabled={submitting}>
+              {submitting
+                ? currentId
+                  ? "Opslaan..."
+                  : "Aanmaken..."
+                : "Opslaan"}
             </Button>
           )}
         </form>
@@ -271,9 +289,10 @@ function SKUDialog({
                   variant="secondary"
                   size="sm"
                   type="button"
+                  disabled={uploading}
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  Foto uploaden
+                  {uploading ? "Uploaden..." : "Foto uploaden"}
                 </Button>
                 <input
                   ref={fileInputRef}
