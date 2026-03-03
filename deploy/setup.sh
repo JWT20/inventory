@@ -22,12 +22,12 @@ echo "1/4 App-bestanden kopieren..."
 rsync -avz --exclude '.git' --exclude 'deploy' --exclude '.env' --exclude '__pycache__' \
     "${PROJECT_ROOT}/" "${SSH_USER}@${VM_IP}:${APP_DIR}/"
 
-# Setup HTTPS with Caddy (simpler than certbot for DuckDNS)
+# Setup HTTPS with Caddy
 echo "2/4 Caddy reverse proxy installeren voor HTTPS..."
 ssh "${SSH_USER}@${VM_IP}" << 'REMOTE_SCRIPT'
 set -euo pipefail
 
-# Read DuckDNS domain from .env
+# Read domain from .env
 source /opt/wijnpick/.env
 
 # Install Caddy
@@ -45,7 +45,7 @@ sudo dnf install -y caddy || {
 # Caddy config
 sudo mkdir -p /etc/caddy
 sudo tee /etc/caddy/Caddyfile > /dev/null << CADDYEOF
-${DUCKDNS_DOMAIN}.duckdns.org {
+${DOMAIN} {
     reverse_proxy localhost:8080
 }
 CADDYEOF
@@ -98,7 +98,7 @@ REMOTE_SCRIPT
 echo ""
 echo "=== Deployment compleet! ==="
 # Read domain from terraform
-DOMAIN=$(cd "$(dirname "$0")" && terraform output -raw app_url 2>/dev/null || echo "https://<your-domain>.duckdns.org")
+DOMAIN=$(cd "$(dirname "$0")" && terraform output -raw app_url 2>/dev/null || echo "https://dockscan.nl")
 echo "App beschikbaar op: ${DOMAIN}"
 echo ""
 echo "SSH toegang: ssh ${SSH_USER}@${VM_IP}"

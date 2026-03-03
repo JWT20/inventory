@@ -36,7 +36,7 @@ cp .env.example .env
 docker compose up -d
 
 # 3. Open in browser
-# http://localhost (of je DuckDNS domein)
+# http://localhost (of https://dockscan.nl)
 ```
 
 ## Operationeel Proces
