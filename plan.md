@@ -38,6 +38,38 @@ REALTIME table config pointing to Kafka topic `warehouse_events`, consuming from
 
 Script that waits for Pinot to be healthy, then POSTs the schema and table config.
 
+## Step 2b: Enhance Matching Service to Return Top-N Candidates
+
+**File**: `backend/app/services/matching.py`
+
+Currently `find_best_match()` returns only the single best SKU. Enhance it to also return the top-N candidates so events can capture *why* a match was chosen:
+
+1. Add a new function `find_best_matches(db, embedding, top_n=5)` that:
+   - Changes `LIMIT 1` → `LIMIT :top_n` in the pgvector query
+   - Returns a list of `(SKU, similarity)` tuples for the top-N candidates
+   - Still applies the active SKU filter
+2. Refactor `find_best_match()` to call `find_best_matches(top_n=1)` internally (no behavior change)
+3. Update callers (picks, receiving, vision routers) to use `find_best_matches()` so they have the full candidate list available for event publishing
+
+The top-N candidates will be included in the event `details` payload:
+```json
+{
+  "vision_description": "Red wine box, Château Margaux 2018...",
+  "candidates": [
+    {"sku_code": "WIN-003", "sku_name": "Margaux 2018", "similarity": 0.92},
+    {"sku_code": "WIN-001", "sku_name": "Margaux 2016", "similarity": 0.85},
+    {"sku_code": "WIN-012", "sku_name": "Pauillac 2019", "similarity": 0.64}
+  ],
+  "matched_sku": "WIN-003",
+  "threshold": 0.75
+}
+```
+
+This enables queries in Pinot like:
+- "Show picks where the correct SKU was in top 3 but not ranked #1"
+- "Average confidence gap between #1 and #2 candidates"
+- "Which SKUs are most often confused with each other"
+
 ## Step 3: Create Event Publisher Module
 
 **New file**: `backend/app/events.py`
@@ -64,10 +96,10 @@ Add `publish_event()` calls at the end of each business operation (after DB comm
 - `order_deleted` — order_id, order_number
 
 ### Picks (`routers/picks.py`)
-- `pick_validated` — order_line_id, expected_sku_code, matched_sku_code, confidence, correct, message
+- `pick_validated` — order_line_id, expected_sku_code, matched_sku_code, confidence, correct, message, vision_description, top-N candidates with similarity scores
 
 ### Receiving (`routers/receiving.py`)
-- `box_identified` — matched_sku_code, confidence (or null if no match)
+- `box_identified` — matched_sku_code, confidence (or null if no match), vision_description, top-N candidates with similarity scores
 - `product_created_inline` — sku_code, name
 
 ### SKUs (`routers/skus.py`)
@@ -83,7 +115,7 @@ Add `publish_event()` calls at the end of each business operation (after DB comm
 - `user_deleted` — username
 
 ### Vision (`routers/vision.py`)
-- `vision_identify` — matched_sku_code, confidence (or null)
+- `vision_identify` — matched_sku_code, confidence (or null), vision_description, top-N candidates with similarity scores
 
 ## Step 5: Add Startup/Shutdown Hooks
 
@@ -126,6 +158,7 @@ Add `publish_event()` calls at the end of each business operation (after DB comm
 | `docker-compose.yml` | Add kafka, pinot, pinot-init services |
 | `backend/requirements.txt` | Add `confluent-kafka` |
 | `backend/app/config.py` | Add `kafka_bootstrap_servers` setting |
+| `backend/app/services/matching.py` | Add `find_best_matches()` returning top-N candidates |
 | `backend/app/events.py` | **New** — Kafka producer + `publish_event()` |
 | `backend/app/main.py` | Init/shutdown Kafka producer |
 | `backend/app/routers/orders.py` | Add event publishing (3 events) |
