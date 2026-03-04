@@ -10,6 +10,7 @@ from app.auth import hash_password
 from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.models import User
+from app.events import init_producer, shutdown_producer
 from app.routers import auth, labels, receiving, skus, vision
 
 logging.basicConfig(level=logging.INFO)
@@ -122,6 +123,13 @@ def on_startup():
             logger.info("Created default admin user — change the password!")
     finally:
         db.close()
+
+    init_producer()
+
+
+@app.on_event("shutdown")
+def on_shutdown():
+    shutdown_producer()
 
 
 @app.get("/api/health")

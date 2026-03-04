@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     match_threshold: float = 0.92
     upload_dir: str = "/app/uploads"
 
+    # Kafka
+    kafka_bootstrap_servers: str = ""
+
     # Auth
     admin_password: str = "changeme_in_production"
     token_expire_days: int = 90

@@ -8,10 +8,11 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user
 from app.config import settings
 from app.database import get_db
+from app.events import publish_event
 from app.models import SKU, ReferenceImage, User
 from app.schemas import MatchResult, SKUResponse
 from app.services.embedding import process_image
-from app.services.matching import find_best_match
+from app.services.matching import find_best_match, find_best_matches
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -23,6 +24,7 @@ router = APIRouter(
 async def identify_box(
     file: UploadFile,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Scan a box and identify it against reference images.
 
@@ -38,8 +40,25 @@ async def identify_box(
     with open(scan_path, "wb") as f:
         f.write(image_bytes)
 
-    _description, embedding = process_image(image_bytes)
+    description, embedding = process_image(image_bytes)
     matched_sku, confidence = find_best_match(db, embedding)
+    candidates = find_best_matches(db, embedding, top_n=5)
+
+    publish_event(
+        "box_identified",
+        details={
+            "matched_sku_code": matched_sku.sku_code if matched_sku else None,
+            "confidence": round(confidence, 4) if matched_sku else None,
+            "vision_description": description,
+            "candidates": [
+                {"sku_code": s.sku_code, "sku_name": s.name, "similarity": round(sim, 4)}
+                for s, sim in candidates
+            ],
+            "threshold": settings.match_threshold,
+        },
+        user=user,
+        resource_type="receiving",
+    )
 
     if matched_sku is None:
         return None
@@ -96,6 +115,14 @@ async def create_product_inline(
     db.add(ref_image)
     db.commit()
     db.refresh(sku)
+
+    publish_event(
+        "product_created_inline",
+        details={"sku_code": sku.sku_code, "name": sku.name},
+        user=user,
+        resource_type="sku",
+        resource_id=sku.id,
+    )
 
     return SKUResponse(
         id=sku.id,

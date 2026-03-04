@@ -16,6 +16,7 @@ bcrypt==4.0.1
 aiofiles==24.1.0
 httpx==0.28.1
 python-barcode[images]==0.15.1
+confluent-kafka==2.6.1
 
 # Testing
 pytest==8.3.4

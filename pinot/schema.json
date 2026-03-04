@@ -1,0 +1,20 @@
+{
+  "schemaName": "warehouse_events",
+  "dimensionFieldSpecs": [
+    { "name": "event_id", "dataType": "STRING" },
+    { "name": "event_type", "dataType": "STRING" },
+    { "name": "user_id", "dataType": "INT" },
+    { "name": "username", "dataType": "STRING" },
+    { "name": "resource_type", "dataType": "STRING" },
+    { "name": "resource_id", "dataType": "INT" },
+    { "name": "details", "dataType": "JSON" }
+  ],
+  "dateTimeFieldSpecs": [
+    {
+      "name": "timestamp_ms",
+      "dataType": "LONG",
+      "format": "1:MILLISECONDS:EPOCH",
+      "granularity": "1:MILLISECONDS"
+    }
+  ]
+}

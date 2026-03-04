@@ -2,6 +2,7 @@ services:
   db:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
+    mem_limit: 512m
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-wijnpick}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_in_production}
@@ -15,9 +16,66 @@ services:
       timeout: 5s
       retries: 5
 
+  kafka:
+    image: apache/kafka:3.7.0
+    restart: unless-stopped
+    mem_limit: 512m
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_HEAP_OPTS: -Xmx256m -Xms256m
+      CLUSTER_ID: warehouse-events-cluster-01
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  pinot:
+    image: apachepinot/pinot:1.1.0
+    restart: unless-stopped
+    mem_limit: 1536m
+    command: QuickStart -type EMPTY
+    environment:
+      JAVA_OPTS: -Xms512m -Xmx1g
+    volumes:
+      - pinot-data:/opt/pinot/data
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 60s
+
+  pinot-init:
+    image: curlimages/curl:latest
+    depends_on:
+      pinot:
+        condition: service_healthy
+    volumes:
+      - ./pinot:/pinot-config:ro
+    entrypoint: ["/bin/sh", "/pinot-config/init.sh"]
+    restart: "no"
+
   backend:
     build: ./backend
     restart: unless-stopped
+    mem_limit: 512m
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-wijnpick}:${POSTGRES_PASSWORD:-changeme_in_production}@db:5432/${POSTGRES_DB:-wijnpick}
       SECRET_KEY: ${SECRET_KEY:-changeme_in_production}
@@ -28,6 +86,7 @@ services:
       UPLOAD_DIR: /app/uploads
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme_in_production}
       TOKEN_EXPIRE_DAYS: ${TOKEN_EXPIRE_DAYS:-90}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
     volumes:
       - uploads:/app/uploads
     depends_on:
@@ -43,6 +102,7 @@ services:
   frontend:
     build: ./frontend
     restart: unless-stopped
+    mem_limit: 128m
     ports:
       - "8080:80"
     volumes:
@@ -54,3 +114,5 @@ services:
 volumes:
   pgdata:
   uploads:
+  kafka-data:
+  pinot-data:

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user, require_admin, require_product_manager
 from app.config import settings
 from app.database import get_db
+from app.events import publish_event
 from app.models import SKU, ReferenceImage, User
 from app.schemas import ReferenceImageResponse, SKUCreate, SKUResponse, SKUUpdate
 from app.services.embedding import process_image
@@ -46,7 +47,7 @@ def list_skus(
 def create_sku(
     data: SKUCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_product_manager),
+    user: User = Depends(require_product_manager),
 ):
     existing = db.query(SKU).filter(SKU.sku_code == data.sku_code).first()
     if existing:
@@ -55,6 +56,13 @@ def create_sku(
     db.add(sku)
     db.commit()
     db.refresh(sku)
+    publish_event(
+        "sku_created",
+        details={"sku_code": sku.sku_code, "name": sku.name},
+        user=user,
+        resource_type="sku",
+        resource_id=sku.id,
+    )
     return _sku_to_response(sku)
 
 
@@ -75,15 +83,23 @@ def update_sku(
     sku_id: int,
     data: SKUUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_product_manager),
+    user: User = Depends(require_product_manager),
 ):
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU not found")
-    for field, value in data.model_dump(exclude_unset=True).items():
+    changed_fields = data.model_dump(exclude_unset=True)
+    for field, value in changed_fields.items():
         setattr(sku, field, value)
     db.commit()
     db.refresh(sku)
+    publish_event(
+        "sku_updated",
+        details={"sku_code": sku.sku_code, "changed_fields": list(changed_fields.keys())},
+        user=user,
+        resource_type="sku",
+        resource_id=sku.id,
+    )
     return _sku_to_response(sku)
 
 
@@ -91,13 +107,21 @@ def update_sku(
 def delete_sku(
     sku_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    user: User = Depends(require_admin),
 ):
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU not found")
+    sku_code = sku.sku_code
     db.delete(sku)
     db.commit()
+    publish_event(
+        "sku_deleted",
+        details={"sku_code": sku_code},
+        user=user,
+        resource_type="sku",
+        resource_id=sku_id,
+    )
 
 
 @router.post("/{sku_id}/images", response_model=ReferenceImageResponse, status_code=201)
@@ -105,7 +129,7 @@ async def upload_reference_image(
     sku_id: int,
     file: UploadFile,
     db: Session = Depends(get_db),
-    _: User = Depends(require_product_manager),
+    user: User = Depends(require_product_manager),
 ):
     sku = db.get(SKU, sku_id)
     if not sku:
@@ -134,6 +158,13 @@ async def upload_reference_image(
     db.add(ref_image)
     db.commit()
     db.refresh(ref_image)
+    publish_event(
+        "reference_image_uploaded",
+        details={"sku_code": sku.sku_code, "image_id": ref_image.id},
+        user=user,
+        resource_type="sku",
+        resource_id=sku_id,
+    )
     return ref_image
 
 
@@ -154,7 +185,7 @@ def delete_reference_image(
     sku_id: int,
     image_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(require_product_manager),
+    user: User = Depends(require_product_manager),
 ):
     image = (
         db.query(ReferenceImage)
@@ -163,7 +194,15 @@ def delete_reference_image(
     )
     if not image:
         raise HTTPException(404, "Reference image not found")
+    sku = db.get(SKU, sku_id)
     if os.path.exists(image.image_path):
         os.remove(image.image_path)
     db.delete(image)
     db.commit()
+    publish_event(
+        "reference_image_deleted",
+        details={"sku_code": sku.sku_code if sku else None, "image_id": image_id},
+        user=user,
+        resource_type="sku",
+        resource_id=sku_id,
+    )
