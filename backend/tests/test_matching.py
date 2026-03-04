@@ -16,10 +16,11 @@ class TestFindBestMatch:
 
         mock_db = MagicMock()
         mock_sku = MagicMock()
+        mock_sku.id = 1
         mock_sku.sku_code = "WINE-001"
 
         mock_result = MagicMock()
-        mock_result.first.return_value = (1, 0.95)
+        mock_result.fetchall.return_value = [(1, 0.95)]
         mock_db.execute.return_value = mock_result
         mock_db.get.return_value = mock_sku
 
@@ -35,10 +36,13 @@ class TestFindBestMatch:
         from app.services.matching import find_best_match
 
         mock_db = MagicMock()
+        mock_sku = MagicMock()
+        mock_sku.id = 1
 
         mock_result = MagicMock()
-        mock_result.first.return_value = (1, 0.80)
+        mock_result.fetchall.return_value = [(1, 0.80)]
         mock_db.execute.return_value = mock_result
+        mock_db.get.return_value = mock_sku
 
         with patch("app.services.matching.settings") as mock_settings:
             mock_settings.match_threshold = 0.92
@@ -53,7 +57,7 @@ class TestFindBestMatch:
         mock_db = MagicMock()
 
         mock_result = MagicMock()
-        mock_result.first.return_value = None
+        mock_result.fetchall.return_value = []
         mock_db.execute.return_value = mock_result
 
         sku, confidence = find_best_match(mock_db, [0.1] * 1536)
@@ -66,9 +70,13 @@ class TestFindBestMatch:
         from app.services.matching import find_best_match
 
         mock_db = MagicMock()
+        mock_sku = MagicMock()
+        mock_sku.id = 1
+
         mock_result = MagicMock()
-        mock_result.first.return_value = (1, 0.92)
+        mock_result.fetchall.return_value = [(1, 0.92)]
         mock_db.execute.return_value = mock_result
+        mock_db.get.return_value = mock_sku
 
         with patch("app.services.matching.settings") as mock_settings:
             mock_settings.match_threshold = 0.92
@@ -76,6 +84,43 @@ class TestFindBestMatch:
 
         # 0.92 < 0.92 is False, so it should match
         assert sku is not None or confidence == 0.92
+
+
+# ---------------------------------------------------------------------------
+# matching.find_best_matches
+# ---------------------------------------------------------------------------
+
+class TestFindBestMatches:
+    def test_returns_top_n_candidates(self):
+        from app.services.matching import find_best_matches
+
+        mock_db = MagicMock()
+        mock_sku1 = MagicMock()
+        mock_sku1.id = 1
+        mock_sku2 = MagicMock()
+        mock_sku2.id = 2
+
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = [(1, 0.95), (2, 0.85)]
+        mock_db.execute.return_value = mock_result
+        mock_db.get.side_effect = lambda cls, id: {1: mock_sku1, 2: mock_sku2}[id]
+
+        results = find_best_matches(mock_db, [0.1] * 1536, top_n=2)
+
+        assert len(results) == 2
+        assert results[0] == (mock_sku1, 0.95)
+        assert results[1] == (mock_sku2, 0.85)
+
+    def test_empty_database(self):
+        from app.services.matching import find_best_matches
+
+        mock_db = MagicMock()
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = []
+        mock_db.execute.return_value = mock_result
+
+        results = find_best_matches(mock_db, [0.1] * 1536)
+        assert results == []
 
 
 # ---------------------------------------------------------------------------
