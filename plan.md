@@ -177,6 +177,20 @@ Add `publish_event()` calls at the end of each business operation (after DB comm
 }
 ```
 
+## Accessing Logs
+
+Pinot's query console (port 9000) is **not exposed publicly**. Access it via SSH tunnel:
+
+```bash
+ssh -L 9000:localhost:9000 opc@<your-server-ip>
+```
+
+Then open `http://localhost:9000` in your browser to run SQL queries against `warehouse_events`.
+
+No in-app dashboard — Pinot's built-in console is sufficient for now.
+
+---
+
 ## Files Changed (Summary)
 
 | File | Change |
