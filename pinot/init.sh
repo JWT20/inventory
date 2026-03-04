@@ -24,8 +24,8 @@ else
   echo ""
 fi
 
-# Check if table already exists
-if curl -sf "$PINOT_URL/tables/warehouse_events" > /dev/null 2>&1; then
+# Check if table already exists by listing all tables
+if curl -sf "$PINOT_URL/tables" 2>/dev/null | grep -q '"warehouse_events_REALTIME"'; then
   echo "Table 'warehouse_events' already exists, skipping."
 else
   echo "Creating table..."
