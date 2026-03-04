@@ -4,10 +4,13 @@ from fastapi import APIRouter, Depends, UploadFile
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
+from app.config import settings
 from app.database import get_db
+from app.events import publish_event
+from app.models import User
 from app.schemas import MatchResult
 from app.services.embedding import process_image
-from app.services.matching import find_best_match
+from app.services.matching import find_best_match, find_best_matches
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -16,14 +19,35 @@ router = APIRouter(
 
 
 @router.post("/identify", response_model=MatchResult | None)
-async def identify_box(file: UploadFile, db: Session = Depends(get_db)):
+async def identify_box(
+    file: UploadFile,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Identify a wine box by image without order context.
 
     Useful for ad-hoc identification or testing.
     """
     image_bytes = await file.read()
-    _description, embedding = process_image(image_bytes)
+    description, embedding = process_image(image_bytes)
     matched_sku, confidence = find_best_match(db, embedding)
+    candidates = find_best_matches(db, embedding, top_n=5)
+
+    publish_event(
+        "vision_identify",
+        details={
+            "matched_sku_code": matched_sku.sku_code if matched_sku else None,
+            "confidence": round(confidence, 4) if matched_sku else None,
+            "vision_description": description,
+            "candidates": [
+                {"sku_code": s.sku_code, "sku_name": s.name, "similarity": round(sim, 4)}
+                for s, sim in candidates
+            ],
+            "threshold": settings.match_threshold,
+        },
+        user=user,
+        resource_type="vision",
+    )
 
     if matched_sku is None:
         return None

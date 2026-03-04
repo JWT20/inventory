@@ -8,10 +8,11 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user
 from app.config import settings
 from app.database import get_db
-from app.models import OrderLine, PickLog
+from app.events import publish_event
+from app.models import OrderLine, PickLog, User
 from app.schemas import PickResult
 from app.services.embedding import process_image
-from app.services.matching import find_best_match
+from app.services.matching import find_best_match, find_best_matches
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -21,7 +22,10 @@ router = APIRouter(
 
 @router.post("/validate/{order_line_id}", response_model=PickResult)
 async def validate_pick(
-    order_line_id: int, file: UploadFile, db: Session = Depends(get_db)
+    order_line_id: int,
+    file: UploadFile,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Validate a pick by scanning a wine box and comparing to expected SKU."""
     order_line = db.get(OrderLine, order_line_id)
@@ -40,8 +44,9 @@ async def validate_pick(
         f.write(image_bytes)
 
     # Vision API: describe scanned box → generate text embedding → match
-    _description, embedding = process_image(image_bytes)
+    description, embedding = process_image(image_bytes)
     matched_sku, confidence = find_best_match(db, embedding)
+    candidates = find_best_matches(db, embedding, top_n=5)
 
     correct = matched_sku is not None and matched_sku.id == expected_sku.id
 
@@ -80,6 +85,27 @@ async def validate_pick(
         )
     else:
         message = f"Niet herkend. Je zoekt {expected_sku.name}"
+
+    publish_event(
+        "pick_validated",
+        details={
+            "order_line_id": order_line_id,
+            "expected_sku_code": expected_sku.sku_code,
+            "matched_sku_code": matched_sku.sku_code if matched_sku else None,
+            "confidence": round(confidence, 4),
+            "correct": correct,
+            "message": message,
+            "vision_description": description,
+            "candidates": [
+                {"sku_code": s.sku_code, "sku_name": s.name, "similarity": round(sim, 4)}
+                for s, sim in candidates
+            ],
+            "threshold": settings.match_threshold,
+        },
+        user=user,
+        resource_type="pick",
+        resource_id=order_line_id,
+    )
 
     return PickResult(
         correct=correct,

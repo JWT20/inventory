@@ -9,6 +9,36 @@ from app.models import SKU
 logger = logging.getLogger(__name__)
 
 
+def find_best_matches(
+    db: Session, embedding: list[float], top_n: int = 5
+) -> list[tuple[SKU, float]]:
+    """Return the top-N matching SKUs for a given embedding.
+
+    Returns a list of (sku, similarity) tuples, ordered by similarity descending.
+    Only includes active SKUs.
+    """
+    embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+
+    rows = db.execute(
+        text("""
+            SELECT ri.sku_id, 1 - (ri.embedding <=> :embedding) AS similarity
+            FROM reference_images ri
+            JOIN skus s ON s.id = ri.sku_id
+            WHERE s.active = true
+            ORDER BY ri.embedding <=> :embedding
+            LIMIT :top_n
+        """),
+        {"embedding": embedding_str, "top_n": top_n},
+    ).fetchall()
+
+    results = []
+    for sku_id, similarity in rows:
+        sku = db.get(SKU, sku_id)
+        if sku:
+            results.append((sku, float(similarity)))
+    return results
+
+
 def find_best_match(
     db: Session, embedding: list[float]
 ) -> tuple[SKU | None, float]:
@@ -16,37 +46,21 @@ def find_best_match(
 
     Returns (matched_sku, confidence) or (None, 0.0) if no match found.
     """
-    embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+    candidates = find_best_matches(db, embedding, top_n=1)
 
-    # Use pgvector cosine distance operator (<=>), which returns distance (0 = identical).
-    # Similarity = 1 - distance.
-    result = db.execute(
-        text("""
-            SELECT ri.sku_id, 1 - (ri.embedding <=> :embedding) AS similarity
-            FROM reference_images ri
-            JOIN skus s ON s.id = ri.sku_id
-            WHERE s.active = true
-            ORDER BY ri.embedding <=> :embedding
-            LIMIT 1
-        """),
-        {"embedding": embedding_str},
-    ).first()
-
-    if result is None:
+    if not candidates:
         return None, 0.0
 
-    sku_id, similarity = result
-    similarity = float(similarity)
+    sku, similarity = candidates[0]
 
     if similarity < settings.match_threshold:
         logger.info(
             "Best match sku_id=%d has similarity %.3f, below threshold %.3f",
-            sku_id,
+            sku.id,
             similarity,
             settings.match_threshold,
         )
         return None, similarity
 
-    sku = db.get(SKU, sku_id)
     logger.info("Matched SKU %s with confidence %.3f", sku.sku_code, similarity)
     return sku, similarity
