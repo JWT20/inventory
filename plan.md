@@ -5,14 +5,40 @@ Add operational monitoring for all business events in the warehouse app by publi
 
 ---
 
+## Oracle Cloud Free Tier Constraints
+
+**Current instance**: VM.Standard.A1.Flex — 1 OCPU (ARM), 6GB RAM
+
+| Service | Estimated RAM |
+|---------|--------------|
+| PostgreSQL (pgvector) | ~300MB |
+| FastAPI + Nginx | ~200MB |
+| Kafka (KRaft, no ZooKeeper) | ~500MB |
+| Pinot (standalone mode) | ~1.5-2GB |
+| OS + Docker overhead | ~500MB |
+| **Total** | **~3-3.5GB** |
+
+Fits within 6GB with ~2.5GB headroom. To ensure stability:
+- **Set `mem_limit`** on every container in docker-compose to prevent OOM kills
+- **Kafka must use KRaft mode** (no ZooKeeper) — saves ~500MB
+- **Pinot must run standalone** (controller+broker+server in one JVM) — saves ~1-2GB vs separate processes
+- **Set JVM heap limits** for Kafka (`KAFKA_HEAP_OPTS: -Xmx256m`) and Pinot (`JAVA_OPTS: -Xms512m -Xmx1g`)
+- All Docker images must support **linux/arm64** (both `apache/kafka` and `apachepinot/pinot` do since v0.12+)
+
+**Optional upgrade**: Oracle Free Tier allows up to 4 OCPUs + 24GB across all A1 instances. If 6GB becomes tight, bump to 2 OCPUs / 12GB in Terraform (`deploy/main.tf`) at no cost.
+
+---
+
 ## Step 1: Add Kafka + Pinot to Docker Compose
 
 **File**: `docker-compose.yml`
 
 Add three services:
-- **kafka** — Single-node Kafka in KRaft mode (no ZooKeeper). Image: `apache/kafka:3.7.0`. Exposes port 9092 internally.
-- **pinot** — Apache Pinot in standalone mode (controller + broker + server in one). Image: `apachepinot/pinot:1.1.0`. Exposes port 9000 (UI/API).
+- **kafka** — Single-node Kafka in KRaft mode (no ZooKeeper). Image: `apache/kafka:3.7.0`. Exposes port 9092 internally. `mem_limit: 512m`, `KAFKA_HEAP_OPTS: -Xmx256m`.
+- **pinot** — Apache Pinot in standalone mode (controller + broker + server in one). Image: `apachepinot/pinot:1.1.0`. Exposes port 9000 (UI/API). `mem_limit: 1536m`, `JAVA_OPTS: -Xms512m -Xmx1g`.
 - **pinot-init** — One-shot container that waits for Pinot to be ready, then creates the table schema via Pinot's REST API.
+
+Add `mem_limit` to existing services too: `db: 512m`, `backend: 512m`, `frontend: 128m`.
 
 Add environment variable `KAFKA_BOOTSTRAP_SERVERS=kafka:9092` to the backend service.
 
