@@ -1,213 +1,357 @@
-# Plan: Business Event Logging with Apache Pinot via Kafka
+# Cross-Docking Transitieplan
 
-## Goal
-Add operational monitoring for all business events in the warehouse app by publishing structured events to Kafka and ingesting them into Apache Pinot for real-time analytics.
+## Huidige Problemen
 
----
-
-## Oracle Cloud Free Tier Constraints
-
-**Current instance**: VM.Standard.A1.Flex — 1 OCPU (ARM), 6GB RAM
-
-| Service | Estimated RAM |
-|---------|--------------|
-| PostgreSQL (pgvector) | ~300MB |
-| FastAPI + Nginx | ~200MB |
-| Kafka (KRaft, no ZooKeeper) | ~500MB |
-| Pinot (standalone mode) | ~1.5-2GB |
-| OS + Docker overhead | ~500MB |
-| **Total** | **~3-3.5GB** |
-
-Fits within 6GB with ~2.5GB headroom. To ensure stability:
-- **Set `mem_limit`** on every container in docker-compose to prevent OOM kills
-- **Kafka must use KRaft mode** (no ZooKeeper) — saves ~500MB
-- **Pinot must run standalone** (controller+broker+server in one JVM) — saves ~1-2GB vs separate processes
-- **Set JVM heap limits** for Kafka (`KAFKA_HEAP_OPTS: -Xmx256m`) and Pinot (`JAVA_OPTS: -Xms512m -Xmx1g`)
-- All Docker images must support **linux/arm64** (both `apache/kafka` and `apachepinot/pinot` do since v0.12+)
-
-**Optional upgrade**: Oracle Free Tier allows up to 4 OCPUs + 24GB across all A1 instances. If 6GB becomes tight, bump to 2 OCPUs / 12GB in Terraform (`deploy/main.tf`) at no cost.
+1. **Kapotte modellen**: `orders.py` en `picks.py` importeren `Order`, `OrderLine`, `PickLog` uit `models.py` maar die bestaan niet
+2. **Ontbrekende schemas**: `OrderCreate`, `OrderResponse`, `OrderLineResponse`, `PickResult` ontbreken in `schemas.py`
+3. **Routers niet geregistreerd**: `main.py` registreert orders en picks routers niet
+4. **Ongebruikte frontend**: `scan.tsx` en `orders.tsx` bestaan maar zijn niet gekoppeld in `App.tsx`; `api.ts` mist de bijbehorende API methoden
+5. **Geen cross-docking**: na scan is er geen indicatie waar een doos naartoe moet
+6. **Picking is niet relevant**: picking (uit magazijn halen) past niet bij cross-docking (directe doorstroom)
 
 ---
 
-## Step 1: Add Kafka + Pinot to Docker Compose
+## Cross-Docking Concept
 
-**File**: `docker-compose.yml`
+Bij cross-docking worden inkomende dozen direct gesorteerd naar uitgaande containers per klant:
 
-Add three services:
-- **kafka** — Single-node Kafka in KRaft mode (no ZooKeeper). Image: `apache/kafka:3.7.0`. Exposes port 9092 internally. `mem_limit: 512m`, `KAFKA_HEAP_OPTS: -Xmx256m`.
-- **pinot** — Apache Pinot in standalone mode (controller + broker + server in one). Image: `apachepinot/pinot:1.1.0`. Exposes port 9000 (UI/API). `mem_limit: 1536m`, `JAVA_OPTS: -Xms512m -Xmx1g`.
-- **pinot-init** — One-shot container that waits for Pinot to be ready, then creates the table schema via Pinot's REST API.
-
-Add `mem_limit` to existing services too: `db: 512m`, `backend: 512m`, `frontend: 128m`.
-
-Add environment variable `KAFKA_BOOTSTRAP_SERVERS=kafka:9092` to the backend service.
-
-## Step 2: Define Pinot Table Schema
-
-**New file**: `pinot/schema.json`
-
-Create a single Pinot schema `warehouse_events` with these columns:
-- `event_id` (STRING, dimension) — UUID
-- `event_type` (STRING, dimension) — e.g., `pick_validated`, `order_created`
-- `timestamp_ms` (LONG, dateTime) — epoch millis, used as time index
-- `user_id` (INT, dimension)
-- `username` (STRING, dimension)
-- `resource_type` (STRING, dimension) — e.g., `order`, `sku`, `pick`
-- `resource_id` (INT, dimension)
-- `details` (JSON, dimension) — flexible JSON payload with event-specific data
-
-**New file**: `pinot/table.json`
-
-REALTIME table config pointing to Kafka topic `warehouse_events`, consuming from the earliest offset.
-
-**New file**: `pinot/init.sh`
-
-Script that waits for Pinot to be healthy, then POSTs the schema and table config.
-
-## Step 2b: Enhance Matching Service to Return Top-N Candidates
-
-**File**: `backend/app/services/matching.py`
-
-Currently `find_best_match()` returns only the single best SKU. Enhance it to also return the top-N candidates so events can capture *why* a match was chosen:
-
-1. Add a new function `find_best_matches(db, embedding, top_n=5)` that:
-   - Changes `LIMIT 1` → `LIMIT :top_n` in the pgvector query
-   - Returns a list of `(SKU, similarity)` tuples for the top-N candidates
-   - Still applies the active SKU filter
-2. Refactor `find_best_match()` to call `find_best_matches(top_n=1)` internally (no behavior change)
-3. Update callers (picks, receiving, vision routers) to use `find_best_matches()` so they have the full candidate list available for event publishing
-
-The top-N candidates will be included in the event `details` payload:
-```json
-{
-  "vision_description": "Red wine box, Château Margaux 2018...",
-  "candidates": [
-    {"sku_code": "WIN-003", "sku_name": "Margaux 2018", "similarity": 0.92},
-    {"sku_code": "WIN-001", "sku_name": "Margaux 2016", "similarity": 0.85},
-    {"sku_code": "WIN-012", "sku_name": "Pauillac 2019", "similarity": 0.64}
-  ],
-  "matched_sku": "WIN-003",
-  "threshold": 0.75
-}
+```
+Doos binnenkomst → Scan → Identificeer SKU → Zoek order die deze SKU nodig heeft
+→ Toon "Zet op CONTAINER C3 (Klant: Wijnhandel Jansen, nog 5 nodig)"
+→ Update ontvangen hoeveelheid → Volgende doos
 ```
 
-This enables queries in Pinot like:
-- "Show picks where the correct SKU was in top 3 but not ranked #1"
-- "Average confidence gap between #1 and #2 candidates"
-- "Which SKUs are most often confused with each other"
-
-## Step 3: Create Event Publisher Module
-
-**New file**: `backend/app/events.py`
-
-A lightweight module that:
-1. Initializes a `confluent_kafka.Producer` connected to `KAFKA_BOOTSTRAP_SERVERS`
-2. Exposes a `publish_event(event_type: str, details: dict, user: User | None, resource_type: str, resource_id: int | None)` function
-3. Serializes events as JSON with `event_id` (uuid4), `timestamp_ms`, user info, and the details dict
-4. Calls `producer.produce()` which is non-blocking (buffered internally)
-5. Has a background flush (producer auto-flushes, plus a flush on app shutdown)
-6. Gracefully degrades — if Kafka is unavailable, logs a warning and continues (monitoring should never break the app)
-
-**Config change**: `backend/app/config.py` — add `kafka_bootstrap_servers: str = ""` setting.
-
-**Dependency**: Add `confluent-kafka` to `backend/requirements.txt`.
-
-## Step 4: Instrument All Business Operations
-
-Add `publish_event()` calls at the end of each business operation (after DB commit succeeds):
-
-### Orders (`routers/orders.py`)
-- `order_created` — order_number, customer_name, line_count
-- `order_status_changed` — order_id, old_status, new_status
-- `order_deleted` — order_id, order_number
-
-### Picks (`routers/picks.py`)
-- `pick_validated` — order_line_id, expected_sku_code, matched_sku_code, confidence, correct, message, vision_description, top-N candidates with similarity scores
-
-### Receiving (`routers/receiving.py`)
-- `box_identified` — matched_sku_code, confidence (or null if no match), vision_description, top-N candidates with similarity scores
-- `product_created_inline` — sku_code, name
-
-### SKUs (`routers/skus.py`)
-- `sku_created` — sku_code, name
-- `sku_updated` — sku_code, changed_fields
-- `sku_deleted` — sku_code
-- `reference_image_uploaded` — sku_code, image_id
-- `reference_image_deleted` — sku_code, image_id
-
-### Auth (`routers/auth.py`)
-- `user_login` — username, success (true/false)
-- `user_created` — username, role
-- `user_deleted` — username
-
-### Vision (`routers/vision.py`)
-- `vision_identify` — matched_sku_code, confidence (or null), vision_description, top-N candidates with similarity scores
-
-## Step 5: Add Startup/Shutdown Hooks
-
-**File**: `backend/app/main.py`
-
-- On startup: initialize the Kafka producer (call `events.init_producer()`)
-- On shutdown: flush and close the producer (call `events.shutdown_producer()`)
-
-## Step 6: Add `KAFKA_BOOTSTRAP_SERVERS` to Deployment Config
-
-**Files**: `docker-compose.yml` (backend env), `.env.example`, `deploy/cloud-init.yaml`
+Elke klantorder krijgt een fysieke locatie (rollcontainer, pallet, staging area) toegewezen.
+Als dezelfde SKU door meerdere klanten besteld is, alloceert het systeem op basis van prioriteit (oudste order eerst).
 
 ---
 
-## Event Schema Example
+## Stappen
 
-```json
-{
-  "event_id": "a1b2c3d4-...",
-  "event_type": "pick_validated",
-  "timestamp_ms": 1709568000000,
-  "user_id": 3,
-  "username": "courier1",
-  "resource_type": "pick",
-  "resource_id": 42,
-  "details": {
-    "order_line_id": 42,
-    "expected_sku_code": "WIN-001",
-    "matched_sku_code": "WIN-003",
-    "confidence": 0.87,
-    "correct": false
-  }
-}
-```
+### Stap 1: Opruimen — Verwijder picking-logica
 
-## Accessing Logs
+Picking (magazijn → order verzamelen) is niet relevant voor cross-docking. Verwijder:
 
-Pinot's query console (port 9000) is **not exposed publicly**. Access it via SSH tunnel:
+**Verwijder bestanden:**
+- `backend/app/routers/picks.py` — hele bestand
+- `frontend/src/components/scan.tsx` — hele bestand
 
-```bash
-ssh -L 9000:localhost:9000 opc@<your-server-ip>
-```
-
-Then open `http://localhost:9000` in your browser to run SQL queries against `warehouse_events`.
-
-No in-app dashboard — Pinot's built-in console is sufficient for now.
+**Reden:** In cross-docking gaan goederen direct van inkomend naar uitgaand. Er is geen tussenopslag en dus geen picking-stap.
 
 ---
 
-## Files Changed (Summary)
+### Stap 2: Database modellen toevoegen (`models.py`)
 
-| File | Change |
-|------|--------|
-| `docker-compose.yml` | Add kafka, pinot, pinot-init services |
-| `backend/requirements.txt` | Add `confluent-kafka` |
-| `backend/app/config.py` | Add `kafka_bootstrap_servers` setting |
-| `backend/app/services/matching.py` | Add `find_best_matches()` returning top-N candidates |
-| `backend/app/events.py` | **New** — Kafka producer + `publish_event()` |
-| `backend/app/main.py` | Init/shutdown Kafka producer |
-| `backend/app/routers/orders.py` | Add event publishing (3 events) |
-| `backend/app/routers/picks.py` | Add event publishing (1 event) |
-| `backend/app/routers/receiving.py` | Add event publishing (2 events) |
-| `backend/app/routers/skus.py` | Add event publishing (4 events) |
-| `backend/app/routers/auth.py` | Add event publishing (3 events) |
-| `backend/app/routers/vision.py` | Add event publishing (1 event) |
-| `pinot/schema.json` | **New** — Pinot table schema |
-| `pinot/table.json` | **New** — Pinot realtime table config |
-| `pinot/init.sh` | **New** — One-shot Pinot table creation |
-| `.env.example` | Add `KAFKA_BOOTSTRAP_SERVERS` |
+Voeg toe aan `backend/app/models.py`:
+
+```python
+class Order(Base):
+    __tablename__ = "orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_number: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    customer_name: Mapped[str] = mapped_column(String(255))
+    dock_location: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    lines: Mapped[list["OrderLine"]] = relationship(
+        back_populates="order", cascade="all, delete-orphan"
+    )
+
+
+class OrderLine(Base):
+    __tablename__ = "order_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"))
+    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
+    quantity: Mapped[int] = mapped_column(Integer)
+    received_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+
+    order: Mapped["Order"] = relationship(back_populates="lines")
+    sku: Mapped["SKU"] = relationship()
+```
+
+**Velden uitleg:**
+- `dock_location`: fysieke locatie (bijv. "C1", "C2", "Pallet A3") — wordt bij ordercreatie of later ingesteld
+- `received_quantity`: hoeveel dozen voor deze regel al ontvangen zijn (i.p.v. `picked_quantity`)
+- `status`: `pending` → `partial` → `fulfilled` (i.p.v. `picked`)
+
+**PickLog wordt NIET toegevoegd** — niet relevant voor cross-docking.
+
+---
+
+### Stap 3: Schemas toevoegen (`schemas.py`)
+
+Voeg toe aan `backend/app/schemas.py`:
+
+```python
+# --- Orders ---
+class OrderLineCreate(BaseModel):
+    sku_code: str
+    quantity: int = Field(..., gt=0)
+
+class OrderCreate(BaseModel):
+    order_number: str
+    customer_name: str
+    dock_location: str | None = None
+    lines: list[OrderLineCreate] = Field(..., min_length=1)
+
+class OrderUpdate(BaseModel):
+    customer_name: str | None = None
+    dock_location: str | None = None
+
+class OrderLineResponse(BaseModel):
+    id: int
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    quantity: int
+    received_quantity: int
+    status: str
+    model_config = {"from_attributes": True}
+
+class OrderResponse(BaseModel):
+    id: int
+    order_number: str
+    customer_name: str
+    dock_location: str | None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    lines: list[OrderLineResponse]
+    model_config = {"from_attributes": True}
+
+# --- Cross-Docking Resultaat ---
+class DockAssignment(BaseModel):
+    order_id: int
+    order_number: str
+    customer_name: str
+    dock_location: str | None
+    line_id: int
+    quantity_needed: int
+    quantity_after: int
+
+class ReceiveResult(BaseModel):
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    confidence: float
+    assignment: DockAssignment | None = None
+```
+
+**`ReceiveResult`** vervangt het huidige `MatchResult` als return type van de receiving endpoint. Het bevat de SKU-match PLUS de dock-toewijzing.
+
+**`DockAssignment`** is het kernstuk: vertelt de medewerker exact waar de doos naartoe moet.
+
+---
+
+### Stap 4: Allocatie service (`services/allocation.py`)
+
+**Nieuw bestand `backend/app/services/allocation.py`:**
+
+```python
+def find_allocation(db, sku_id):
+    """Vind de oudste openstaande orderregel die deze SKU nodig heeft (FIFO)."""
+    line = (
+        db.query(OrderLine)
+        .join(Order)
+        .filter(
+            OrderLine.sku_id == sku_id,
+            OrderLine.received_quantity < OrderLine.quantity,
+            Order.status.in_(["pending", "receiving"]),
+        )
+        .order_by(Order.created_at.asc())
+        .first()
+    )
+    if not line:
+        return None
+    return line, line.order
+
+def confirm_receipt(db, line_id):
+    """Verhoog received_quantity en update statussen."""
+    line = db.get(OrderLine, line_id)
+    line.received_quantity = min(line.received_quantity + 1, line.quantity)
+    if line.received_quantity >= line.quantity:
+        line.status = "fulfilled"
+    elif line.received_quantity > 0:
+        line.status = "partial"
+
+    order = line.order
+    if order.status == "pending":
+        order.status = "receiving"
+    if all(l.status == "fulfilled" for l in order.lines):
+        order.status = "fulfilled"
+
+    db.commit()
+    return line, order
+```
+
+---
+
+### Stap 5: Orders router herschrijven (`routers/orders.py`)
+
+Herschrijf met correcte model imports en cross-docking aanpassingen:
+
+**Endpoints:**
+- `GET /api/orders?status=...` — lijst orders
+- `POST /api/orders` — maak order met regels en optionele dock_location
+- `GET /api/orders/{id}` — haal order op
+- `PATCH /api/orders/{id}` — update customer_name of dock_location
+- `PATCH /api/orders/{id}/status` — update status
+- `DELETE /api/orders/{id}` — verwijder order
+
+**Wijzigingen:**
+- Status values: `pending`, `receiving`, `fulfilled` (i.p.v. `picking`, `completed`)
+- `dock_location` veld in create en update
+- `received_quantity` i.p.v. `picked_quantity`
+
+---
+
+### Stap 6: Receiving router uitbreiden met cross-docking
+
+Wijzig `backend/app/routers/receiving.py`:
+
+**`POST /api/receiving/identify`** — uitbreiden:
+1. Scan box → identify SKU (bestaande logica)
+2. **NIEUW:** Zoek allocatie via `find_allocation(db, sku_id)`
+3. Return `ReceiveResult` met optionele `DockAssignment`
+
+**`POST /api/receiving/confirm`** — NIEUW endpoint:
+1. Ontvang `{ line_id: int }`
+2. Roep `confirm_receipt(db, line_id)` aan
+3. Publiceer `box_received` event
+
+---
+
+### Stap 7: Main.py — Router registreren
+
+- Importeer en registreer `orders` router
+- Geen picks router meer
+
+---
+
+### Stap 8: Event logging uitbreiden
+
+**Nieuwe events:**
+- `box_received` — doos ontvangen en toegewezen (sku_code, order_number, customer_name, dock_location, received_quantity, quantity)
+- `box_received_no_order` — doos ontvangen maar geen openstaande order
+- `order_line_fulfilled` — orderregel volledig ontvangen
+- `order_fulfilled` — alle regels van een order zijn ontvangen
+
+---
+
+### Stap 9: Tests
+
+**`backend/tests/conftest.py`** — order/line fixtures toevoegen
+
+**`backend/tests/test_orders.py`** (nieuw):
+- CRUD operations
+- Orderregel validatie (onbekende SKU)
+- Duplicate order_number afwijzing
+- dock_location toewijzing
+
+**`backend/tests/test_receiving.py`** (nieuw):
+- Identify met en zonder openstaande order
+- Confirm endpoint
+- FIFO allocatie (oudste order eerst)
+- Fulfilled status cascade (line → order)
+- Dezelfde SKU bij meerdere klanten
+
+---
+
+### Stap 10: Frontend api.ts uitbreiden
+
+Order API methoden toevoegen:
+- `listOrders(status?)`, `createOrder(data)`, `getOrder(id)`
+- `updateOrder(id, data)`, `updateOrderStatus(id, status)`, `deleteOrder(id)`
+- `confirmReceive(lineId)` — nieuw voor cross-docking
+
+---
+
+### Stap 11: Frontend receive.tsx aanpassen
+
+Nieuwe flow: Scan → **Dock Assignment + Label** → (optioneel) New Product
+
+Na succesvolle scan met order-match:
+```
+┌─────────────────────────────────┐
+│ Château Margaux 2018            │
+│ WN-001          98% match       │
+├─────────────────────────────────┤
+│                                 │
+│    🟢 ZET OP CONTAINER C3      │
+│    Klant: Wijnhandel Jansen     │
+│    Order: ORD-2024-0042         │
+│    Nog 5 dozen nodig            │
+│                                 │
+├─────────────────────────────────┤
+│  [   Bevestig & Print Label    ]│
+│  [   Volgende doos scannen     ]│
+│  Niet correct? Nieuw product    │
+└─────────────────────────────────┘
+```
+
+Zonder openstaande order:
+```
+┌─────────────────────────────────┐
+│ Château Margaux 2018            │
+│ WN-001          98% match       │
+├─────────────────────────────────┤
+│    ⚠️ GEEN OPENSTAANDE ORDER   │
+│    Leg apart op overflow        │
+├─────────────────────────────────┤
+│  [     Label printen           ]│
+│  [   Volgende doos scannen     ]│
+└─────────────────────────────────┘
+```
+
+---
+
+### Stap 12: Frontend orders.tsx aanpassen
+
+- Voeg `dock_location` veld toe aan NewOrderDialog
+- Toon dock_location in orderlijst en detail
+- Gebruik `received_quantity` i.p.v. `picked_quantity`
+- Status labels: "Open" / "Ontvangen" / "Compleet"
+
+---
+
+### Stap 13: Frontend App.tsx — Orders tab
+
+- Voeg "Orders" tab toe aan navigatie (admin en merchant)
+- Import `OrdersPage`
+
+---
+
+### Stap 14: Opruimen
+
+- Verwijder `NEXT_STEPS.md`
+- Update `.env.example`: OpenAI → Gemini referenties
+
+---
+
+## Samenvatting Gewijzigde Bestanden
+
+| Bestand | Actie |
+|---|---|
+| `backend/app/models.py` | Order, OrderLine modellen toevoegen |
+| `backend/app/schemas.py` | Order + cross-docking schemas toevoegen |
+| `backend/app/routers/orders.py` | Herschrijven met correcte modellen |
+| `backend/app/routers/receiving.py` | Cross-docking allocatie + confirm endpoint |
+| `backend/app/routers/picks.py` | **VERWIJDEREN** |
+| `backend/app/services/allocation.py` | **NIEUW** — allocatielogica |
+| `backend/app/main.py` | Orders router registreren |
+| `backend/tests/conftest.py` | Order/line fixtures toevoegen |
+| `backend/tests/test_orders.py` | **NIEUW** — order CRUD tests |
+| `backend/tests/test_receiving.py` | **NIEUW** — cross-docking tests |
+| `frontend/src/App.tsx` | Orders tab toevoegen |
+| `frontend/src/components/receive.tsx` | Dock assignment UI toevoegen |
+| `frontend/src/components/orders.tsx` | dock_location + received_quantity |
+| `frontend/src/components/scan.tsx` | **VERWIJDEREN** |
+| `frontend/src/lib/api.ts` | Order + confirm API methoden |
+| `.env.example` | OpenAI → Gemini |
+| `NEXT_STEPS.md` | **VERWIJDEREN** |
