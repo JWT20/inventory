@@ -75,3 +75,37 @@ class ReferenceImage(Base):
     )
 
     sku: Mapped["SKU"] = relationship(back_populates="reference_images")
+
+
+class Order(Base):
+    __tablename__ = "orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_number: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    customer_name: Mapped[str] = mapped_column(String(255))
+    dock_location: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    lines: Mapped[list["OrderLine"]] = relationship(
+        back_populates="order", cascade="all, delete-orphan"
+    )
+
+
+class OrderLine(Base):
+    __tablename__ = "order_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"))
+    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    picked_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+
+    order: Mapped["Order"] = relationship(back_populates="lines")
+    sku: Mapped["SKU"] = relationship()

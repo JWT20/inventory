@@ -72,6 +72,42 @@ class ReferenceImageResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# --- Orders ---
+class OrderLineCreate(BaseModel):
+    sku_code: str
+    quantity: int = Field(..., ge=1)
+
+
+class OrderCreate(BaseModel):
+    order_number: str
+    customer_name: str
+    lines: list[OrderLineCreate] = Field(..., min_length=1)
+
+
+class OrderLineResponse(BaseModel):
+    id: int
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    quantity: int
+    picked_quantity: int
+    status: str
+
+    model_config = {"from_attributes": True}
+
+
+class OrderResponse(BaseModel):
+    id: int
+    order_number: str
+    customer_name: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    lines: list[OrderLineResponse] = []
+
+    model_config = {"from_attributes": True}
+
+
 # --- Vision / Identification ---
 class MatchResult(BaseModel):
     sku_id: int
