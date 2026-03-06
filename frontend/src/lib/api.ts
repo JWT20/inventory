@@ -142,6 +142,26 @@ export const api = {
     return resp.blob();
   },
 
+  // Orders
+  listOrders: (status?: string) =>
+    request(`/orders${status ? `?status=${status}` : ""}`),
+  createOrder: (data: {
+    order_number: string;
+    customer_name: string;
+    dock_location?: string;
+    lines: { sku_code: string; quantity: number }[];
+  }) => json("/orders", "POST", data),
+  getOrder: (id: number) => request(`/orders/${id}`),
+  updateOrder: (id: number, data: { customer_name?: string; dock_location?: string }) =>
+    json(`/orders/${id}`, "PATCH", data),
+  updateOrderStatus: (id: number, status: string) =>
+    request(`/orders/${id}/status?status=${status}`, { method: "PATCH" }),
+  deleteOrder: (id: number) => request(`/orders/${id}`, { method: "DELETE" }),
+
+  // Cross-docking
+  confirmReceive: (lineId: number) =>
+    json("/receiving/confirm", "POST", { line_id: lineId }),
+
   // Vision (ad-hoc)
   identify: (blob: Blob) => upload("/vision/identify", blob, "scan.jpg"),
 };

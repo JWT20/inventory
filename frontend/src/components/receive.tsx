@@ -7,59 +7,79 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 
-interface MatchResult {
+interface DockAssignment {
+  order_id: number;
+  order_number: string;
+  customer_name: string;
+  dock_location: string | null;
+  line_id: number;
+  quantity_needed: number;
+  quantity_after: number;
+}
+
+interface ReceiveResult {
   sku_id: number;
   sku_code: string;
   sku_name: string;
   confidence: number;
+  assignment: DockAssignment | null;
 }
 
-type Step = "scan" | "label" | "new-product";
+type Step = "scan" | "dock" | "label" | "new-product";
 
 export function ReceivePage() {
   const [step, setStep] = useState<Step>("scan");
-  const [match, setMatch] = useState<MatchResult | null>(null);
+  const [result, setResult] = useState<ReceiveResult | null>(null);
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null);
 
-  function handleMatch(result: MatchResult | null, blob: Blob) {
+  function handleResult(res: ReceiveResult | null, blob: Blob) {
     setCapturedBlob(blob);
-    if (result) {
-      setMatch(result);
-      setStep("label");
+    if (res) {
+      setResult(res);
+      setStep("dock");
     } else {
       setStep("new-product");
     }
   }
 
   function handleNewProductCreated(sku: { id: number; sku_code: string; name: string }) {
-    setMatch({
+    setResult({
       sku_id: sku.id,
       sku_code: sku.sku_code,
       sku_name: sku.name,
       confidence: 1.0,
+      assignment: null,
     });
     setStep("label");
   }
 
   function rejectMatch() {
-    setMatch(null);
+    setResult(null);
     setStep("new-product");
   }
 
   function reset() {
     setStep("scan");
-    setMatch(null);
+    setResult(null);
     setCapturedBlob(null);
   }
 
   return (
     <div>
-      <h2 className="text-xl font-bold mb-4">Scan & Label</h2>
+      <h2 className="text-xl font-bold mb-4">Scan & Sorteer</h2>
 
-      {step === "scan" && <ScanStep onResult={handleMatch} />}
+      {step === "scan" && <ScanStep onResult={handleResult} />}
 
-      {step === "label" && match && (
-        <LabelStep match={match} onDone={reset} onReject={rejectMatch} />
+      {step === "dock" && result && (
+        <DockStep result={result} onDone={reset} onLabel={() => setStep("label")} onReject={rejectMatch} />
+      )}
+
+      {step === "label" && result && (
+        <LabelStep
+          match={{ sku_id: result.sku_id, sku_code: result.sku_code, sku_name: result.sku_name, confidence: result.confidence }}
+          onDone={reset}
+          onReject={rejectMatch}
+        />
       )}
 
       {step === "new-product" && capturedBlob && (
@@ -78,7 +98,7 @@ export function ReceivePage() {
 function ScanStep({
   onResult,
 }: {
-  onResult: (match: MatchResult | null, blob: Blob) => void;
+  onResult: (result: ReceiveResult | null, blob: Blob) => void;
 }) {
   const [scanning, setScanning] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -128,8 +148,8 @@ function ScanStep({
     }
 
     try {
-      const result: MatchResult | null = await api.identifyBox(blob);
-      onResult(result, blob);
+      const res: ReceiveResult | null = await api.identifyBox(blob);
+      onResult(res, blob);
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Scanfout");
     } finally {
@@ -166,14 +186,118 @@ function ScanStep({
   );
 }
 
-/* ---------- Step 2: Print Label ---------- */
+/* ---------- Step 2: Dock Assignment ---------- */
+
+function DockStep({
+  result,
+  onDone,
+  onLabel,
+  onReject,
+}: {
+  result: ReceiveResult;
+  onDone: () => void;
+  onLabel: () => void;
+  onReject: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const assignment = result.assignment;
+
+  async function handleConfirm() {
+    if (!assignment) {
+      onLabel();
+      return;
+    }
+    setConfirming(true);
+    try {
+      await api.confirmReceive(assignment.line_id);
+      toast.success("Doos bevestigd!");
+      onDone();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Bevestiging mislukt");
+    } finally {
+      setConfirming(false);
+    }
+  }
+
+  return (
+    <>
+      <Card className="p-4 mb-4">
+        <div className="flex justify-between items-start mb-2">
+          <div>
+            <p className="text-lg font-bold">{result.sku_name}</p>
+            <p className="text-sm text-muted-foreground">{result.sku_code}</p>
+          </div>
+          <Badge variant="active">
+            {Math.round(result.confidence * 100)}% match
+          </Badge>
+        </div>
+      </Card>
+
+      {assignment ? (
+        <div className="p-6 rounded-lg bg-green-600/20 border-2 border-green-600 text-center mb-4">
+          <p className="text-green-400 text-sm font-medium mb-1">ZET OP</p>
+          <p className="text-green-500 text-3xl font-black mb-2">
+            {assignment.dock_location || "—"}
+          </p>
+          <p className="text-green-400 font-semibold">
+            {assignment.customer_name}
+          </p>
+          <p className="text-green-400/80 text-sm mt-1">
+            Order: {assignment.order_number}
+          </p>
+          <p className="text-green-400/80 text-sm">
+            Nog {assignment.quantity_needed} dozen nodig
+          </p>
+        </div>
+      ) : (
+        <div className="p-6 rounded-lg bg-amber-600/20 border-2 border-amber-600 text-center mb-4">
+          <p className="text-amber-500 font-bold mb-1">Geen openstaande order</p>
+          <p className="text-amber-400 text-sm">
+            Dit product is niet besteld — leg apart op overflow
+          </p>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-3">
+        <Button
+          size="lg"
+          className="w-full h-14 text-lg"
+          onClick={handleConfirm}
+          disabled={confirming}
+        >
+          {confirming
+            ? "Bevestigen..."
+            : assignment
+            ? "Bevestig & volgende"
+            : "Label printen"}
+        </Button>
+        {assignment && (
+          <Button variant="secondary" size="lg" className="w-full" onClick={onLabel}>
+            Label printen
+          </Button>
+        )}
+        <Button variant="secondary" size="lg" className="w-full" onClick={onDone}>
+          Volgende doos scannen
+        </Button>
+        <button
+          onClick={onReject}
+          className="text-sm text-muted-foreground underline"
+        >
+          Niet correct? Nieuw product aanmaken
+        </button>
+      </div>
+    </>
+  );
+}
+
+/* ---------- Step 3: Print Label ---------- */
 
 function LabelStep({
   match,
   onDone,
   onReject,
 }: {
-  match: MatchResult;
+  match: { sku_id: number; sku_code: string; sku_name: string; confidence: number };
   onDone: () => void;
   onReject: () => void;
 }) {
@@ -210,7 +334,6 @@ function LabelStep({
       win.document.open();
       win.document.write(html);
       win.document.close();
-      // Small delay to let the browser render before triggering print
       setTimeout(() => {
         win.focus();
         win.print();

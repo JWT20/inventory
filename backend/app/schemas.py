@@ -78,3 +78,65 @@ class MatchResult(BaseModel):
     sku_code: str
     sku_name: str
     confidence: float
+
+
+# --- Orders ---
+class OrderLineCreate(BaseModel):
+    sku_code: str
+    quantity: int = Field(..., gt=0)
+
+
+class OrderCreate(BaseModel):
+    order_number: str
+    customer_name: str
+    dock_location: str | None = None
+    lines: list[OrderLineCreate] = Field(..., min_length=1)
+
+
+class OrderUpdate(BaseModel):
+    customer_name: str | None = None
+    dock_location: str | None = None
+
+
+class OrderLineResponse(BaseModel):
+    id: int
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    quantity: int
+    received_quantity: int
+    status: str
+
+    model_config = {"from_attributes": True}
+
+
+class OrderResponse(BaseModel):
+    id: int
+    order_number: str
+    customer_name: str
+    dock_location: str | None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    lines: list[OrderLineResponse]
+
+    model_config = {"from_attributes": True}
+
+
+# --- Cross-Docking ---
+class DockAssignment(BaseModel):
+    order_id: int
+    order_number: str
+    customer_name: str
+    dock_location: str | None
+    line_id: int
+    quantity_needed: int
+    quantity_after: int
+
+
+class ReceiveResult(BaseModel):
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    confidence: float
+    assignment: DockAssignment | None = None

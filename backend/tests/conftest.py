@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.auth import create_token, hash_password  # noqa: E402
 from app.database import Base, get_db  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import SKU, User  # noqa: E402
+from app.models import SKU, Order, OrderLine, User  # noqa: E402
 
 SQLALCHEMY_DATABASE_URL = "sqlite://"
 
@@ -156,3 +156,32 @@ def sample_sku(db):
     db.commit()
     db.refresh(sku)
     return sku
+
+
+@pytest.fixture
+def second_sku(db):
+    sku = SKU(sku_code="WINE-002", name="Second Wine", description="Another wine")
+    db.add(sku)
+    db.commit()
+    db.refresh(sku)
+    return sku
+
+
+@pytest.fixture
+def sample_order(db, sample_sku):
+    order = Order(
+        order_number="ORD-001",
+        customer_name="Wijnhandel Jansen",
+        dock_location="C1",
+    )
+    db.add(order)
+    db.flush()
+    line = OrderLine(
+        order_id=order.id,
+        sku_id=sample_sku.id,
+        quantity=3,
+    )
+    db.add(line)
+    db.commit()
+    db.refresh(order)
+    return order

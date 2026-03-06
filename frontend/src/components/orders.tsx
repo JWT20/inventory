@@ -19,7 +19,7 @@ interface OrderLine {
   sku_code: string;
   sku_name: string;
   quantity: number;
-  picked_quantity: number;
+  received_quantity: number;
   status: string;
 }
 
@@ -27,6 +27,7 @@ interface Order {
   id: number;
   order_number: string;
   customer_name: string;
+  dock_location: string | null;
   status: string;
   lines: OrderLine[];
 }
@@ -39,8 +40,8 @@ interface SKU {
 
 const statusLabel: Record<string, string> = {
   pending: "Open",
-  picking: "Bezig",
-  completed: "Klaar",
+  receiving: "Ontvangen",
+  fulfilled: "Compleet",
 };
 
 export function OrdersPage() {
@@ -74,8 +75,8 @@ export function OrdersPage() {
         {[
           { value: "", label: "Alle" },
           { value: "pending", label: "Open" },
-          { value: "picking", label: "Bezig" },
-          { value: "completed", label: "Klaar" },
+          { value: "receiving", label: "Ontvangen" },
+          { value: "fulfilled", label: "Compleet" },
         ].map((f) => (
           <button
             key={f.value}
@@ -99,7 +100,7 @@ export function OrdersPage() {
         ) : (
           orders.map((o) => {
             const total = o.lines.reduce((s, l) => s + l.quantity, 0);
-            const picked = o.lines.reduce((s, l) => s + l.picked_quantity, 0);
+            const received = o.lines.reduce((s, l) => s + l.received_quantity, 0);
             return (
               <Card
                 key={o.id}
@@ -110,7 +111,11 @@ export function OrdersPage() {
                   <span className="font-semibold">{o.order_number}</span>
                   <Badge
                     variant={
-                      o.status as "pending" | "picking" | "completed"
+                      o.status === "fulfilled"
+                        ? "fulfilled"
+                        : o.status === "receiving"
+                        ? "receiving"
+                        : "pending"
                     }
                   >
                     {statusLabel[o.status] || o.status}
@@ -118,9 +123,14 @@ export function OrdersPage() {
                 </div>
                 <p className="text-sm text-muted-foreground">
                   {o.customer_name}
+                  {o.dock_location && (
+                    <span className="ml-2 font-semibold text-foreground">
+                      [{o.dock_location}]
+                    </span>
+                  )}
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">
-                  {picked}/{total} gepickt &bull; {o.lines.length} regels
+                  {received}/{total} ontvangen &bull; {o.lines.length} regels
                 </p>
               </Card>
             );
@@ -145,6 +155,7 @@ function NewOrderDialog({
 }) {
   const [orderNumber, setOrderNumber] = useState("");
   const [customerName, setCustomerName] = useState("");
+  const [dockLocation, setDockLocation] = useState("");
   const [lines, setLines] = useState<{ sku_code: string; quantity: number }[]>(
     []
   );
@@ -155,6 +166,7 @@ function NewOrderDialog({
       api.listSKUs(true).then(setSkus).catch(() => {});
       setOrderNumber("");
       setCustomerName("");
+      setDockLocation("");
       setLines([]);
     }
   }, [open]);
@@ -174,6 +186,7 @@ function NewOrderDialog({
       await api.createOrder({
         order_number: orderNumber,
         customer_name: customerName,
+        dock_location: dockLocation || undefined,
         lines,
       });
       toast.success("Order aangemaakt");
@@ -205,6 +218,14 @@ function NewOrderDialog({
               value={customerName}
               onChange={(e) => setCustomerName(e.target.value)}
               required
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Dock locatie (bijv. C1, Pallet A3)</Label>
+            <Input
+              value={dockLocation}
+              onChange={(e) => setDockLocation(e.target.value)}
+              placeholder="optioneel"
             />
           </div>
           <div>
@@ -295,12 +316,24 @@ function OrderDetailDialog({
             {order.order_number} — {order.customer_name}
           </DialogTitle>
         </DialogHeader>
-        <Badge
-          variant={order.status as "pending" | "picking" | "completed"}
-          className="mb-3"
-        >
-          {statusLabel[order.status] || order.status}
-        </Badge>
+        <div className="flex items-center gap-2 mb-3">
+          <Badge
+            variant={
+              order.status === "fulfilled"
+                ? "fulfilled"
+                : order.status === "receiving"
+                ? "receiving"
+                : "pending"
+            }
+          >
+            {statusLabel[order.status] || order.status}
+          </Badge>
+          {order.dock_location && (
+            <span className="text-sm font-semibold text-muted-foreground">
+              Dock: {order.dock_location}
+            </span>
+          )}
+        </div>
         <div className="space-y-2">
           {order.lines.map((l) => (
             <Card key={l.id} className="p-3">
@@ -310,9 +343,15 @@ function OrderDetailDialog({
                   <p className="text-xs text-muted-foreground">{l.sku_code}</p>
                 </div>
                 <Badge
-                  variant={l.status as "pending" | "completed"}
+                  variant={
+                    l.status === "fulfilled"
+                      ? "fulfilled"
+                      : l.status === "partial"
+                      ? "receiving"
+                      : "pending"
+                  }
                 >
-                  {l.picked_quantity}/{l.quantity}
+                  {l.received_quantity}/{l.quantity}
                 </Badge>
               </div>
             </Card>
