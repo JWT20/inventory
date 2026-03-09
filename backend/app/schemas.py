@@ -117,6 +117,17 @@ class OrderResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class OrderLineCreate(BaseModel):
+    sku_id: int
+    quantity: int = Field(..., ge=1)
+
+
+class OrderCreate(BaseModel):
+    order_number: str = ""
+    customer_name: str
+    lines: list[OrderLineCreate] = Field(..., min_length=1)
+
+
 class OrderImportResult(BaseModel):
     order: OrderResponse
     new_skus: list[SKUResponse]

@@ -97,6 +97,11 @@ export const api = {
     request(`/skus/${skuId}/images/${imageId}`, { method: "DELETE" }),
 
   // Orders
+  createOrder: (data: {
+    order_number?: string;
+    customer_name: string;
+    lines: { sku_id: number; quantity: number }[];
+  }) => json("/orders", "POST", data),
   importOrder: (file: File, orderNumber: string, customerName: string) => {
     const form = new FormData();
     form.append("file", file, file.name);

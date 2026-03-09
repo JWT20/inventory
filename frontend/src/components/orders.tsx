@@ -73,6 +73,7 @@ export function OrdersPage() {
   const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [showImport, setShowImport] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
   const [detail, setDetail] = useState<Order | null>(null);
   const [scanning, setScanning] = useState<Order | null>(null);
 
@@ -105,9 +106,14 @@ export function OrdersPage() {
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Orders</h2>
         {user && user.role !== "courier" && (
-          <Button size="sm" onClick={() => setShowImport(true)}>
-            + Importeren
-          </Button>
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setShowCreate(true)}>
+              + Nieuwe order
+            </Button>
+            <Button size="sm" onClick={() => setShowImport(true)}>
+              + Importeren
+            </Button>
+          </div>
         )}
       </div>
 
@@ -144,6 +150,11 @@ export function OrdersPage() {
         )}
       </div>
 
+      <CreateOrderDialog
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        onCreated={load}
+      />
       <ImportDialog
         open={showImport}
         onClose={() => setShowImport(false)}
@@ -163,6 +174,187 @@ export function OrdersPage() {
         />
       )}
     </>
+  );
+}
+
+/* ---------- Create Order Dialog ---------- */
+
+interface SelectedLine {
+  sku_id: number;
+  sku_name: string;
+  sku_code: string;
+  quantity: number;
+}
+
+function CreateOrderDialog({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [orderNumber, setOrderNumber] = useState("");
+  const [customerName, setCustomerName] = useState("");
+  const [lines, setLines] = useState<SelectedLine[]>([]);
+  const [skus, setSkus] = useState<SKUInfo[]>([]);
+  const [search, setSearch] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setOrderNumber("");
+      setCustomerName("");
+      setLines([]);
+      setSearch("");
+      api.listSKUs().then(setSkus).catch(() => {});
+    }
+  }, [open]);
+
+  const filteredSkus = skus.filter(
+    (s) =>
+      !lines.some((l) => l.sku_id === s.id) &&
+      (s.name.toLowerCase().includes(search.toLowerCase()) ||
+        s.sku_code.toLowerCase().includes(search.toLowerCase())),
+  );
+
+  function addSku(sku: SKUInfo) {
+    setLines((prev) => [
+      ...prev,
+      { sku_id: sku.id, sku_name: sku.name, sku_code: sku.sku_code, quantity: 1 },
+    ]);
+    setSearch("");
+  }
+
+  function updateQty(skuId: number, qty: number) {
+    setLines((prev) =>
+      prev.map((l) => (l.sku_id === skuId ? { ...l, quantity: Math.max(1, qty) } : l)),
+    );
+  }
+
+  function removeLine(skuId: number) {
+    setLines((prev) => prev.filter((l) => l.sku_id !== skuId));
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (lines.length === 0) return;
+    setSubmitting(true);
+    try {
+      const res = await api.createOrder({
+        order_number: orderNumber || undefined,
+        customer_name: customerName,
+        lines: lines.map((l) => ({ sku_id: l.sku_id, quantity: l.quantity })),
+      });
+      toast.success(`Order ${res.order_number} aangemaakt`);
+      onCreated();
+      onClose();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Aanmaken mislukt");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Nieuwe Order</DialogTitle>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label>Ordernummer (optioneel)</Label>
+            <Input
+              value={orderNumber}
+              onChange={(e) => setOrderNumber(e.target.value)}
+              placeholder="Wordt automatisch gegenereerd"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Klantnaam</Label>
+            <Input
+              value={customerName}
+              onChange={(e) => setCustomerName(e.target.value)}
+              placeholder="Klantnaam"
+              required
+            />
+          </div>
+
+          {/* Selected lines */}
+          {lines.length > 0 && (
+            <div className="space-y-2">
+              <Label>Orderregels</Label>
+              {lines.map((l) => (
+                <div
+                  key={l.sku_id}
+                  className="flex items-center gap-2 p-2 border border-border rounded-lg"
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{l.sku_name}</p>
+                    <p className="text-xs text-muted-foreground">{l.sku_code}</p>
+                  </div>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={l.quantity}
+                    onChange={(e) => updateQty(l.sku_id, parseInt(e.target.value) || 1)}
+                    className="w-16 text-center"
+                  />
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => removeLine(l.sku_id)}
+                  >
+                    ×
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* SKU search / add */}
+          <div className="space-y-2">
+            <Label>Product toevoegen</Label>
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Zoek op naam of code..."
+            />
+            {search && (
+              <div className="max-h-40 overflow-y-auto border border-border rounded-lg">
+                {filteredSkus.length === 0 ? (
+                  <p className="text-sm text-muted-foreground p-2">Geen resultaten</p>
+                ) : (
+                  filteredSkus.slice(0, 20).map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className="w-full text-left p-2 hover:bg-muted/50 border-b border-border last:border-b-0"
+                      onClick={() => addSku(s)}
+                    >
+                      <p className="text-sm font-medium">{s.name}</p>
+                      <p className="text-xs text-muted-foreground">{s.sku_code}</p>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={submitting || lines.length === 0}
+          >
+            {submitting ? "Aanmaken..." : `Order aanmaken (${lines.length} regel${lines.length !== 1 ? "s" : ""})`}
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

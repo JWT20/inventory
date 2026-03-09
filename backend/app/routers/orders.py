@@ -14,6 +14,7 @@ from app.events import publish_event
 from app.models import SKU, Order, OrderLine, User
 from app.services.sku_utils import generate_display_name, generate_sku_code, sku_to_response
 from app.schemas import (
+    OrderCreate,
     OrderImportResult,
     OrderLineResponse,
     OrderResponse,
@@ -169,6 +170,58 @@ def _parse_excel(content: bytes) -> list[dict]:
     if not rows:
         raise HTTPException(400, "Excel bestand bevat geen regels")
     return rows
+
+
+@router.post("", response_model=OrderResponse, status_code=201)
+def create_order(
+    body: OrderCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    """Create an order manually with existing SKUs."""
+    order_number = body.order_number or f"ORD-{uuid.uuid4().hex[:8].upper()}"
+
+    existing = db.query(Order).filter(Order.order_number == order_number).first()
+    if existing:
+        raise HTTPException(400, f"Ordernummer '{order_number}' bestaat al")
+
+    # Validate all SKU IDs exist
+    sku_ids = [line.sku_id for line in body.lines]
+    skus = {s.id: s for s in db.query(SKU).filter(SKU.id.in_(set(sku_ids))).all()}
+    missing = [sid for sid in sku_ids if sid not in skus]
+    if missing:
+        raise HTTPException(400, f"SKU ID('s) niet gevonden: {missing}")
+
+    order = Order(order_number=order_number, customer_name=body.customer_name)
+    db.add(order)
+    db.flush()
+
+    # Merge duplicate SKU lines
+    lines_by_sku: dict[int, OrderLine] = {}
+    for line in body.lines:
+        if line.sku_id in lines_by_sku:
+            lines_by_sku[line.sku_id].quantity += line.quantity
+        else:
+            ol = OrderLine(order_id=order.id, sku_id=line.sku_id, quantity=line.quantity)
+            db.add(ol)
+            lines_by_sku[line.sku_id] = ol
+
+    db.commit()
+    db.refresh(order)
+
+    publish_event(
+        "order_created",
+        details={
+            "order_number": order.order_number,
+            "customer_name": order.customer_name,
+            "total_lines": len(order.lines),
+        },
+        user=user,
+        resource_type="order",
+        resource_id=order.id,
+    )
+
+    return _order_to_response(order)
 
 
 @router.post("/import", response_model=OrderImportResult)
