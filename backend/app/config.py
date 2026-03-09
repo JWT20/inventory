@@ -2,8 +2,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    database_url: str  # required — no default
-    secret_key: str  # required — no default
+    database_url: str = "postgresql://wijnpick:wijnpick@db:5432/wijnpick"
+    secret_key: str = "INSECURE-DEV-KEY-CHANGE-IN-PRODUCTION"
     gemini_api_key: str = ""
     gemini_vision_model: str = "gemini-2.5-flash"
     gemini_embedding_model: str = "gemini-embedding-001"
@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = ""
 
     # Auth
-    admin_password: str  # required — no default
+    admin_password: str = "INSECURE-DEV-KEY-CHANGE-IN-PRODUCTION"
     token_expire_days: int = 90
 
     # Domain (used for CORS)
