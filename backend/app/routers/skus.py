@@ -143,7 +143,7 @@ def update_sku(
 def delete_sku(
     sku_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_product_manager),
 ):
     sku = db.get(SKU, sku_id)
     if not sku:

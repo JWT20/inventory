@@ -415,7 +415,7 @@ function SKUDialog({
           )}
         </div>
 
-        {user?.role === "admin" && currentId && (
+        {user && (user.role === "admin" || user.role === "merchant") && currentId && (
           <div className="mt-6 pt-4 border-t border-border">
             <Button
               variant="destructive"

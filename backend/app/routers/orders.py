@@ -333,7 +333,7 @@ def activate_order(
 def delete_order(
     order_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_product_manager),
 ):
     """Delete an order and all its lines and bookings (admin only)."""
     order = db.get(Order, order_id)

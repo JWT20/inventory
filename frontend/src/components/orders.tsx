@@ -659,7 +659,7 @@ function OrderDetailDialog({
             </Button>
           )}
 
-          {user?.role === "admin" && (
+          {user && (user.role === "admin" || user.role === "merchant") && (
             <Button
               variant="destructive"
               className="w-full"
