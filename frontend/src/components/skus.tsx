@@ -129,6 +129,7 @@ function SKUDialog({
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [images, setImages] = useState<RefImage[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [stagedFiles, setStagedFiles] = useState<{ file: File; preview: string }[]>([]);
 
@@ -238,6 +239,22 @@ function SKUDialog({
       URL.revokeObjectURL(prev[index].preview);
       return prev.filter((_, i) => i !== index);
     });
+  }
+
+  async function handleDeleteSKU() {
+    if (!currentId || !sku) return;
+    if (!confirm(`Product "${sku.name}" verwijderen? Dit verwijdert ook alle referentiebeelden.`)) return;
+    setDeleting(true);
+    try {
+      await api.deleteSKU(currentId);
+      toast.success("Product verwijderd");
+      onSaved();
+      onClose();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Verwijderen mislukt");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   async function deleteImage(imageId: number) {
@@ -397,6 +414,19 @@ function SKUDialog({
             </>
           )}
         </div>
+
+        {user?.role === "admin" && currentId && (
+          <div className="mt-6 pt-4 border-t border-border">
+            <Button
+              variant="destructive"
+              className="w-full"
+              onClick={handleDeleteSKU}
+              disabled={deleting}
+            >
+              {deleting ? "Verwijderen..." : "Product verwijderen"}
+            </Button>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

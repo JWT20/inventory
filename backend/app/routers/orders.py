@@ -8,7 +8,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, require_product_manager
+from app.auth import get_current_user, require_admin, require_product_manager
 from app.database import get_db
 from app.events import publish_event
 from app.models import Booking, Order, OrderLine, SKU, User
@@ -327,6 +327,30 @@ def activate_order(
     )
 
     return _order_to_response(order)
+
+
+@router.delete("/{order_id}", status_code=204)
+def delete_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Delete an order and all its lines and bookings (admin only)."""
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+
+    reference = order.reference
+    db.delete(order)
+    db.commit()
+
+    publish_event(
+        "order_deleted",
+        details={"order_reference": reference},
+        user=user,
+        resource_type="order",
+        resource_id=order_id,
+    )
 
 
 @router.get("/{order_id}/bookings", response_model=list[BookingResponse])
