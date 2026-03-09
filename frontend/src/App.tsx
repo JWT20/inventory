@@ -14,7 +14,7 @@ type Page = "orders" | "receive" | "skus" | "accounts";
 
 function Main() {
   const { user, loading, logout } = useAuth();
-  const [page, setPage] = useState<Page>("orders");
+  const [page, setPage] = useState<Page>(user.role === "courier" ? "receive" : "orders");
 
   if (loading) {
     return (
@@ -26,14 +26,14 @@ function Main() {
 
   if (!user) return <LoginPage />;
 
-  const tabs: { id: Page; label: string; adminOnly?: boolean }[] = [
+  const tabs: { id: Page; label: string; hide?: (role: string) => boolean }[] = [
     { id: "orders", label: "Orders" },
     { id: "receive", label: "Scan & Boek" },
-    { id: "skus", label: "Producten" },
-    { id: "accounts", label: "Accounts", adminOnly: true },
+    { id: "skus", label: "Producten", hide: (r) => r === "courier" },
+    { id: "accounts", label: "Accounts", hide: (r) => r !== "admin" },
   ];
 
-  const visibleTabs = tabs.filter((t) => !t.adminOnly || user.role === "admin");
+  const visibleTabs = tabs.filter((t) => !t.hide || !t.hide(user.role));
 
   return (
     <div className="min-h-screen flex flex-col">
