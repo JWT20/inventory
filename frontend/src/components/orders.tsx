@@ -511,6 +511,7 @@ function OrderDetailDialog({
 }) {
   const { user } = useAuth();
   const [activating, setActivating] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [uploadingSkuId, setUploadingSkuId] = useState<number | null>(null);
   const fileRefs = useRef<Record<number, HTMLInputElement | null>>({});
 
@@ -533,6 +534,22 @@ function OrderDetailDialog({
       toast.error(err instanceof Error ? err.message : "Activatie mislukt");
     } finally {
       setActivating(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!order) return;
+    if (!confirm(`Order ${order.reference} verwijderen? Dit kan niet ongedaan worden.`)) return;
+    setDeleting(true);
+    try {
+      await api.deleteOrder(order.id);
+      toast.success("Order verwijderd");
+      onUpdated();
+      onClose();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Verwijderen mislukt");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -639,6 +656,17 @@ function OrderDetailDialog({
               disabled={activating}
             >
               {activating ? "Activeren..." : "Order activeren"}
+            </Button>
+          )}
+
+          {user?.role === "admin" && (
+            <Button
+              variant="destructive"
+              className="w-full"
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              {deleting ? "Verwijderen..." : "Order verwijderen"}
             </Button>
           )}
         </div>

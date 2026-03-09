@@ -154,6 +154,7 @@ export const api = {
   getOrder: (id: number) => request(`/orders/${id}`),
   activateOrder: (id: number) =>
     request(`/orders/${id}/activate`, { method: "POST" }),
+  deleteOrder: (id: number) => request(`/orders/${id}`, { method: "DELETE" }),
   listBookings: (orderId: number) => request(`/orders/${orderId}/bookings`),
 
   // Receiving - book (1 scan = 1 box = 1 booking)
