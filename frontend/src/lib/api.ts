@@ -127,19 +127,24 @@ export const api = {
     );
   },
 
-  // Labels (fetched with auth)
-  fetchBarcode: async (skuId: number): Promise<string> => {
-    const resp = await requestRaw(`/labels/${skuId}/barcode.png`);
-    const blob = await resp.blob();
-    return URL.createObjectURL(blob);
+  // Orders
+  uploadCSV: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request("/orders/upload-csv", { method: "POST", body: form });
   },
-  fetchLabelHtml: async (skuId: number): Promise<string> => {
-    const resp = await requestRaw(`/labels/${skuId}/label.pdf`);
-    return resp.text();
-  },
-  fetchZpl: async (skuId: number): Promise<Blob> => {
-    const resp = await requestRaw(`/labels/${skuId}/label.zpl`);
-    return resp.blob();
+  listOrders: () => request("/orders"),
+  getOrder: (id: number) => request(`/orders/${id}`),
+  activateOrder: (id: number) =>
+    request(`/orders/${id}/activate`, { method: "POST" }),
+  listBookings: (orderId: number) => request(`/orders/${orderId}/bookings`),
+
+  // Receiving - book (1 scan = 1 box = 1 booking)
+  bookBox: (blob: Blob, orderId: number) => {
+    const form = new FormData();
+    form.append("file", blob, "scan.jpg");
+    form.append("order_id", String(orderId));
+    return request("/receiving/book", { method: "POST", body: form });
   },
 
   // Vision (ad-hoc)

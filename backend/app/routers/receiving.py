@@ -9,9 +9,9 @@ from app.auth import get_current_user
 from app.config import settings
 from app.database import get_db
 from app.events import publish_event
-from app.models import SKU, ReferenceImage, User
+from app.models import SKU, Booking, Order, OrderLine, ReferenceImage, User
 from app.routers.skus import _sku_to_response
-from app.schemas import MatchResult, SKUResponse
+from app.schemas import BookingResponse, MatchResult, SKUResponse
 from app.services.embedding import process_image
 from app.services.matching import find_best_matches
 
@@ -72,6 +72,112 @@ async def identify_box(
         sku_code=matched_sku.sku_code,
         sku_name=matched_sku.name,
         confidence=confidence,
+    )
+
+
+@router.post("/book", response_model=BookingResponse)
+async def book_box(
+    file: UploadFile,
+    order_id: int = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """1 scan = 1 box = 1 booking.
+
+    Scans the box, identifies the SKU, finds the matching order line,
+    and creates a booking. Returns the rolcontainer assignment.
+    """
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+    if order.status != "active":
+        raise HTTPException(400, f"Order is niet actief (status: {order.status})")
+
+    image_bytes = await file.read()
+
+    # Save scan image
+    scan_dir = os.path.join(settings.upload_dir, "scans")
+    os.makedirs(scan_dir, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.jpg"
+    scan_path = os.path.join(scan_dir, filename)
+    with open(scan_path, "wb") as f:
+        f.write(image_bytes)
+
+    # Vision match
+    description, embedding = process_image(image_bytes)
+    candidates = find_best_matches(db, embedding, top_n=5)
+
+    matched_sku, confidence = None, 0.0
+    if candidates and candidates[0][1] >= settings.match_threshold:
+        matched_sku, confidence = candidates[0]
+
+    if matched_sku is None:
+        raise HTTPException(
+            404,
+            "Doos niet herkend — geen match gevonden met referentiebeelden",
+        )
+
+    # Find matching order line
+    order_line = (
+        db.query(OrderLine)
+        .filter(
+            OrderLine.order_id == order_id,
+            OrderLine.sku_id == matched_sku.id,
+            OrderLine.booked_count < OrderLine.quantity,
+        )
+        .first()
+    )
+    if not order_line:
+        raise HTTPException(
+            400,
+            f"SKU {matched_sku.sku_code} zit niet in deze order of is al volledig geboekt",
+        )
+
+    # Create booking
+    booking = Booking(
+        order_id=order_id,
+        order_line_id=order_line.id,
+        sku_id=matched_sku.id,
+        scanned_by=user.id,
+        scan_image_path=scan_path,
+        confidence=confidence,
+    )
+    db.add(booking)
+    order_line.booked_count += 1
+    db.flush()
+
+    # Check if order is fully booked
+    all_booked = all(l.booked_count >= l.quantity for l in order.lines)
+    if all_booked:
+        order.status = "completed"
+
+    db.commit()
+
+    rolcontainer = f"KLANT {order.merchant.username.upper()}"
+
+    publish_event(
+        "box_booked",
+        details={
+            "order_reference": order.reference,
+            "sku_code": matched_sku.sku_code,
+            "confidence": round(confidence, 4),
+            "rolcontainer": rolcontainer,
+            "order_completed": all_booked,
+        },
+        user=user,
+        resource_type="booking",
+        resource_id=booking.id,
+    )
+
+    return BookingResponse(
+        id=booking.id,
+        order_id=order.id,
+        order_reference=order.reference,
+        sku_code=matched_sku.sku_code,
+        sku_name=matched_sku.name,
+        merchant_name=order.merchant.username,
+        rolcontainer=rolcontainer,
+        created_at=booking.created_at,
     )
 
 

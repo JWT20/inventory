@@ -4,16 +4,17 @@ import { AuthProvider, useAuth } from "@/lib/auth";
 import { LoginPage } from "@/components/login";
 import { ReceivePage } from "@/components/receive";
 import { SKUsPage } from "@/components/skus";
+import { OrdersPage } from "@/components/orders";
 import { AccountsPage } from "@/components/accounts";
 import { LogOut } from "lucide-react";
 
 export { toast };
 
-type Page = "receive" | "skus" | "accounts";
+type Page = "orders" | "receive" | "skus" | "accounts";
 
 function Main() {
   const { user, loading, logout } = useAuth();
-  const [page, setPage] = useState<Page>("receive");
+  const [page, setPage] = useState<Page>("orders");
 
   if (loading) {
     return (
@@ -26,7 +27,8 @@ function Main() {
   if (!user) return <LoginPage />;
 
   const tabs: { id: Page; label: string; adminOnly?: boolean }[] = [
-    { id: "receive", label: "Scan & Label" },
+    { id: "orders", label: "Orders" },
+    { id: "receive", label: "Scan & Boek" },
     { id: "skus", label: "Producten" },
     { id: "accounts", label: "Accounts", adminOnly: true },
   ];
@@ -64,6 +66,7 @@ function Main() {
       </header>
 
       <main className="flex-1 p-4 pb-20">
+        {page === "orders" && <OrdersPage />}
         {page === "receive" && <ReceivePage />}
         {page === "skus" && <SKUsPage />}
         {page === "accounts" && user.role === "admin" && <AccountsPage />}

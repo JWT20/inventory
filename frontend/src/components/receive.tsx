@@ -3,82 +3,156 @@ import { toast } from "@/App";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 
-interface MatchResult {
-  sku_id: number;
-  sku_code: string;
-  sku_name: string;
-  confidence: number;
+interface Order {
+  id: number;
+  reference: string;
+  status: string;
+  merchant_name: string;
+  total_boxes: number;
+  booked_boxes: number;
 }
 
-type Step = "scan" | "label" | "new-product";
+interface BookingResult {
+  id: number;
+  order_id: number;
+  order_reference: string;
+  sku_code: string;
+  sku_name: string;
+  merchant_name: string;
+  rolcontainer: string;
+}
+
+type Step = "select-order" | "scan" | "result";
 
 export function ReceivePage() {
-  const [step, setStep] = useState<Step>("scan");
-  const [match, setMatch] = useState<MatchResult | null>(null);
-  const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null);
+  const [step, setStep] = useState<Step>("select-order");
+  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [lastBooking, setLastBooking] = useState<BookingResult | null>(null);
 
-  function handleMatch(result: MatchResult | null, blob: Blob) {
-    setCapturedBlob(blob);
-    if (result) {
-      setMatch(result);
-      setStep("label");
-    } else {
-      setStep("new-product");
-    }
+  function handleOrderSelected(order: Order) {
+    setSelectedOrder(order);
+    setStep("scan");
   }
 
-  function handleNewProductCreated(sku: { id: number; sku_code: string; name: string }) {
-    setMatch({
-      sku_id: sku.id,
-      sku_code: sku.sku_code,
-      sku_name: sku.name,
-      confidence: 1.0,
-    });
-    setStep("label");
+  function handleBooked(booking: BookingResult) {
+    setLastBooking(booking);
+    setStep("result");
   }
 
-  function rejectMatch() {
-    setMatch(null);
-    setStep("new-product");
+  function scanNext() {
+    setLastBooking(null);
+    setStep("scan");
   }
 
   function reset() {
-    setStep("scan");
-    setMatch(null);
-    setCapturedBlob(null);
+    setStep("select-order");
+    setSelectedOrder(null);
+    setLastBooking(null);
   }
 
   return (
     <div>
-      <h2 className="text-xl font-bold mb-4">Scan & Label</h2>
+      <h2 className="text-xl font-bold mb-4">Scan & Boek</h2>
 
-      {step === "scan" && <ScanStep onResult={handleMatch} />}
-
-      {step === "label" && match && (
-        <LabelStep match={match} onDone={reset} onReject={rejectMatch} />
+      {step === "select-order" && (
+        <OrderSelectStep onSelect={handleOrderSelected} />
       )}
 
-      {step === "new-product" && capturedBlob && (
-        <NewProductStep
-          blob={capturedBlob}
-          onCreated={handleNewProductCreated}
+      {step === "scan" && selectedOrder && (
+        <ScanStep
+          order={selectedOrder}
+          onBooked={handleBooked}
           onBack={reset}
+        />
+      )}
+
+      {step === "result" && lastBooking && selectedOrder && (
+        <ResultStep
+          booking={lastBooking}
+          order={selectedOrder}
+          onNext={scanNext}
+          onDone={reset}
         />
       )}
     </div>
   );
 }
 
-/* ---------- Step 1: Camera Scan ---------- */
+/* ---------- Step 1: Select Active Order ---------- */
+
+function OrderSelectStep({
+  onSelect,
+}: {
+  onSelect: (order: Order) => void;
+}) {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const all = await api.listOrders();
+        setOrders(all.filter((o: Order) => o.status === "active"));
+      } catch {
+        toast.error("Kan orders niet laden");
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, []);
+
+  if (loading) {
+    return <p className="text-center text-muted-foreground py-10">Laden...</p>;
+  }
+
+  return (
+    <>
+      <p className="text-sm text-muted-foreground mb-3">
+        Kies een actieve order om dozen te scannen
+      </p>
+      {orders.length === 0 ? (
+        <p className="text-center text-muted-foreground py-10">
+          Geen actieve orders
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {orders.map((o) => (
+            <Card
+              key={o.id}
+              className="p-4 cursor-pointer active:scale-[0.98] transition-transform"
+              onClick={() => onSelect(o)}
+            >
+              <div className="flex justify-between items-center mb-1">
+                <span className="font-semibold">{o.reference}</span>
+                <Badge variant="active">Actief</Badge>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {o.merchant_name}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {o.booked_boxes}/{o.total_boxes} dozen geboekt
+              </p>
+            </Card>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ---------- Step 2: Camera Scan ---------- */
 
 function ScanStep({
-  onResult,
+  order,
+  onBooked,
+  onBack,
 }: {
-  onResult: (match: MatchResult | null, blob: Blob) => void;
+  order: Order;
+  onBooked: (booking: BookingResult) => void;
+  onBack: () => void;
 }) {
   const [scanning, setScanning] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -128,8 +202,8 @@ function ScanStep({
     }
 
     try {
-      const result: MatchResult | null = await api.identifyBox(blob);
-      onResult(result, blob);
+      const booking: BookingResult = await api.bookBox(blob, order.id);
+      onBooked(booking);
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Scanfout");
     } finally {
@@ -139,6 +213,13 @@ function ScanStep({
 
   return (
     <>
+      <Card className="p-3 mb-3">
+        <p className="text-sm font-semibold">{order.reference}</p>
+        <p className="text-xs text-muted-foreground">
+          {order.merchant_name} &middot; {order.booked_boxes}/{order.total_boxes} dozen
+        </p>
+      </Card>
+
       <p className="text-sm text-muted-foreground mb-3">
         Richt de camera op de doos en druk op Scan
       </p>
@@ -162,238 +243,69 @@ function ScanStep({
       >
         {scanning ? "Herkennen..." : "Scan"}
       </Button>
+      <button
+        onClick={onBack}
+        className="text-sm text-muted-foreground underline w-full text-center block mt-3"
+      >
+        Terug naar orders
+      </button>
     </>
   );
 }
 
-/* ---------- Step 2: Print Label ---------- */
+/* ---------- Step 3: Result / Rolcontainer Assignment ---------- */
 
-function LabelStep({
-  match,
+function ResultStep({
+  booking,
+  order,
+  onNext,
   onDone,
-  onReject,
 }: {
-  match: MatchResult;
+  booking: BookingResult;
+  order: Order;
+  onNext: () => void;
   onDone: () => void;
-  onReject: () => void;
 }) {
-  const [barcodeUrl, setBarcodeUrl] = useState<string | null>(null);
-
-  const loadBarcode = useCallback(async () => {
-    try {
-      const url = await api.fetchBarcode(match.sku_id);
-      setBarcodeUrl(url);
-    } catch {
-      /* barcode preview is non-critical */
-    }
-  }, [match.sku_id]);
-
-  useEffect(() => {
-    loadBarcode();
-    return () => {
-      setBarcodeUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return null;
-      });
-    };
-  }, [loadBarcode]);
-
-  async function openPrintLabel() {
-    const win = window.open("", "_blank");
-    if (!win) {
-      toast.error("Pop-up geblokkeerd — sta pop-ups toe voor deze site");
-      return;
-    }
-    win.document.write("<p>Label laden...</p>");
-    try {
-      const html = await api.fetchLabelHtml(match.sku_id);
-      win.document.open();
-      win.document.write(html);
-      win.document.close();
-      // Small delay to let the browser render before triggering print
-      setTimeout(() => {
-        win.focus();
-        win.print();
-      }, 300);
-    } catch {
-      win.close();
-      toast.error("Kan label niet laden");
-    }
-  }
-
-  async function downloadZpl() {
-    try {
-      const blob = await api.fetchZpl(match.sku_id);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${match.sku_code}.zpl`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      toast.error("Kan ZPL niet downloaden");
-    }
-  }
-
   return (
     <>
-      <Card className="p-4 mb-4">
-        <div className="flex justify-between items-start mb-2">
-          <div>
-            <p className="text-lg font-bold">{match.sku_name}</p>
-            <p className="text-sm text-muted-foreground">{match.sku_code}</p>
-          </div>
-          <Badge variant="active">
-            {Math.round(match.confidence * 100)}% match
-          </Badge>
-        </div>
-      </Card>
+      <div className="p-6 rounded-lg bg-green-600/20 border-2 border-green-600 text-center mb-4">
+        <p className="text-green-400 text-2xl font-bold mb-2">
+          Zet op rolcontainer
+        </p>
+        <p className="text-green-300 text-3xl font-black">
+          {booking.rolcontainer}
+        </p>
+      </div>
 
       <Card className="p-4 mb-4">
-        <Label className="mb-2 block text-sm text-muted-foreground">
-          Barcode label
-        </Label>
-        <div className="flex justify-center bg-white rounded-lg p-4 mb-3">
-          {barcodeUrl ? (
-            <img
-              src={barcodeUrl}
-              alt={`Barcode ${match.sku_code}`}
-              className="max-w-full h-auto"
-            />
-          ) : (
-            <p className="text-sm text-muted-foreground">Laden...</p>
-          )}
+        <div className="space-y-1">
+          <p className="text-sm">
+            <span className="text-muted-foreground">Product:</span>{" "}
+            <span className="font-semibold">{booking.sku_name}</span>
+          </p>
+          <p className="text-sm">
+            <span className="text-muted-foreground">SKU:</span>{" "}
+            <span className="font-mono">{booking.sku_code}</span>
+          </p>
+          <p className="text-sm">
+            <span className="text-muted-foreground">Order:</span>{" "}
+            {booking.order_reference}
+          </p>
+          <p className="text-sm">
+            <span className="text-muted-foreground">Handelaar:</span>{" "}
+            {booking.merchant_name}
+          </p>
         </div>
-        <p className="text-center text-sm font-mono text-muted-foreground">
-          {match.sku_code}
-        </p>
       </Card>
 
       <div className="flex flex-col gap-3">
-        <Button size="lg" className="w-full h-14 text-lg" onClick={openPrintLabel}>
-          Label printen
-        </Button>
-        <Button
-          variant="outline"
-          onClick={downloadZpl}
-          className="h-10 text-sm font-medium text-muted-foreground hover:text-foreground"
-        >
-          Download ZPL (Zebra printer)
-        </Button>
-        <Button variant="secondary" size="lg" className="w-full" onClick={onDone}>
+        <Button size="lg" className="w-full h-14 text-lg" onClick={onNext}>
           Volgende doos scannen
         </Button>
-        <button
-          onClick={onReject}
-          className="text-sm text-muted-foreground underline"
-        >
-          Niet correct? Nieuw product aanmaken
-        </button>
-      </div>
-    </>
-  );
-}
-
-/* ---------- New Product Form ---------- */
-
-function NewProductStep({
-  blob,
-  onCreated,
-  onBack,
-}: {
-  blob: Blob;
-  onCreated: (sku: { id: number; sku_code: string; name: string }) => void;
-  onBack: () => void;
-}) {
-  const [skuCode, setSkuCode] = useState("");
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [previewUrl] = useState(() => URL.createObjectURL(blob));
-
-  useEffect(() => {
-    return () => URL.revokeObjectURL(previewUrl);
-  }, [previewUrl]);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
-    try {
-      const sku = await api.createNewProduct(
-        blob,
-        skuCode,
-        name,
-        description || undefined,
-      );
-      toast.success(`Nieuw product "${name}" aangemaakt`);
-      onCreated({ id: sku.id, sku_code: sku.sku_code, name: sku.name });
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Fout bij aanmaken");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <>
-      <div className="p-4 rounded-lg bg-amber-600/20 border-2 border-amber-600 text-center mb-4">
-        <p className="text-amber-500 font-bold">Product niet herkend</p>
-        <p className="text-amber-400 text-sm mt-1">
-          Maak een nieuw product aan met de gescande foto
-        </p>
-      </div>
-
-      <div className="w-full aspect-[4/3] rounded-lg overflow-hidden bg-black mb-4">
-        <img
-          src={previewUrl}
-          alt="Gescande foto"
-          className="w-full h-full object-cover"
-        />
-      </div>
-
-      <form onSubmit={submit} className="space-y-4">
-        <div className="space-y-2">
-          <Label>SKU Code</Label>
-          <Input
-            value={skuCode}
-            onChange={(e) => setSkuCode(e.target.value)}
-            placeholder="bijv. WN-001"
-            required
-          />
-        </div>
-        <div className="space-y-2">
-          <Label>Productnaam</Label>
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="bijv. Château Margaux 2018"
-            required
-          />
-        </div>
-        <div className="space-y-2">
-          <Label>Omschrijving (optioneel)</Label>
-          <Input
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Korte omschrijving..."
-          />
-        </div>
-        <Button
-          type="submit"
-          size="lg"
-          className="w-full h-14 text-lg"
-          disabled={submitting}
-        >
-          {submitting ? "Aanmaken & verwerken..." : "Product aanmaken"}
+        <Button variant="secondary" className="w-full" onClick={onDone}>
+          Terug naar orders
         </Button>
-        <button
-          type="button"
-          onClick={onBack}
-          className="text-sm text-muted-foreground underline w-full text-center block"
-        >
-          Terug naar scanner
-        </button>
-      </form>
+      </div>
     </>
   );
 }

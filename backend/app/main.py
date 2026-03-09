@@ -11,7 +11,7 @@ from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.models import User
 from app.events import init_producer, shutdown_producer
-from app.routers import auth, labels, receiving, skus, vision
+from app.routers import auth, orders, receiving, skus, vision
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,8 +36,8 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(skus.router, prefix="/api")
+app.include_router(orders.router, prefix="/api")
 app.include_router(receiving.router, prefix="/api")
-app.include_router(labels.router, prefix="/api")
 app.include_router(vision.router, prefix="/api")
 
 
