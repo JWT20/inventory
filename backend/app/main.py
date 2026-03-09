@@ -100,10 +100,35 @@ def _migrate_embedding_dimension():
         logger.info("Embedding migration complete — old SKUs and images cleared")
 
 
+def _migrate_order_tables():
+    """Recreate order tables if they exist with an outdated schema.
+
+    Previous versions had a different orders schema.  ``create_all`` skips
+    tables that already exist, so we detect stale tables and drop them first.
+    """
+    inspector = inspect(engine)
+    existing = set(inspector.get_table_names())
+
+    if "orders" not in existing:
+        return  # fresh install, create_all will handle it
+
+    columns = {c["name"] for c in inspector.get_columns("orders")}
+    if "merchant_id" in columns:
+        return  # current schema, nothing to do
+
+    logger.info("Detected outdated order tables — dropping and recreating...")
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS bookings CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS order_lines CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS orders CASCADE"))
+    logger.info("Old order tables dropped — create_all will recreate them")
+
+
 @app.on_event("startup")
 def on_startup():
     _migrate_is_admin_to_role()
     _migrate_embedding_dimension()
+    _migrate_order_tables()
 
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)
