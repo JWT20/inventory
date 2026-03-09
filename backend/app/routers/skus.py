@@ -161,7 +161,7 @@ def delete_sku(
 
 
 @router.post("/{sku_id}/images", response_model=ReferenceImageResponse, status_code=201)
-async def upload_reference_image(
+def upload_reference_image(
     sku_id: int,
     file: UploadFile,
     db: Session = Depends(get_db),
@@ -171,7 +171,7 @@ async def upload_reference_image(
     if not sku:
         raise HTTPException(404, "SKU not found")
 
-    image_bytes = await file.read()
+    image_bytes = file.file.read()
 
     # Save image to disk
     ref_dir = os.path.join(settings.upload_dir, "reference_images", str(sku_id))

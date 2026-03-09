@@ -101,7 +101,7 @@ def _parse_csv(content: str) -> tuple[list[CSVRow], list[str]]:
 
 
 @router.post("/upload-csv", response_model=CSVValidationResult)
-async def upload_csv(
+def upload_csv(
     file: UploadFile,
     db: Session = Depends(get_db),
     user: User = Depends(require_product_manager),
@@ -110,7 +110,7 @@ async def upload_csv(
     if not file.filename or not (file.filename.endswith(".csv") or file.filename.endswith(".txt")):
         raise HTTPException(400, "Alleen CSV bestanden zijn toegestaan")
 
-    raw = await file.read()
+    raw = file.file.read()
     try:
         content = raw.decode("utf-8-sig")  # handle BOM
     except UnicodeDecodeError:

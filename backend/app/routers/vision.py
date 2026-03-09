@@ -19,7 +19,7 @@ router = APIRouter(
 
 
 @router.post("/identify", response_model=MatchResult | None)
-async def identify_box(
+def identify_box(
     file: UploadFile,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -28,7 +28,7 @@ async def identify_box(
 
     Useful for ad-hoc identification or testing.
     """
-    image_bytes = await file.read()
+    image_bytes = file.file.read()
     description, embedding = process_image(image_bytes)
     candidates = find_best_matches(db, embedding, top_n=5)
 

@@ -22,7 +22,7 @@ router = APIRouter(
 
 
 @router.post("/identify", response_model=MatchResult | None)
-async def identify_box(
+def identify_box(
     file: UploadFile,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -31,7 +31,7 @@ async def identify_box(
 
     Returns the matched SKU, or null if no match found.
     """
-    image_bytes = await file.read()
+    image_bytes = file.file.read()
 
     # Save scan image for later reference
     scan_dir = os.path.join(settings.upload_dir, "scans")
@@ -76,7 +76,7 @@ async def identify_box(
 
 
 @router.post("/book", response_model=BookingResponse)
-async def book_box(
+def book_box(
     file: UploadFile,
     order_id: int = Form(...),
     db: Session = Depends(get_db),
@@ -93,7 +93,7 @@ async def book_box(
     if order.status != "active":
         raise HTTPException(400, f"Order is niet actief (status: {order.status})")
 
-    image_bytes = await file.read()
+    image_bytes = file.file.read()
 
     # Save scan image
     scan_dir = os.path.join(settings.upload_dir, "scans")
@@ -183,7 +183,7 @@ async def book_box(
 
 
 @router.post("/new-product", response_model=SKUResponse)
-async def create_product_inline(
+def create_product_inline(
     file: UploadFile,
     sku_code: str = Form(...),
     name: str = Form(...),
@@ -203,7 +203,7 @@ async def create_product_inline(
     db.add(sku)
     db.flush()
 
-    image_bytes = await file.read()
+    image_bytes = file.file.read()
 
     # Save reference image
     ref_dir = os.path.join(settings.upload_dir, "reference_images", str(sku.id))
