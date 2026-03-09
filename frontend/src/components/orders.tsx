@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Dialog,
@@ -12,6 +13,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+
+interface SKUOption {
+  id: number;
+  sku_code: string;
+  name: string;
+}
+
+interface UserOption {
+  id: number;
+  username: string;
+  role: string;
+}
 
 interface OrderLine {
   id: number;
@@ -61,6 +74,7 @@ export function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [showUpload, setShowUpload] = useState(false);
+  const [showManual, setShowManual] = useState(false);
   const [csvResult, setCsvResult] = useState<CSVResult | null>(null);
 
   const load = useCallback(async () => {
@@ -80,9 +94,14 @@ export function OrdersPage() {
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Orders</h2>
         {user && user.role !== "courier" && (
-          <Button size="sm" onClick={() => setShowUpload(true)}>
-            + CSV Upload
-          </Button>
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setShowUpload(true)}>
+              CSV Upload
+            </Button>
+            <Button size="sm" onClick={() => setShowManual(true)}>
+              + Order
+            </Button>
+          </div>
         )}
       </div>
 
@@ -116,6 +135,12 @@ export function OrdersPage() {
         )}
       </div>
 
+      <ManualOrderDialog
+        open={showManual}
+        onClose={() => setShowManual(false)}
+        onCreated={load}
+      />
+
       <CSVUploadDialog
         open={showUpload}
         onClose={() => {
@@ -136,6 +161,170 @@ export function OrdersPage() {
         onUpdated={load}
       />
     </>
+  );
+}
+
+function ManualOrderDialog({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [merchants, setMerchants] = useState<UserOption[]>([]);
+  const [skus, setSKUs] = useState<SKUOption[]>([]);
+  const [merchantId, setMerchantId] = useState<number | "">("");
+  const [lines, setLines] = useState<{ sku_id: number | ""; quantity: number }[]>([
+    { sku_id: "", quantity: 1 },
+  ]);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    api.listUsers().then((users: UserOption[]) =>
+      setMerchants(users.filter((u) => u.role === "merchant" || u.role === "admin")),
+    );
+    api.listSKUs().then(setSKUs);
+  }, [open]);
+
+  function addLine() {
+    setLines([...lines, { sku_id: "", quantity: 1 }]);
+  }
+
+  function removeLine(idx: number) {
+    setLines(lines.filter((_, i) => i !== idx));
+  }
+
+  function updateLine(idx: number, field: "sku_id" | "quantity", value: number | "") {
+    const updated = [...lines];
+    updated[idx] = { ...updated[idx], [field]: value };
+    setLines(updated);
+  }
+
+  async function submit() {
+    if (!merchantId) {
+      toast.error("Selecteer een handelaar");
+      return;
+    }
+    const validLines = lines.filter((l) => l.sku_id !== "" && l.quantity > 0);
+    if (validLines.length === 0) {
+      toast.error("Voeg minimaal één orderregel toe");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await api.createOrder({
+        merchant_id: merchantId as number,
+        lines: validLines.map((l) => ({
+          sku_id: l.sku_id as number,
+          quantity: l.quantity,
+        })),
+      });
+      toast.success("Order aangemaakt");
+      onCreated();
+      onClose();
+      // Reset
+      setMerchantId("");
+      setLines([{ sku_id: "", quantity: 1 }]);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Aanmaken mislukt");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Order aanmaken</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div>
+            <Label className="mb-1 block text-sm">Handelaar</Label>
+            <select
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+              value={merchantId}
+              onChange={(e) =>
+                setMerchantId(e.target.value ? Number(e.target.value) : "")
+              }
+            >
+              <option value="">Selecteer handelaar...</option>
+              {merchants.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.username}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <Label className="mb-1 block text-sm">Orderregels</Label>
+            <div className="space-y-2">
+              {lines.map((line, idx) => (
+                <div key={idx} className="flex gap-2 items-center">
+                  <select
+                    className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
+                    value={line.sku_id}
+                    onChange={(e) =>
+                      updateLine(
+                        idx,
+                        "sku_id",
+                        e.target.value ? Number(e.target.value) : "",
+                      )
+                    }
+                  >
+                    <option value="">SKU selecteren...</option>
+                    {skus.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.sku_code} — {s.name}
+                      </option>
+                    ))}
+                  </select>
+                  <Input
+                    type="number"
+                    min={1}
+                    className="w-20"
+                    value={line.quantity}
+                    onChange={(e) =>
+                      updateLine(idx, "quantity", Number(e.target.value) || 1)
+                    }
+                  />
+                  {lines.length > 1 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeLine(idx)}
+                    >
+                      ×
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="mt-2"
+              onClick={addLine}
+            >
+              + Regel
+            </Button>
+          </div>
+
+          <Button
+            className="w-full"
+            onClick={submit}
+            disabled={submitting}
+          >
+            {submitting ? "Aanmaken..." : "Order aanmaken"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

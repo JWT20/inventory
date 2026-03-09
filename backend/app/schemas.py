@@ -147,6 +147,16 @@ class OrderResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ManualOrderLineCreate(BaseModel):
+    sku_id: int
+    quantity: int = Field(..., gt=0)
+
+
+class ManualOrderCreate(BaseModel):
+    merchant_id: int
+    lines: list[ManualOrderLineCreate] = Field(..., min_length=1)
+
+
 class BookingResponse(BaseModel):
     id: int
     order_id: int
