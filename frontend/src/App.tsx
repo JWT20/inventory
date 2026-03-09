@@ -14,7 +14,7 @@ type Page = "orders" | "receive" | "skus" | "accounts";
 
 function Main() {
   const { user, loading, logout } = useAuth();
-  const [page, setPage] = useState<Page>(user.role === "courier" ? "receive" : "orders");
+  const [page, setPage] = useState<Page>(user?.role === "courier" ? "receive" : "orders");
 
   if (loading) {
     return (
