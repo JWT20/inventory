@@ -134,6 +134,11 @@ async def upload_csv(
                 sku_code=sku_code,
                 name=row.display_name,
                 description=f"{row.producent} {row.wijnaam} {row.type} {row.jaargang} {row.volume}",
+                producent=row.producent,
+                wijnaam=row.wijnaam,
+                wijntype=row.type,
+                jaargang=row.jaargang,
+                volume=row.volume,
             )
             db.add(sku)
             db.flush()

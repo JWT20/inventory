@@ -51,6 +51,14 @@ class SKU(Base):
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Wine-specific fields
+    producent: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    wijnaam: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    wijntype: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    jaargang: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    volume: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

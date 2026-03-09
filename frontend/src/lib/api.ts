@@ -94,8 +94,13 @@ export const api = {
   // SKUs
   listSKUs: (activeOnly = false) =>
     request(`/skus${activeOnly ? "?active_only=true" : ""}`),
-  createSKU: (data: { sku_code: string; name: string; description?: string }) =>
-    json("/skus", "POST", data),
+  createSKU: (data: {
+    producent: string;
+    wijnaam: string;
+    wijntype: string;
+    jaargang: string;
+    volume: string;
+  }) => json("/skus", "POST", data),
   getSKU: (id: number) => request(`/skus/${id}`),
   updateSKU: (id: number, data: Record<string, unknown>) =>
     json(`/skus/${id}`, "PATCH", data),
