@@ -3,7 +3,7 @@ import uuid
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.auth import get_current_user, require_admin, require_product_manager
 from app.config import settings
@@ -48,7 +48,7 @@ def list_skus(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    query = db.query(SKU)
+    query = db.query(SKU).options(joinedload(SKU.reference_images))
     if active_only:
         query = query.filter(SKU.active.is_(True))
     skus = query.order_by(SKU.name).all()

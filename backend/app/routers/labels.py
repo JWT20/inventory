@@ -122,6 +122,11 @@ def label_pdf(
     barcode_buf.seek(0)
     barcode_b64 = base64.b64encode(barcode_buf.read()).decode()
 
+    import html as html_mod
+
+    safe_name = html_mod.escape(sku.name)
+    safe_code = html_mod.escape(sku.sku_code)
+
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -135,8 +140,8 @@ def label_pdf(
 </style>
 </head>
 <body>
-  <div class="name">{sku.name}</div>
-  <div class="info">SKU: {sku.sku_code}</div>
+  <div class="name">{safe_name}</div>
+  <div class="info">SKU: {safe_code}</div>
   <div class="barcode">
     <img src="data:image/png;base64,{barcode_b64}" />
   </div>
