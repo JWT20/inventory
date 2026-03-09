@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
+import { useCamera } from "@/hooks/useCamera";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -76,47 +77,11 @@ function ScanStep({
   onResult: (match: MatchResult | null, blob: Blob) => void;
 }) {
   const [scanning, setScanning] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const { videoRef, canvasRef, capture: captureFrame } = useCamera();
 
-  useEffect(() => {
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 960 },
-          },
-        });
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-      } catch {
-        toast.error("Camera niet beschikbaar");
-      }
-    }
-    startCamera();
-    return () => {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-    };
-  }, []);
-
-  async function capture() {
-    if (!videoRef.current || !canvasRef.current) return;
+  async function handleCapture() {
     setScanning(true);
-
-    const canvas = canvasRef.current;
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    canvas.getContext("2d")!.drawImage(videoRef.current, 0, 0);
-
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", 0.85),
-    );
+    const blob = await captureFrame();
     if (!blob) {
       setScanning(false);
       return;
@@ -152,7 +117,7 @@ function ScanStep({
       <Button
         size="lg"
         className="w-full text-lg h-14"
-        onClick={capture}
+        onClick={handleCapture}
         disabled={scanning}
       >
         {scanning ? "Herkennen..." : "Scan"}

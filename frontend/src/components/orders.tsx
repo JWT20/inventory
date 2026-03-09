@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useCamera } from "@/hooks/useCamera";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -62,6 +63,12 @@ const statusVariant: Record<string, string> = {
   completed: "completed",
 };
 
+function getOrderProgress(order: Order) {
+  const total = order.lines.reduce((s, l) => s + l.quantity, 0);
+  const scanned = order.lines.reduce((s, l) => s + l.scanned_quantity, 0);
+  return { total, scanned };
+}
+
 export function OrdersPage() {
   const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
@@ -111,8 +118,7 @@ export function OrdersPage() {
           </p>
         ) : (
           orders.map((o) => {
-            const total = o.lines.reduce((s, l) => s + l.quantity, 0);
-            const scanned = o.lines.reduce((s, l) => s + l.scanned_quantity, 0);
+            const { total, scanned } = getOrderProgress(o);
             return (
               <Card
                 key={o.id}
@@ -401,8 +407,7 @@ function OrderDetailDialog({
     }
   }
 
-  const total = order.lines.reduce((s, l) => s + l.quantity, 0);
-  const scanned = order.lines.reduce((s, l) => s + l.scanned_quantity, 0);
+  const { total, scanned } = getOrderProgress(order);
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
@@ -483,51 +488,15 @@ function ScanView({
   const [order, setOrder] = useState(initialOrder);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [scanning, setScanning] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const { videoRef, canvasRef, capture: captureFrame } = useCamera();
 
-  const total = order.lines.reduce((s, l) => s + l.quantity, 0);
-  const scanned = order.lines.reduce((s, l) => s + l.scanned_quantity, 0);
+  const { total, scanned } = getOrderProgress(order);
 
-  useEffect(() => {
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 960 },
-          },
-        });
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-      } catch {
-        toast.error("Camera niet beschikbaar");
-      }
-    }
-    startCamera();
-    return () => {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-    };
-  }, []);
-
-  async function capture() {
-    if (!videoRef.current || !canvasRef.current) return;
+  async function handleCapture() {
     setScanning(true);
     setResult(null);
 
-    const canvas = canvasRef.current;
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    canvas.getContext("2d")!.drawImage(videoRef.current, 0, 0);
-
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", 0.85),
-    );
+    const blob = await captureFrame();
     if (!blob) {
       setScanning(false);
       return;
@@ -537,13 +506,22 @@ function ScanView({
       const res: ScanResult = await api.scanOrder(order.id, blob);
       setResult(res);
 
-      // Refresh order to update scanned counts
-      const updated = await api.getOrder(order.id);
-      setOrder(updated);
+      // Update local order state from scan response instead of refetching
+      if (res.matched && res.order_line_id) {
+        setOrder((prev) => ({
+          ...prev,
+          status: res.message.includes("compleet") ? "completed" : prev.status,
+          lines: prev.lines.map((l) =>
+            l.id === res.order_line_id
+              ? { ...l, scanned_quantity: res.scanned_quantity }
+              : l,
+          ),
+        }));
 
-      if (updated.status === "completed") {
-        toast.success("Order compleet!");
-        setTimeout(onStop, 2000);
+        if (res.message.includes("compleet")) {
+          toast.success("Order compleet!");
+          setTimeout(onStop, 2000);
+        }
       }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Scanfout");
@@ -597,7 +575,7 @@ function ScanView({
         <Button
           size="lg"
           className="w-full text-lg h-14"
-          onClick={capture}
+          onClick={handleCapture}
           disabled={scanning}
         >
           {scanning ? "Herkennen..." : "Scan"}

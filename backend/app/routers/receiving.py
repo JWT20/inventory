@@ -10,7 +10,7 @@ from app.config import settings
 from app.database import get_db
 from app.events import publish_event
 from app.models import SKU, ReferenceImage, User
-from app.routers.skus import _sku_to_response
+from app.services.sku_utils import sku_to_response
 from app.schemas import MatchResult, SKUResponse
 from app.services.embedding import process_image
 from app.services.matching import find_best_matches
@@ -128,4 +128,4 @@ async def create_product_inline(
         resource_id=sku.id,
     )
 
-    return _sku_to_response(sku)
+    return sku_to_response(sku)

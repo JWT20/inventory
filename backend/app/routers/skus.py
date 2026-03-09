@@ -1,5 +1,4 @@
 import os
-import re
 import uuid
 import logging
 
@@ -13,51 +12,10 @@ from app.events import publish_event
 from app.models import SKU, ReferenceImage, User
 from app.schemas import ReferenceImageResponse, SKUCreate, SKUResponse, SKUUpdate
 from app.services.embedding import process_image
+from app.services.sku_utils import generate_display_name, generate_sku_code, sku_to_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/skus", tags=["skus"])
-
-
-def generate_sku_code(producer: str, wine_name: str, wine_type: str, vintage: int | None, volume: str) -> str:
-    """Generate a deterministic SKU code from wine attributes."""
-    def slugify(s: str) -> str:
-        s = s.upper().strip()
-        s = re.sub(r"[^A-Z0-9]+", "-", s)
-        return s.strip("-")
-
-    vol = re.sub(r"[^0-9]", "", volume)
-    parts = [slugify(producer), slugify(wine_name), slugify(wine_type)]
-    if vintage:
-        parts.append(str(vintage))
-    parts.append(vol)
-    return "-".join(p for p in parts if p)
-
-
-def generate_display_name(producer: str, wine_name: str, vintage: int | None, volume: str) -> str:
-    """Generate a human-readable display name."""
-    parts = [producer, wine_name]
-    if vintage:
-        parts.append(str(vintage))
-    parts.append(volume)
-    return " ".join(parts)
-
-
-def _sku_to_response(sku: SKU) -> SKUResponse:
-    return SKUResponse(
-        id=sku.id,
-        sku_code=sku.sku_code,
-        name=sku.name,
-        description=sku.description,
-        active=sku.active,
-        producer=sku.producer,
-        wine_name=sku.wine_name,
-        wine_type=sku.wine_type,
-        vintage=sku.vintage,
-        volume=sku.volume,
-        created_at=sku.created_at,
-        updated_at=sku.updated_at,
-        image_count=len(sku.reference_images),
-    )
 
 
 @router.get("", response_model=list[SKUResponse])
@@ -70,7 +28,7 @@ def list_skus(
     if active_only:
         query = query.filter(SKU.active.is_(True))
     skus = query.order_by(SKU.name).all()
-    return [_sku_to_response(s) for s in skus]
+    return [sku_to_response(s) for s in skus]
 
 
 @router.post("", response_model=SKUResponse, status_code=201)
@@ -106,7 +64,7 @@ def create_sku(
         resource_type="sku",
         resource_id=sku.id,
     )
-    return _sku_to_response(sku)
+    return sku_to_response(sku)
 
 
 @router.get("/{sku_id}", response_model=SKUResponse)
@@ -118,7 +76,7 @@ def get_sku(
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU not found")
-    return _sku_to_response(sku)
+    return sku_to_response(sku)
 
 
 @router.patch("/{sku_id}", response_model=SKUResponse)
@@ -150,7 +108,7 @@ def update_sku(
         resource_type="sku",
         resource_id=sku.id,
     )
-    return _sku_to_response(sku)
+    return sku_to_response(sku)
 
 
 @router.delete("/{sku_id}", status_code=204)

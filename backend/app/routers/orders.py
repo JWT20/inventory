@@ -12,13 +12,12 @@ from app.config import settings
 from app.database import get_db
 from app.events import publish_event
 from app.models import SKU, Order, OrderLine, User
-from app.routers.skus import _sku_to_response, generate_display_name, generate_sku_code
+from app.services.sku_utils import generate_display_name, generate_sku_code, sku_to_response
 from app.schemas import (
     OrderImportResult,
     OrderLineResponse,
     OrderResponse,
     ScanResult,
-    SKUResponse,
 )
 from app.services.embedding import process_image
 from app.services.matching import find_best_matches
@@ -27,6 +26,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/orders", tags=["orders"], dependencies=[Depends(get_current_user)]
 )
+
+
+def _get_order(db: Session, order_id: int) -> Order:
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+    return order
 
 
 def _line_to_response(line: OrderLine) -> OrderLineResponse:
@@ -52,6 +58,40 @@ def _order_to_response(order: Order) -> OrderResponse:
     )
 
 
+def _validate_row(
+    row_num: int, producent: str, wijnnaam: str, wtype: str,
+    jaargang: str, volume: str, aantal: str,
+) -> dict:
+    """Validate and build a parsed row dict. Raises HTTPException on invalid data."""
+    if not producent or not wijnnaam:
+        raise HTTPException(400, f"Rij {row_num}: 'producent' en 'wijnnaam' zijn verplicht")
+    if not wtype:
+        raise HTTPException(400, f"Rij {row_num}: 'type' is verplicht")
+
+    try:
+        qty = int(float(aantal))
+        if qty < 1:
+            raise ValueError
+    except ValueError:
+        raise HTTPException(400, f"Rij {row_num}: ongeldig aantal '{aantal}'")
+
+    vintage = None
+    if jaargang:
+        try:
+            vintage = int(float(jaargang))
+        except ValueError:
+            raise HTTPException(400, f"Rij {row_num}: ongeldige jaargang '{jaargang}'")
+
+    return {
+        "producer": producent,
+        "wine_name": wijnnaam,
+        "wine_type": wtype,
+        "vintage": vintage,
+        "volume": volume or "0.75L",
+        "quantity": qty,
+    }
+
+
 def _parse_csv(content: bytes) -> list[dict]:
     """Parse CSV content. Expected columns: producent, wijnnaam, type, jaargang, volume, aantal."""
     text = content.decode("utf-8-sig")
@@ -64,40 +104,15 @@ def _parse_csv(content: bytes) -> list[dict]:
     rows = []
     for i, row in enumerate(reader, start=2):
         row = {k.strip().lower(): v.strip() for k, v in row.items() if k}
-        producent = row.get("producent", "").strip()
-        wijnnaam = row.get("wijnnaam", "").strip()
-        wtype = row.get("type", "").strip()
-        jaargang = row.get("jaargang", "").strip()
-        volume = row.get("volume", "0.75L").strip()
-        aantal = row.get("aantal", "1").strip()
-
-        if not producent or not wijnnaam:
-            raise HTTPException(400, f"Rij {i}: 'producent' en 'wijnnaam' zijn verplicht")
-        if not wtype:
-            raise HTTPException(400, f"Rij {i}: 'type' is verplicht")
-
-        try:
-            qty = int(aantal)
-            if qty < 1:
-                raise ValueError
-        except ValueError:
-            raise HTTPException(400, f"Rij {i}: ongeldig aantal '{aantal}'")
-
-        vintage = None
-        if jaargang:
-            try:
-                vintage = int(jaargang)
-            except ValueError:
-                raise HTTPException(400, f"Rij {i}: ongeldige jaargang '{jaargang}'")
-
-        rows.append({
-            "producer": producent,
-            "wine_name": wijnnaam,
-            "wine_type": wtype,
-            "vintage": vintage,
-            "volume": volume or "0.75L",
-            "quantity": qty,
-        })
+        rows.append(_validate_row(
+            i,
+            row.get("producent", "").strip(),
+            row.get("wijnnaam", "").strip(),
+            row.get("type", "").strip(),
+            row.get("jaargang", "").strip(),
+            row.get("volume", "0.75L").strip(),
+            row.get("aantal", "1").strip(),
+        ))
 
     if not rows:
         raise HTTPException(400, "CSV bevat geen regels")
@@ -127,50 +142,27 @@ def _parse_excel(content: bytes) -> list[dict]:
         if req not in col_map:
             raise HTTPException(400, f"Kolom '{req}' niet gevonden. Verwacht: producent, wijnnaam, type, jaargang, volume, aantal")
 
+    def cell(row: tuple, name: str) -> str:
+        idx = col_map.get(name)
+        if idx is None or idx >= len(row) or row[idx] is None:
+            return ""
+        return str(row[idx]).strip()
+
     rows = []
     for i, row in enumerate(rows_iter, start=2):
-        def cell(name: str) -> str:
-            idx = col_map.get(name)
-            if idx is None or idx >= len(row) or row[idx] is None:
-                return ""
-            return str(row[idx]).strip()
-
-        producent = cell("producent")
-        wijnnaam = cell("wijnnaam")
-        wtype = cell("type")
+        producent = cell(row, "producent")
+        wijnnaam = cell(row, "wijnnaam")
 
         if not producent or not wijnnaam:
             continue  # skip empty rows
 
-        if not wtype:
-            raise HTTPException(400, f"Rij {i}: 'type' is verplicht")
-
-        jaargang = cell("jaargang")
-        volume = cell("volume") or "0.75L"
-        aantal = cell("aantal") or "1"
-
-        try:
-            qty = int(float(aantal))
-            if qty < 1:
-                raise ValueError
-        except ValueError:
-            raise HTTPException(400, f"Rij {i}: ongeldig aantal '{aantal}'")
-
-        vintage = None
-        if jaargang:
-            try:
-                vintage = int(float(jaargang))
-            except ValueError:
-                raise HTTPException(400, f"Rij {i}: ongeldige jaargang '{jaargang}'")
-
-        rows.append({
-            "producer": producent,
-            "wine_name": wijnnaam,
-            "wine_type": wtype,
-            "vintage": vintage,
-            "volume": volume,
-            "quantity": qty,
-        })
+        rows.append(_validate_row(
+            i, producent, wijnnaam,
+            cell(row, "type"),
+            cell(row, "jaargang"),
+            cell(row, "volume") or "0.75L",
+            cell(row, "aantal") or "1",
+        ))
 
     wb.close()
 
@@ -214,17 +206,27 @@ async def import_order(
     db.add(order)
     db.flush()
 
+    # Pre-generate all SKU codes and batch-fetch existing SKUs
+    row_codes = []
+    for row in rows:
+        row_codes.append(generate_sku_code(
+            row["producer"], row["wine_name"], row["wine_type"], row["vintage"], row["volume"]
+        ))
+    existing_by_code = {
+        s.sku_code: s
+        for s in db.query(SKU).filter(SKU.sku_code.in_(set(row_codes))).all()
+    }
+
     new_skus = []
     existing_skus = []
+    lines_by_sku: dict[int, OrderLine] = {}  # track lines locally instead of querying DB
 
-    for row in rows:
-        sku_code = generate_sku_code(
-            row["producer"], row["wine_name"], row["wine_type"], row["vintage"], row["volume"]
-        )
-        sku = db.query(SKU).filter(SKU.sku_code == sku_code).first()
+    for row, sku_code in zip(rows, row_codes):
+        sku = existing_by_code.get(sku_code)
 
         if sku:
-            existing_skus.append(sku)
+            if sku not in existing_skus:
+                existing_skus.append(sku)
         else:
             name = generate_display_name(row["producer"], row["wine_name"], row["vintage"], row["volume"])
             sku = SKU(
@@ -238,18 +240,16 @@ async def import_order(
             )
             db.add(sku)
             db.flush()
+            existing_by_code[sku_code] = sku
             new_skus.append(sku)
 
-        # Check if a line for this SKU already exists on this order
-        existing_line = (
-            db.query(OrderLine)
-            .filter(OrderLine.order_id == order.id, OrderLine.sku_id == sku.id)
-            .first()
-        )
-        if existing_line:
-            existing_line.quantity += row["quantity"]
+        # Merge duplicate lines locally
+        if sku.id in lines_by_sku:
+            lines_by_sku[sku.id].quantity += row["quantity"]
         else:
-            db.add(OrderLine(order_id=order.id, sku_id=sku.id, quantity=row["quantity"]))
+            line = OrderLine(order_id=order.id, sku_id=sku.id, quantity=row["quantity"])
+            db.add(line)
+            lines_by_sku[sku.id] = line
 
     db.commit()
     db.refresh(order)
@@ -269,8 +269,8 @@ async def import_order(
 
     return OrderImportResult(
         order=_order_to_response(order),
-        new_skus=[_sku_to_response(s) for s in new_skus],
-        existing_skus=[_sku_to_response(s) for s in existing_skus],
+        new_skus=[sku_to_response(s) for s in new_skus],
+        existing_skus=[sku_to_response(s) for s in existing_skus],
     )
 
 
@@ -288,10 +288,7 @@ def list_orders(
 
 @router.get("/{order_id}", response_model=OrderResponse)
 def get_order(order_id: int, db: Session = Depends(get_db)):
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(404, "Order niet gevonden")
-    return _order_to_response(order)
+    return _order_to_response(_get_order(db, order_id))
 
 
 @router.delete("/{order_id}", status_code=204)
@@ -300,9 +297,7 @@ def delete_order(
     db: Session = Depends(get_db),
     user: User = Depends(require_product_manager),
 ):
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(404, "Order niet gevonden")
+    order = _get_order(db, order_id)
     order_number = order.order_number
     db.delete(order)
     db.commit()
@@ -322,9 +317,7 @@ def activate_order(
     user: User = Depends(require_product_manager),
 ):
     """Activate an order. All SKUs must have at least one reference image."""
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(404, "Order niet gevonden")
+    order = _get_order(db, order_id)
     if order.status != "draft":
         raise HTTPException(400, f"Order is al '{order.status}'")
 
@@ -362,9 +355,7 @@ async def scan_box(
     user: User = Depends(get_current_user),
 ):
     """Scan a box for this order. Matches vision result against order lines."""
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(404, "Order niet gevonden")
+    order = _get_order(db, order_id)
     if order.status != "active":
         raise HTTPException(400, "Order is niet actief")
 
@@ -394,13 +385,12 @@ async def scan_box(
 
     if matched_line:
         matched_line.scanned_quantity += 1
-        db.commit()
 
         # Check if order is fully scanned
         all_done = all(l.scanned_quantity >= l.quantity for l in order.lines)
         if all_done:
             order.status = "completed"
-            db.commit()
+        db.commit()
 
         total_boxes = sum(l.quantity for l in order.lines)
         scanned_boxes = sum(l.scanned_quantity for l in order.lines)

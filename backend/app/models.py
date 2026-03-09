@@ -20,9 +20,6 @@ EMBEDDING_DIM = 3072
 
 VALID_ROLES = ("admin", "merchant", "courier")
 
-WINE_TYPES = ("Rood", "Wit", "Rosé", "Mousserend", "Dessert", "Overig")
-
-
 class User(Base):
     __tablename__ = "users"
 
@@ -86,9 +83,6 @@ class ReferenceImage(Base):
     )
 
     sku: Mapped["SKU"] = relationship(back_populates="reference_images")
-
-
-VALID_ORDER_STATUSES = ("draft", "active", "completed")
 
 
 class Order(Base):
