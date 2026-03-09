@@ -16,6 +16,7 @@ from app.schemas import (
     BookingResponse,
     CSVRow,
     CSVValidationResult,
+    ManualOrderCreate,
     OrderLineResponse,
     OrderResponse,
     SKUResponse,
@@ -183,6 +184,48 @@ async def upload_csv(
         new_skus=[_sku_to_response(s) for s in new_skus],
         errors=errors,
     )
+
+
+@router.post("", response_model=OrderResponse)
+def create_order(
+    body: ManualOrderCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    """Manually create an order by selecting existing SKUs."""
+    merchant = db.get(User, body.merchant_id)
+    if not merchant:
+        raise HTTPException(404, "Handelaar niet gevonden")
+
+    ref = f"ORD-{uuid.uuid4().hex[:8].upper()}"
+    order = Order(merchant_id=merchant.id, reference=ref, status="draft")
+    db.add(order)
+    db.flush()
+
+    for line in body.lines:
+        sku = db.get(SKU, line.sku_id)
+        if not sku:
+            raise HTTPException(404, f"SKU met id {line.sku_id} niet gevonden")
+        db.add(OrderLine(order_id=order.id, sku_id=sku.id, quantity=line.quantity))
+
+    # Determine status
+    all_have_images = all(
+        len(db.get(SKU, l.sku_id).reference_images) > 0 for l in body.lines
+    )
+    order.status = "active" if all_have_images else "pending_images"
+
+    db.commit()
+    db.refresh(order)
+
+    publish_event(
+        "order_created_manual",
+        details={"order_reference": ref, "total_lines": len(body.lines)},
+        user=user,
+        resource_type="order",
+        resource_id=order.id,
+    )
+
+    return _order_to_response(order)
 
 
 @router.get("", response_model=list[OrderResponse])
