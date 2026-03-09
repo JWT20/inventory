@@ -3,7 +3,7 @@ import uuid
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.auth import get_current_user, require_admin, require_product_manager
 from app.config import settings
@@ -48,7 +48,7 @@ def list_skus(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    query = db.query(SKU)
+    query = db.query(SKU).options(joinedload(SKU.reference_images))
     if active_only:
         query = query.filter(SKU.active.is_(True))
     skus = query.order_by(SKU.name).all()
@@ -161,7 +161,7 @@ def delete_sku(
 
 
 @router.post("/{sku_id}/images", response_model=ReferenceImageResponse, status_code=201)
-async def upload_reference_image(
+def upload_reference_image(
     sku_id: int,
     file: UploadFile,
     db: Session = Depends(get_db),
@@ -171,7 +171,7 @@ async def upload_reference_image(
     if not sku:
         raise HTTPException(404, "SKU not found")
 
-    image_bytes = await file.read()
+    image_bytes = file.file.read()
 
     # Save image to disk
     ref_dir = os.path.join(settings.upload_dir, "reference_images", str(sku_id))

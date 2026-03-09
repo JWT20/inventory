@@ -40,6 +40,8 @@ def get_current_user(
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
         user_id = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
     except JWTError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
 

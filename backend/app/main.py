@@ -1,8 +1,8 @@
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from sqlalchemy import inspect, text
 
@@ -15,30 +15,6 @@ from app.routers import auth, orders, receiving, skus, vision
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-app = FastAPI(
-    title="Warehouse Receiving API",
-    description="Vision-based product identification for warehouse receiving and labeling",
-    version="2.0.0",
-)
-
-cors_origins = ["http://localhost:5173"]  # Vite dev server
-if settings.domain:
-    cors_origins = [f"https://{settings.domain}"]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(auth.router, prefix="/api")
-app.include_router(skus.router, prefix="/api")
-app.include_router(orders.router, prefix="/api")
-app.include_router(receiving.router, prefix="/api")
-app.include_router(vision.router, prefix="/api")
 
 
 def _migrate_is_admin_to_role():
@@ -159,8 +135,9 @@ def _migrate_order_line_klant():
         conn.execute(text("ALTER TABLE order_lines ADD COLUMN klant VARCHAR(150) NOT NULL DEFAULT ''"))
 
 
-@app.on_event("startup")
-def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- startup ---
     _migrate_is_admin_to_role()
     _migrate_embedding_dimension()
     _migrate_order_tables()
@@ -188,10 +165,36 @@ def on_startup():
 
     init_producer()
 
+    yield
 
-@app.on_event("shutdown")
-def on_shutdown():
+    # --- shutdown ---
     shutdown_producer()
+
+
+app = FastAPI(
+    title="Warehouse Receiving API",
+    description="Vision-based product identification for warehouse receiving and labeling",
+    version="2.0.0",
+    lifespan=lifespan,
+)
+
+cors_origins = ["http://localhost:5173"]  # Vite dev server
+if settings.domain:
+    cors_origins = [f"https://{settings.domain}"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(auth.router, prefix="/api")
+app.include_router(skus.router, prefix="/api")
+app.include_router(orders.router, prefix="/api")
+app.include_router(receiving.router, prefix="/api")
+app.include_router(vision.router, prefix="/api")
 
 
 @app.get("/api/health")

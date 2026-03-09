@@ -68,12 +68,13 @@ class TestFindBestMatch:
         assert sku is None
         assert confidence == 0.0
 
-    def test_threshold_boundary_exact(self):
-        """Similarity exactly equal to threshold should be rejected (strict <)."""
+    def test_threshold_boundary_exact_matches(self):
+        """Similarity exactly equal to threshold should match (uses strict < for rejection)."""
         from app.services.matching import find_best_match
 
         mock_sku = MagicMock()
         mock_sku.id = 1
+        mock_sku.sku_code = "WINE-001"
 
         mock_db = _mock_db_with_rows([(1, 0.92)], {1: mock_sku})
 
@@ -81,8 +82,9 @@ class TestFindBestMatch:
             mock_settings.match_threshold = 0.92
             sku, confidence = find_best_match(mock_db, [0.1] * 1536)
 
-        # 0.92 < 0.92 is False, so it should match
-        assert sku is not None or confidence == 0.92
+        # 0.92 < 0.92 is False, so the match is NOT rejected
+        assert sku is mock_sku
+        assert confidence == 0.92
 
 
 # ---------------------------------------------------------------------------
