@@ -10,7 +10,14 @@ from app.config import settings
 from app.database import get_db
 from app.events import publish_event
 from app.models import SKU, ReferenceImage, User
-from app.schemas import ReferenceImageResponse, SKUCreate, SKUResponse, SKUUpdate
+from app.schemas import (
+    ReferenceImageResponse,
+    SKUCreate,
+    SKUResponse,
+    SKUUpdate,
+    generate_display_name,
+    generate_sku_code,
+)
 from app.services.embedding import process_image
 
 logger = logging.getLogger(__name__)
@@ -24,6 +31,11 @@ def _sku_to_response(sku: SKU) -> SKUResponse:
         name=sku.name,
         description=sku.description,
         active=sku.active,
+        producent=sku.producent,
+        wijnaam=sku.wijnaam,
+        wijntype=sku.wijntype,
+        jaargang=sku.jaargang,
+        volume=sku.volume,
         created_at=sku.created_at,
         updated_at=sku.updated_at,
         image_count=len(sku.reference_images),
@@ -49,10 +61,23 @@ def create_sku(
     db: Session = Depends(get_db),
     user: User = Depends(require_product_manager),
 ):
-    existing = db.query(SKU).filter(SKU.sku_code == data.sku_code).first()
+    sku_code = generate_sku_code(data.producent, data.wijnaam, data.wijntype, data.jaargang, data.volume)
+    existing = db.query(SKU).filter(SKU.sku_code == sku_code).first()
     if existing:
-        raise HTTPException(400, f"SKU code '{data.sku_code}' already exists")
-    sku = SKU(**data.model_dump())
+        raise HTTPException(400, f"SKU code '{sku_code}' bestaat al")
+    name = generate_display_name(data.producent, data.wijnaam, data.wijntype, data.jaargang)
+    description = f"{data.producent} {data.wijnaam} {data.wijntype} {data.jaargang} {data.volume}"
+    sku = SKU(
+        sku_code=sku_code,
+        name=name,
+        description=description,
+        active=data.active,
+        producent=data.producent,
+        wijnaam=data.wijnaam,
+        wijntype=data.wijntype,
+        jaargang=data.jaargang,
+        volume=data.volume,
+    )
     db.add(sku)
     db.commit()
     db.refresh(sku)
@@ -91,6 +116,17 @@ def update_sku(
     changed_fields = data.model_dump(exclude_unset=True)
     for field, value in changed_fields.items():
         setattr(sku, field, value)
+
+    # Regenerate sku_code and name if wine fields are all present
+    wine_fields = ("producent", "wijnaam", "wijntype", "jaargang", "volume")
+    if any(f in changed_fields for f in wine_fields) and all(getattr(sku, f) for f in wine_fields):
+        new_code = generate_sku_code(sku.producent, sku.wijnaam, sku.wijntype, sku.jaargang, sku.volume)
+        conflict = db.query(SKU).filter(SKU.sku_code == new_code, SKU.id != sku_id).first()
+        if conflict:
+            raise HTTPException(400, f"SKU code '{new_code}' bestaat al")
+        sku.sku_code = new_code
+        sku.name = generate_display_name(sku.producent, sku.wijnaam, sku.wijntype, sku.jaargang)
+
     db.commit()
     db.refresh(sku)
     publish_event(

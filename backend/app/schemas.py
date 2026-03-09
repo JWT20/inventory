@@ -37,16 +37,43 @@ class UserResponse(BaseModel):
 
 
 # --- SKU ---
+
+def generate_sku_code(producent: str, wijnaam: str, wijntype: str, jaargang: str, volume: str) -> str:
+    """Generate SKU code like CHAT-GRAN-ROO-2019-750."""
+    def abbrev(s: str, length: int = 4) -> str:
+        normalized = unicodedata.normalize("NFKD", s)
+        ascii_only = "".join(c for c in normalized if not unicodedata.combining(c))
+        cleaned = ascii_only.strip().upper().replace(" ", "")
+        return cleaned[:length]
+
+    return "-".join([
+        abbrev(producent),
+        abbrev(wijnaam),
+        abbrev(wijntype, 3),
+        jaargang.strip(),
+        volume.strip().replace("ml", "").replace("cl", ""),
+    ])
+
+
+def generate_display_name(producent: str, wijnaam: str, wijntype: str, jaargang: str) -> str:
+    return f"{producent} {wijnaam} {wijntype} {jaargang}"
+
+
 class SKUCreate(BaseModel):
-    sku_code: str
-    name: str
-    description: str | None = None
+    producent: str = Field(..., min_length=1)
+    wijnaam: str = Field(..., min_length=1)
+    wijntype: str = Field(..., min_length=1)
+    jaargang: str = Field(..., min_length=1)
+    volume: str = Field(..., min_length=1)
     active: bool = True
 
 
 class SKUUpdate(BaseModel):
-    name: str | None = None
-    description: str | None = None
+    producent: str | None = None
+    wijnaam: str | None = None
+    wijntype: str | None = None
+    jaargang: str | None = None
+    volume: str | None = None
     active: bool | None = None
 
 
@@ -56,6 +83,11 @@ class SKUResponse(BaseModel):
     name: str
     description: str | None
     active: bool
+    producent: str | None = None
+    wijnaam: str | None = None
+    wijntype: str | None = None
+    jaargang: str | None = None
+    volume: str | None = None
     created_at: datetime
     updated_at: datetime
     image_count: int = 0
@@ -93,25 +125,11 @@ class CSVRow(BaseModel):
 
     @property
     def sku_code(self) -> str:
-        """Generate SKU like CHAT-GRAN-ROO-2019-750."""
-        def abbrev(s: str, length: int = 4) -> str:
-            # Normalize accented chars (é→e, â→a, etc.)
-            normalized = unicodedata.normalize("NFKD", s)
-            ascii_only = "".join(c for c in normalized if not unicodedata.combining(c))
-            cleaned = ascii_only.strip().upper().replace(" ", "")
-            return cleaned[:length]
-
-        return "-".join([
-            abbrev(self.producent),
-            abbrev(self.wijnaam),
-            abbrev(self.type, 3),
-            self.jaargang.strip(),
-            self.volume.strip().replace("ml", "").replace("cl", ""),
-        ])
+        return generate_sku_code(self.producent, self.wijnaam, self.type, self.jaargang, self.volume)
 
     @property
     def display_name(self) -> str:
-        return f"{self.producent} {self.wijnaam} {self.type} {self.jaargang}"
+        return generate_display_name(self.producent, self.wijnaam, self.type, self.jaargang)
 
 
 class CSVValidationResult(BaseModel):

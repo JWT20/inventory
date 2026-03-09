@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Textarea } from "@/components/ui/textarea";
+
 import {
   Dialog,
   DialogContent,
@@ -21,6 +21,11 @@ interface SKU {
   name: string;
   description: string | null;
   active: boolean;
+  producent: string | null;
+  wijnaam: string | null;
+  wijntype: string | null;
+  jaargang: string | null;
+  volume: string | null;
   image_count: number;
 }
 
@@ -116,9 +121,11 @@ function SKUDialog({
 }) {
   const { user } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [skuCode, setSkuCode] = useState("");
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
+  const [producent, setProducent] = useState("");
+  const [wijnaam, setWijnaam] = useState("");
+  const [wijntype, setWijntype] = useState("");
+  const [jaargang, setJaargang] = useState("");
+  const [volume, setVolume] = useState("");
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [images, setImages] = useState<RefImage[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -127,15 +134,19 @@ function SKUDialog({
 
   useEffect(() => {
     if (open && sku) {
-      setSkuCode(sku.sku_code);
-      setName(sku.name);
-      setDescription(sku.description || "");
+      setProducent(sku.producent || "");
+      setWijnaam(sku.wijnaam || "");
+      setWijntype(sku.wijntype || "");
+      setJaargang(sku.jaargang || "");
+      setVolume(sku.volume || "");
       setCurrentId(sku.id);
       loadImages(sku.id);
     } else if (open) {
-      setSkuCode("");
-      setName("");
-      setDescription("");
+      setProducent("");
+      setWijnaam("");
+      setWijntype("");
+      setJaargang("");
+      setVolume("");
       setCurrentId(null);
       setImages([]);
     }
@@ -163,15 +174,20 @@ function SKUDialog({
       let skuId = currentId;
       if (skuId) {
         await api.updateSKU(skuId, {
-          name,
-          description: description || null,
+          producent,
+          wijnaam,
+          wijntype,
+          jaargang,
+          volume,
         });
         toast.success("SKU bijgewerkt");
       } else {
         const created = await api.createSKU({
-          sku_code: skuCode,
-          name,
-          description: description || undefined,
+          producent,
+          wijnaam,
+          wijntype,
+          jaargang,
+          volume,
         });
         skuId = created.id;
         setCurrentId(skuId);
@@ -240,34 +256,65 @@ function SKUDialog({
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{sku ? "SKU Bewerken" : "Nieuwe SKU"}</DialogTitle>
+          <DialogTitle>
+            {sku ? "Product bewerken" : "Nieuw product"}
+            {sku && (
+              <span className="ml-2 text-sm font-normal text-muted-foreground">
+                {sku.sku_code}
+              </span>
+            )}
+          </DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-2">
-            <Label>SKU Code</Label>
-            <Input
-              value={skuCode}
-              onChange={(e) => setSkuCode(e.target.value)}
-              disabled={!!currentId}
-              required
-            />
+        <form onSubmit={submit} className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Producent</Label>
+              <Input
+                value={producent}
+                onChange={(e) => setProducent(e.target.value)}
+                placeholder="Château Margaux"
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Wijnaam</Label>
+              <Input
+                value={wijnaam}
+                onChange={(e) => setWijnaam(e.target.value)}
+                placeholder="Grand Vin"
+                required
+              />
+            </div>
           </div>
-          <div className="space-y-2">
-            <Label>Naam</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>Omschrijving</Label>
-            <Textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={2}
-            />
+          <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Type</Label>
+              <Input
+                value={wijntype}
+                onChange={(e) => setWijntype(e.target.value)}
+                placeholder="Rood"
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Jaargang</Label>
+              <Input
+                value={jaargang}
+                onChange={(e) => setJaargang(e.target.value)}
+                placeholder="2019"
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Volume</Label>
+              <Input
+                value={volume}
+                onChange={(e) => setVolume(e.target.value)}
+                placeholder="750"
+                required
+              />
+            </div>
           </div>
           {user && user.role !== "courier" && (
             <Button type="submit" className="w-full" disabled={submitting}>

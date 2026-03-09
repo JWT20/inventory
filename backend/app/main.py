@@ -124,11 +124,34 @@ def _migrate_order_tables():
     logger.info("Old order tables dropped — create_all will recreate them")
 
 
+def _migrate_sku_wine_fields():
+    """Add wine-specific columns to skus table if missing."""
+    inspector = inspect(engine)
+    if "skus" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("skus")}
+    new_cols = {
+        "producent": "VARCHAR(150)",
+        "wijnaam": "VARCHAR(150)",
+        "wijntype": "VARCHAR(50)",
+        "jaargang": "VARCHAR(10)",
+        "volume": "VARCHAR(20)",
+    }
+    to_add = {k: v for k, v in new_cols.items() if k not in columns}
+    if not to_add:
+        return
+    logger.info("Adding wine fields to skus table: %s", ", ".join(to_add))
+    with engine.begin() as conn:
+        for col, dtype in to_add.items():
+            conn.execute(text(f"ALTER TABLE skus ADD COLUMN {col} {dtype}"))
+
+
 @app.on_event("startup")
 def on_startup():
     _migrate_is_admin_to_role()
     _migrate_embedding_dimension()
     _migrate_order_tables()
+    _migrate_sku_wine_fields()
 
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)

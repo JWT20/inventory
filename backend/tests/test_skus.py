@@ -3,6 +3,15 @@
 from tests.conftest import auth_header
 
 
+WINE_DATA = {
+    "producent": "Château Test",
+    "wijnaam": "Grand Vin",
+    "wijntype": "Rood",
+    "jaargang": "2020",
+    "volume": "750",
+}
+
+
 # ---------------------------------------------------------------------------
 # GET /api/skus
 # ---------------------------------------------------------------------------
@@ -51,37 +60,48 @@ class TestListSKUs:
 
 class TestCreateSKU:
     def test_merchant_creates_sku(self, client, merchant_token):
-        resp = client.post("/api/skus", json={
-            "sku_code": "WINE-NEW",
-            "name": "New Wine",
-            "description": "A lovely red",
-        }, headers=auth_header(merchant_token))
+        resp = client.post(
+            "/api/skus", json=WINE_DATA,
+            headers=auth_header(merchant_token),
+        )
         assert resp.status_code == 201
         data = resp.json()
-        assert data["sku_code"] == "WINE-NEW"
-        assert data["name"] == "New Wine"
+        assert data["sku_code"] == "CHAT-GRAN-ROO-2020-750"
+        assert data["producent"] == "Château Test"
+        assert data["wijnaam"] == "Grand Vin"
         assert data["active"] is True
         assert data["image_count"] == 0
 
     def test_admin_creates_sku(self, client, admin_token):
-        resp = client.post("/api/skus", json={
-            "sku_code": "WINE-ADM",
-            "name": "Admin Wine",
-        }, headers=auth_header(admin_token))
+        resp = client.post(
+            "/api/skus",
+            json={**WINE_DATA, "producent": "Admin Winery"},
+            headers=auth_header(admin_token),
+        )
         assert resp.status_code == 201
 
     def test_courier_cannot_create_sku(self, client, courier_token):
-        resp = client.post("/api/skus", json={
-            "sku_code": "WINE-X",
-            "name": "Nope",
-        }, headers=auth_header(courier_token))
+        resp = client.post(
+            "/api/skus", json=WINE_DATA,
+            headers=auth_header(courier_token),
+        )
         assert resp.status_code == 403
 
-    def test_duplicate_sku_code_rejected(self, client, merchant_token, sample_sku):
-        resp = client.post("/api/skus", json={
-            "sku_code": "WINE-001",  # already exists
-            "name": "Duplicate",
-        }, headers=auth_header(merchant_token))
+    def test_duplicate_sku_code_rejected(self, client, db, merchant_token):
+        # Create first
+        from app.models import SKU
+        sku = SKU(
+            sku_code="CHAT-GRAN-ROO-2020-750", name="Existing",
+            producent="Château Test", wijnaam="Grand Vin",
+            wijntype="Rood", jaargang="2020", volume="750",
+        )
+        db.add(sku)
+        db.commit()
+
+        resp = client.post(
+            "/api/skus", json=WINE_DATA,
+            headers=auth_header(merchant_token),
+        )
         assert resp.status_code == 400
 
 
@@ -111,11 +131,11 @@ class TestUpdateSKU:
     def test_merchant_updates_sku(self, client, merchant_token, sample_sku):
         resp = client.patch(
             f"/api/skus/{sample_sku.id}",
-            json={"name": "Updated Wine"},
+            json={"producent": "Nieuw Domein"},
             headers=auth_header(merchant_token),
         )
         assert resp.status_code == 200
-        assert resp.json()["name"] == "Updated Wine"
+        assert resp.json()["producent"] == "Nieuw Domein"
 
     def test_partial_update(self, client, merchant_token, sample_sku):
         resp = client.patch(
@@ -131,7 +151,7 @@ class TestUpdateSKU:
     def test_courier_cannot_update_sku(self, client, courier_token, sample_sku):
         resp = client.patch(
             f"/api/skus/{sample_sku.id}",
-            json={"name": "Nope"},
+            json={"producent": "Nope"},
             headers=auth_header(courier_token),
         )
         assert resp.status_code == 403
@@ -139,7 +159,7 @@ class TestUpdateSKU:
     def test_update_nonexistent_sku(self, client, merchant_token):
         resp = client.patch(
             "/api/skus/9999",
-            json={"name": "Ghost"},
+            json={"producent": "Ghost"},
             headers=auth_header(merchant_token),
         )
         assert resp.status_code == 404
