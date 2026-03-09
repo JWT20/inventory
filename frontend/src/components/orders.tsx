@@ -466,7 +466,10 @@ function OrderDetailDialog({
   onClose: () => void;
   onUpdated: () => void;
 }) {
+  const { user } = useAuth();
   const [activating, setActivating] = useState(false);
+  const [uploadingSkuId, setUploadingSkuId] = useState<number | null>(null);
+  const fileRefs = useRef<Record<number, HTMLInputElement | null>>({});
 
   if (!order) return null;
 
@@ -487,6 +490,22 @@ function OrderDetailDialog({
       toast.error(err instanceof Error ? err.message : "Activatie mislukt");
     } finally {
       setActivating(false);
+    }
+  }
+
+  async function handleImageUpload(skuId: number, e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingSkuId(skuId);
+    try {
+      await api.uploadImage(skuId, file);
+      toast.success("Referentiebeeld geüpload");
+      onUpdated();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Upload mislukt");
+    } finally {
+      setUploadingSkuId(null);
+      e.target.value = "";
     }
   }
 
@@ -527,11 +546,32 @@ function OrderDetailDialog({
                       {line.sku_code}
                     </p>
                   </div>
-                  <div className="text-right">
+                  <div className="text-right flex items-center gap-2">
                     <p>
                       {line.booked_count}/{line.quantity} dozen
                     </p>
-                    {!line.has_image && (
+                    {!line.has_image && user && user.role !== "courier" && (
+                      <>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="text-xs h-7 px-2"
+                          disabled={uploadingSkuId === line.sku_id}
+                          onClick={() => fileRefs.current[line.sku_id]?.click()}
+                        >
+                          {uploadingSkuId === line.sku_id ? "Uploaden..." : "Foto"}
+                        </Button>
+                        <input
+                          ref={(el) => { fileRefs.current[line.sku_id] = el; }}
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="hidden"
+                          onChange={(e) => handleImageUpload(line.sku_id, e)}
+                        />
+                      </>
+                    )}
+                    {!line.has_image && (user?.role === "courier" || !user) && (
                       <p className="text-xs text-amber-400">Geen beeld</p>
                     )}
                   </div>
@@ -544,7 +584,7 @@ function OrderDetailDialog({
             <div className="p-3 bg-amber-600/20 border border-amber-600 rounded-lg">
               <p className="text-sm text-amber-400">
                 {skusWithoutImages.length} SKU('s) zonder referentiebeeld.
-                Upload beelden via Producten om de order te activeren.
+                Upload een foto per SKU hierboven.
               </p>
             </div>
           )}
