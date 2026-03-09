@@ -20,6 +20,8 @@ from app.schemas import (
     OrderLineResponse,
     OrderResponse,
     SKUResponse,
+    generate_display_name,
+    generate_sku_code,
 )
 from app.routers.skus import _sku_to_response
 
@@ -197,7 +199,7 @@ def create_order(
     db: Session = Depends(get_db),
     user: User = Depends(require_product_manager),
 ):
-    """Manually create an order by selecting existing SKUs."""
+    """Create an order from wine details. SKUs are auto-created or matched."""
     merchant = db.get(User, body.merchant_id)
     if not merchant:
         raise HTTPException(404, "Handelaar niet gevonden")
@@ -207,24 +209,49 @@ def create_order(
     db.add(order)
     db.flush()
 
+    # Group by sku_code, sum quantities, resolve SKUs
+    sku_quantities: dict[str, int] = {}
+    sku_lines: dict[str, object] = {}
     for line in body.lines:
-        sku = db.get(SKU, line.sku_id)
+        code = generate_sku_code(line.producent, line.wijnaam, line.wijntype, line.jaargang, line.volume)
+        sku_quantities[code] = sku_quantities.get(code, 0) + line.quantity
+        if code not in sku_lines:
+            sku_lines[code] = line
+
+    has_new = False
+    for code, qty in sku_quantities.items():
+        line = sku_lines[code]
+        sku = db.query(SKU).filter(SKU.sku_code == code).first()
         if not sku:
-            raise HTTPException(404, f"SKU met id {line.sku_id} niet gevonden")
-        db.add(OrderLine(order_id=order.id, sku_id=sku.id, quantity=line.quantity))
+            sku = SKU(
+                sku_code=code,
+                name=generate_display_name(line.producent, line.wijnaam, line.wijntype, line.jaargang),
+                description=f"{line.producent} {line.wijnaam} {line.wijntype} {line.jaargang} {line.volume}",
+                producent=line.producent,
+                wijnaam=line.wijnaam,
+                wijntype=line.wijntype,
+                jaargang=line.jaargang,
+                volume=line.volume,
+            )
+            db.add(sku)
+            db.flush()
+            has_new = True
+        db.add(OrderLine(order_id=order.id, sku_id=sku.id, quantity=qty))
 
     # Determine status
-    all_have_images = all(
-        len(db.get(SKU, l.sku_id).reference_images) > 0 for l in body.lines
-    )
-    order.status = "active" if all_have_images else "pending_images"
+    if has_new:
+        order.status = "pending_images"
+    else:
+        all_skus = [db.query(SKU).filter(SKU.sku_code == c).first() for c in sku_quantities]
+        all_have_images = all(len(s.reference_images) > 0 for s in all_skus)
+        order.status = "active" if all_have_images else "pending_images"
 
     db.commit()
     db.refresh(order)
 
     publish_event(
         "order_created_manual",
-        details={"order_reference": ref, "total_lines": len(body.lines)},
+        details={"order_reference": ref, "total_lines": len(sku_quantities)},
         user=user,
         resource_type="order",
         resource_id=order.id,

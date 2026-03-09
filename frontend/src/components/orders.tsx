@@ -14,10 +14,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-interface SKUOption {
-  id: number;
-  sku_code: string;
-  name: string;
+interface WineLine {
+  producent: string;
+  wijnaam: string;
+  wijntype: string;
+  jaargang: string;
+  volume: string;
+  quantity: number;
 }
 
 interface UserOption {
@@ -164,6 +167,10 @@ export function OrdersPage() {
   );
 }
 
+const EMPTY_LINE: WineLine = {
+  producent: "", wijnaam: "", wijntype: "", jaargang: "", volume: "", quantity: 1,
+};
+
 function ManualOrderDialog({
   open,
   onClose,
@@ -173,31 +180,32 @@ function ManualOrderDialog({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const { user } = useAuth();
   const [merchants, setMerchants] = useState<UserOption[]>([]);
-  const [skus, setSKUs] = useState<SKUOption[]>([]);
   const [merchantId, setMerchantId] = useState<number | "">("");
-  const [lines, setLines] = useState<{ sku_id: number | ""; quantity: number }[]>([
-    { sku_id: "", quantity: 1 },
-  ]);
+  const [lines, setLines] = useState<WineLine[]>([{ ...EMPTY_LINE }]);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
+    // Auto-set merchant to current user if they're a merchant
+    if (user?.role === "merchant") {
+      setMerchantId(user.id);
+    }
     api.listUsers().then((users: UserOption[]) =>
       setMerchants(users.filter((u) => u.role === "merchant" || u.role === "admin")),
     );
-    api.listSKUs().then(setSKUs);
-  }, [open]);
+  }, [open, user]);
 
   function addLine() {
-    setLines([...lines, { sku_id: "", quantity: 1 }]);
+    setLines([...lines, { ...EMPTY_LINE }]);
   }
 
   function removeLine(idx: number) {
     setLines(lines.filter((_, i) => i !== idx));
   }
 
-  function updateLine(idx: number, field: "sku_id" | "quantity", value: number | "") {
+  function updateLine(idx: number, field: keyof WineLine, value: string | number) {
     const updated = [...lines];
     updated[idx] = { ...updated[idx], [field]: value };
     setLines(updated);
@@ -208,26 +216,24 @@ function ManualOrderDialog({
       toast.error("Selecteer een handelaar");
       return;
     }
-    const validLines = lines.filter((l) => l.sku_id !== "" && l.quantity > 0);
-    if (validLines.length === 0) {
-      toast.error("Voeg minimaal één orderregel toe");
+    const valid = lines.filter(
+      (l) => l.producent && l.wijnaam && l.wijntype && l.jaargang && l.volume && l.quantity > 0,
+    );
+    if (valid.length === 0) {
+      toast.error("Vul minimaal één complete regel in");
       return;
     }
     setSubmitting(true);
     try {
       await api.createOrder({
         merchant_id: merchantId as number,
-        lines: validLines.map((l) => ({
-          sku_id: l.sku_id as number,
-          quantity: l.quantity,
-        })),
+        lines: valid,
       });
       toast.success("Order aangemaakt");
       onCreated();
       onClose();
-      // Reset
-      setMerchantId("");
-      setLines([{ sku_id: "", quantity: 1 }]);
+      setMerchantId(user?.role === "merchant" ? user.id : "");
+      setLines([{ ...EMPTY_LINE }]);
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Aanmaken mislukt");
     } finally {
@@ -235,73 +241,102 @@ function ManualOrderDialog({
     }
   }
 
+  const inp = "rounded-md border border-border bg-background px-2 py-1.5 text-sm w-full";
+
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent>
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>Order aanmaken</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
-          <div>
-            <Label className="mb-1 block text-sm">Handelaar</Label>
-            <select
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-              value={merchantId}
-              onChange={(e) =>
-                setMerchantId(e.target.value ? Number(e.target.value) : "")
-              }
-            >
-              <option value="">Selecteer handelaar...</option>
-              {merchants.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.username}
-                </option>
-              ))}
-            </select>
-          </div>
+          {user?.role !== "merchant" && (
+            <div>
+              <Label className="mb-1 block text-sm">Handelaar</Label>
+              <select
+                className={inp}
+                value={merchantId}
+                onChange={(e) =>
+                  setMerchantId(e.target.value ? Number(e.target.value) : "")
+                }
+              >
+                <option value="">Selecteer handelaar...</option>
+                {merchants.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.username}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div>
-            <Label className="mb-1 block text-sm">Orderregels</Label>
-            <div className="space-y-2">
+            <Label className="mb-1 block text-sm">Producten</Label>
+            <div className="space-y-3">
               {lines.map((line, idx) => (
-                <div key={idx} className="flex gap-2 items-center">
-                  <select
-                    className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
-                    value={line.sku_id}
-                    onChange={(e) =>
-                      updateLine(
-                        idx,
-                        "sku_id",
-                        e.target.value ? Number(e.target.value) : "",
-                      )
-                    }
-                  >
-                    <option value="">SKU selecteren...</option>
-                    {skus.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.sku_code} — {s.name}
-                      </option>
-                    ))}
-                  </select>
-                  <Input
-                    type="number"
-                    min={1}
-                    className="w-20"
-                    value={line.quantity}
-                    onChange={(e) =>
-                      updateLine(idx, "quantity", Number(e.target.value) || 1)
-                    }
-                  />
-                  {lines.length > 1 && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => removeLine(idx)}
-                    >
-                      ×
-                    </Button>
-                  )}
+                <div
+                  key={idx}
+                  className="p-3 rounded-lg border border-border space-y-2"
+                >
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-muted-foreground">
+                      Regel {idx + 1}
+                    </span>
+                    {lines.length > 1 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-xs"
+                        onClick={() => removeLine(idx)}
+                      >
+                        ×
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      className={inp}
+                      placeholder="Producent"
+                      value={line.producent}
+                      onChange={(e) => updateLine(idx, "producent", e.target.value)}
+                    />
+                    <input
+                      className={inp}
+                      placeholder="Wijnaam"
+                      value={line.wijnaam}
+                      onChange={(e) => updateLine(idx, "wijnaam", e.target.value)}
+                    />
+                  </div>
+                  <div className="grid grid-cols-4 gap-2">
+                    <input
+                      className={inp}
+                      placeholder="Type"
+                      value={line.wijntype}
+                      onChange={(e) => updateLine(idx, "wijntype", e.target.value)}
+                    />
+                    <input
+                      className={inp}
+                      placeholder="Jaargang"
+                      value={line.jaargang}
+                      onChange={(e) => updateLine(idx, "jaargang", e.target.value)}
+                    />
+                    <input
+                      className={inp}
+                      placeholder="Volume"
+                      value={line.volume}
+                      onChange={(e) => updateLine(idx, "volume", e.target.value)}
+                    />
+                    <Input
+                      type="number"
+                      min={1}
+                      placeholder="Aantal"
+                      value={line.quantity}
+                      onChange={(e) =>
+                        updateLine(idx, "quantity", Number(e.target.value) || 1)
+                      }
+                    />
+                  </div>
                 </div>
               ))}
             </div>
