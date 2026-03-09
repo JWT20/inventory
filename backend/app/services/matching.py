@@ -31,9 +31,15 @@ def find_best_matches(
         {"embedding": embedding_str, "top_n": top_n},
     ).fetchall()
 
+    if not rows:
+        return []
+
+    sku_ids = [row[0] for row in rows]
+    skus_by_id = {s.id: s for s in db.query(SKU).filter(SKU.id.in_(sku_ids)).all()}
+
     results = []
     for sku_id, similarity in rows:
-        sku = db.get(SKU, sku_id)
+        sku = skus_by_id.get(sku_id)
         if sku:
             results.append((sku, float(similarity)))
     return results

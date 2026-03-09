@@ -10,7 +10,7 @@ from app.events import publish_event
 from app.models import User
 from app.schemas import MatchResult
 from app.services.embedding import process_image
-from app.services.matching import find_best_match, find_best_matches
+from app.services.matching import find_best_matches
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -30,8 +30,11 @@ async def identify_box(
     """
     image_bytes = await file.read()
     description, embedding = process_image(image_bytes)
-    matched_sku, confidence = find_best_match(db, embedding)
     candidates = find_best_matches(db, embedding, top_n=5)
+
+    matched_sku, confidence = None, 0.0
+    if candidates and candidates[0][1] >= settings.match_threshold:
+        matched_sku, confidence = candidates[0]
 
     publish_event(
         "vision_identify",
