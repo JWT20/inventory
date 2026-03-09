@@ -36,13 +36,21 @@ class UserResponse(BaseModel):
 
 # --- SKU ---
 class SKUCreate(BaseModel):
-    sku_code: str
-    name: str
+    producer: str
+    wine_name: str
+    wine_type: str
+    vintage: int | None = None
+    volume: str = "0.75L"
     description: str | None = None
     active: bool = True
 
 
 class SKUUpdate(BaseModel):
+    producer: str | None = None
+    wine_name: str | None = None
+    wine_type: str | None = None
+    vintage: int | None = None
+    volume: str | None = None
     name: str | None = None
     description: str | None = None
     active: bool | None = None
@@ -54,6 +62,11 @@ class SKUResponse(BaseModel):
     name: str
     description: str | None
     active: bool
+    producer: str | None = None
+    wine_name: str | None = None
+    wine_type: str | None = None
+    vintage: int | None = None
+    volume: str | None = None
     created_at: datetime
     updated_at: datetime
     image_count: int = 0
@@ -78,3 +91,45 @@ class MatchResult(BaseModel):
     sku_code: str
     sku_name: str
     confidence: float
+
+
+# --- Orders ---
+class OrderLineResponse(BaseModel):
+    id: int
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    quantity: int
+    scanned_quantity: int
+
+    model_config = {"from_attributes": True}
+
+
+class OrderResponse(BaseModel):
+    id: int
+    order_number: str
+    customer_name: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    lines: list[OrderLineResponse] = []
+
+    model_config = {"from_attributes": True}
+
+
+class OrderImportResult(BaseModel):
+    order: OrderResponse
+    new_skus: list[SKUResponse]
+    existing_skus: list[SKUResponse]
+
+
+class ScanResult(BaseModel):
+    matched: bool
+    sku_code: str | None = None
+    sku_name: str | None = None
+    confidence: float = 0.0
+    order_line_id: int | None = None
+    scanned_quantity: int = 0
+    total_quantity: int = 0
+    customer_name: str = ""
+    message: str = ""

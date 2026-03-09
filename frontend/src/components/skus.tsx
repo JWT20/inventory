@@ -21,6 +21,11 @@ interface SKU {
   name: string;
   description: string | null;
   active: boolean;
+  producer: string | null;
+  wine_name: string | null;
+  wine_type: string | null;
+  vintage: number | null;
+  volume: string | null;
   image_count: number;
 }
 
@@ -30,6 +35,8 @@ interface RefImage {
   image_path: string;
   vision_description: string | null;
 }
+
+const WINE_TYPES = ["Rood", "Wit", "Rosé", "Mousserend", "Dessert", "Overig"];
 
 export function SKUsPage() {
   const { user } = useAuth();
@@ -78,7 +85,10 @@ export function SKUsPage() {
                   {s.active ? "Actief" : "Inactief"}
                 </Badge>
               </div>
-              <p className="text-sm text-muted-foreground">{s.sku_code}</p>
+              <p className="text-sm text-muted-foreground">
+                {s.producer} &bull; {s.wine_type}
+                {s.vintage ? ` &bull; ${s.vintage}` : ""} &bull; {s.volume}
+              </p>
               <p className="text-sm text-muted-foreground mt-1">
                 {s.image_count} referentiebeeld
                 {s.image_count !== 1 ? "en" : ""}
@@ -116,8 +126,11 @@ function SKUDialog({
 }) {
   const { user } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [skuCode, setSkuCode] = useState("");
-  const [name, setName] = useState("");
+  const [producer, setProducer] = useState("");
+  const [wineName, setWineName] = useState("");
+  const [wineType, setWineType] = useState("Rood");
+  const [vintage, setVintage] = useState("");
+  const [volume, setVolume] = useState("0.75L");
   const [description, setDescription] = useState("");
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [images, setImages] = useState<RefImage[]>([]);
@@ -127,14 +140,20 @@ function SKUDialog({
 
   useEffect(() => {
     if (open && sku) {
-      setSkuCode(sku.sku_code);
-      setName(sku.name);
+      setProducer(sku.producer || "");
+      setWineName(sku.wine_name || "");
+      setWineType(sku.wine_type || "Rood");
+      setVintage(sku.vintage ? String(sku.vintage) : "");
+      setVolume(sku.volume || "0.75L");
       setDescription(sku.description || "");
       setCurrentId(sku.id);
       loadImages(sku.id);
     } else if (open) {
-      setSkuCode("");
-      setName("");
+      setProducer("");
+      setWineName("");
+      setWineType("Rood");
+      setVintage("");
+      setVolume("0.75L");
       setDescription("");
       setCurrentId(null);
       setImages([]);
@@ -163,14 +182,21 @@ function SKUDialog({
       let skuId = currentId;
       if (skuId) {
         await api.updateSKU(skuId, {
-          name,
+          producer,
+          wine_name: wineName,
+          wine_type: wineType,
+          vintage: vintage ? parseInt(vintage) : null,
+          volume,
           description: description || null,
         });
         toast.success("SKU bijgewerkt");
       } else {
         const created = await api.createSKU({
-          sku_code: skuCode,
-          name,
+          producer,
+          wine_name: wineName,
+          wine_type: wineType,
+          vintage: vintage ? parseInt(vintage) : null,
+          volume,
           description: description || undefined,
         });
         skuId = created.id;
@@ -238,28 +264,63 @@ function SKUDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{sku ? "SKU Bewerken" : "Nieuwe SKU"}</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-2">
-            <Label>SKU Code</Label>
+            <Label>Producent</Label>
             <Input
-              value={skuCode}
-              onChange={(e) => setSkuCode(e.target.value)}
-              disabled={!!currentId}
+              value={producer}
+              onChange={(e) => setProducer(e.target.value)}
+              placeholder="bijv. Château Margaux"
               required
             />
           </div>
           <div className="space-y-2">
-            <Label>Naam</Label>
+            <Label>Wijnnaam</Label>
             <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
+              value={wineName}
+              onChange={(e) => setWineName(e.target.value)}
+              placeholder="bijv. Grand Vin"
               required
             />
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="space-y-2">
+              <Label>Type</Label>
+              <select
+                className="flex h-10 w-full rounded-md border border-border bg-input px-3 text-sm"
+                value={wineType}
+                onChange={(e) => setWineType(e.target.value)}
+              >
+                {WINE_TYPES.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label>Jaargang</Label>
+              <Input
+                value={vintage}
+                onChange={(e) => setVintage(e.target.value)}
+                placeholder="NV"
+                type="number"
+                min={1900}
+                max={2100}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Volume</Label>
+              <Input
+                value={volume}
+                onChange={(e) => setVolume(e.target.value)}
+                placeholder="0.75L"
+                required
+              />
+            </div>
           </div>
           <div className="space-y-2">
             <Label>Omschrijving</Label>

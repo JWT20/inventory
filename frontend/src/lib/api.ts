@@ -35,24 +35,6 @@ async function request(path: string, options: RequestInit = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-async function requestRaw(path: string): Promise<Response> {
-  const token = getToken();
-  const headers: Record<string, string> = {};
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-
-  const resp = await fetch(`${BASE}${path}`, { headers });
-
-  if (resp.status === 401) {
-    clearToken();
-    window.location.reload();
-    throw new Error("Sessie verlopen");
-  }
-  if (!resp.ok) {
-    throw new Error(`Request failed: ${resp.status}`);
-  }
-  return resp;
-}
-
 function json(path: string, method: string, data: unknown) {
   return request(path, {
     method,
@@ -94,8 +76,14 @@ export const api = {
   // SKUs
   listSKUs: (activeOnly = false) =>
     request(`/skus${activeOnly ? "?active_only=true" : ""}`),
-  createSKU: (data: { sku_code: string; name: string; description?: string }) =>
-    json("/skus", "POST", data),
+  createSKU: (data: {
+    producer: string;
+    wine_name: string;
+    wine_type: string;
+    vintage?: number | null;
+    volume?: string;
+    description?: string;
+  }) => json("/skus", "POST", data),
   getSKU: (id: number) => request(`/skus/${id}`),
   updateSKU: (id: number, data: Record<string, unknown>) =>
     json(`/skus/${id}`, "PATCH", data),
@@ -108,7 +96,23 @@ export const api = {
   deleteImage: (skuId: number, imageId: number) =>
     request(`/skus/${skuId}/images/${imageId}`, { method: "DELETE" }),
 
-  // Receiving
+  // Orders
+  importOrder: (file: File, orderNumber: string, customerName: string) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    form.append("order_number", orderNumber);
+    form.append("customer_name", customerName);
+    return request("/orders/import", { method: "POST", body: form });
+  },
+  listOrders: (status?: string) =>
+    request(`/orders${status ? `?status=${status}` : ""}`),
+  getOrder: (id: number) => request(`/orders/${id}`),
+  deleteOrder: (id: number) => request(`/orders/${id}`, { method: "DELETE" }),
+  activateOrder: (id: number) => request(`/orders/${id}/activate`, { method: "POST" }),
+  scanOrder: (orderId: number, blob: Blob) =>
+    upload(`/orders/${orderId}/scan`, blob, "scan.jpg"),
+
+  // Receiving (ad-hoc, without order)
   identifyBox: (blob: Blob) =>
     upload("/receiving/identify", blob, "scan.jpg"),
   createNewProduct: (
@@ -125,21 +129,6 @@ export const api = {
       fields,
       "image.jpg",
     );
-  },
-
-  // Labels (fetched with auth)
-  fetchBarcode: async (skuId: number): Promise<string> => {
-    const resp = await requestRaw(`/labels/${skuId}/barcode.png`);
-    const blob = await resp.blob();
-    return URL.createObjectURL(blob);
-  },
-  fetchLabelHtml: async (skuId: number): Promise<string> => {
-    const resp = await requestRaw(`/labels/${skuId}/label.pdf`);
-    return resp.text();
-  },
-  fetchZpl: async (skuId: number): Promise<Blob> => {
-    const resp = await requestRaw(`/labels/${skuId}/label.zpl`);
-    return resp.blob();
   },
 
   // Vision (ad-hoc)

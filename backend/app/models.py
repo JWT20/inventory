@@ -20,6 +20,8 @@ EMBEDDING_DIM = 3072
 
 VALID_ROLES = ("admin", "merchant", "courier")
 
+WINE_TYPES = ("Rood", "Wit", "Rosé", "Mousserend", "Dessert", "Overig")
+
 
 class User(Base):
     __tablename__ = "users"
@@ -46,10 +48,18 @@ class SKU(Base):
     __tablename__ = "skus"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    sku_code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    sku_code: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Wine-specific fields
+    producer: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    wine_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    wine_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    vintage: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    volume: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -60,6 +70,7 @@ class SKU(Base):
     reference_images: Mapped[list["ReferenceImage"]] = relationship(
         back_populates="sku", cascade="all, delete-orphan"
     )
+    order_lines: Mapped[list["OrderLine"]] = relationship(back_populates="sku")
 
 
 class ReferenceImage(Base):
@@ -75,3 +86,38 @@ class ReferenceImage(Base):
     )
 
     sku: Mapped["SKU"] = relationship(back_populates="reference_images")
+
+
+VALID_ORDER_STATUSES = ("draft", "active", "completed")
+
+
+class Order(Base):
+    __tablename__ = "orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_number: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    customer_name: Mapped[str] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    lines: Mapped[list["OrderLine"]] = relationship(
+        back_populates="order", cascade="all, delete-orphan"
+    )
+
+
+class OrderLine(Base):
+    __tablename__ = "order_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"))
+    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    scanned_quantity: Mapped[int] = mapped_column(Integer, default=0)
+
+    order: Mapped["Order"] = relationship(back_populates="lines")
+    sku: Mapped["SKU"] = relationship(back_populates="order_lines")

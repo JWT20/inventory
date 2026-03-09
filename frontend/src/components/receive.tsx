@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,7 @@ interface MatchResult {
   confidence: number;
 }
 
-type Step = "scan" | "label" | "new-product";
+type Step = "scan" | "result" | "new-product";
 
 export function ReceivePage() {
   const [step, setStep] = useState<Step>("scan");
@@ -25,20 +25,15 @@ export function ReceivePage() {
     setCapturedBlob(blob);
     if (result) {
       setMatch(result);
-      setStep("label");
+      setStep("result");
     } else {
       setStep("new-product");
     }
   }
 
-  function handleNewProductCreated(sku: { id: number; sku_code: string; name: string }) {
-    setMatch({
-      sku_id: sku.id,
-      sku_code: sku.sku_code,
-      sku_name: sku.name,
-      confidence: 1.0,
-    });
-    setStep("label");
+  function handleNewProductCreated() {
+    toast.success("Product aangemaakt — klaar voor volgende scan");
+    reset();
   }
 
   function rejectMatch() {
@@ -54,12 +49,12 @@ export function ReceivePage() {
 
   return (
     <div>
-      <h2 className="text-xl font-bold mb-4">Scan & Label</h2>
+      <h2 className="text-xl font-bold mb-4">Scan</h2>
 
       {step === "scan" && <ScanStep onResult={handleMatch} />}
 
-      {step === "label" && match && (
-        <LabelStep match={match} onDone={reset} onReject={rejectMatch} />
+      {step === "result" && match && (
+        <ResultStep match={match} onDone={reset} onReject={rejectMatch} />
       )}
 
       {step === "new-product" && capturedBlob && (
@@ -166,9 +161,9 @@ function ScanStep({
   );
 }
 
-/* ---------- Step 2: Print Label ---------- */
+/* ---------- Step 2: Match Result ---------- */
 
-function LabelStep({
+function ResultStep({
   match,
   onDone,
   onReject,
@@ -177,64 +172,6 @@ function LabelStep({
   onDone: () => void;
   onReject: () => void;
 }) {
-  const [barcodeUrl, setBarcodeUrl] = useState<string | null>(null);
-
-  const loadBarcode = useCallback(async () => {
-    try {
-      const url = await api.fetchBarcode(match.sku_id);
-      setBarcodeUrl(url);
-    } catch {
-      /* barcode preview is non-critical */
-    }
-  }, [match.sku_id]);
-
-  useEffect(() => {
-    loadBarcode();
-    return () => {
-      setBarcodeUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return null;
-      });
-    };
-  }, [loadBarcode]);
-
-  async function openPrintLabel() {
-    const win = window.open("", "_blank");
-    if (!win) {
-      toast.error("Pop-up geblokkeerd — sta pop-ups toe voor deze site");
-      return;
-    }
-    win.document.write("<p>Label laden...</p>");
-    try {
-      const html = await api.fetchLabelHtml(match.sku_id);
-      win.document.open();
-      win.document.write(html);
-      win.document.close();
-      // Small delay to let the browser render before triggering print
-      setTimeout(() => {
-        win.focus();
-        win.print();
-      }, 300);
-    } catch {
-      win.close();
-      toast.error("Kan label niet laden");
-    }
-  }
-
-  async function downloadZpl() {
-    try {
-      const blob = await api.fetchZpl(match.sku_id);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${match.sku_code}.zpl`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      toast.error("Kan ZPL niet downloaden");
-    }
-  }
-
   return (
     <>
       <Card className="p-4 mb-4">
@@ -249,38 +186,8 @@ function LabelStep({
         </div>
       </Card>
 
-      <Card className="p-4 mb-4">
-        <Label className="mb-2 block text-sm text-muted-foreground">
-          Barcode label
-        </Label>
-        <div className="flex justify-center bg-white rounded-lg p-4 mb-3">
-          {barcodeUrl ? (
-            <img
-              src={barcodeUrl}
-              alt={`Barcode ${match.sku_code}`}
-              className="max-w-full h-auto"
-            />
-          ) : (
-            <p className="text-sm text-muted-foreground">Laden...</p>
-          )}
-        </div>
-        <p className="text-center text-sm font-mono text-muted-foreground">
-          {match.sku_code}
-        </p>
-      </Card>
-
       <div className="flex flex-col gap-3">
-        <Button size="lg" className="w-full h-14 text-lg" onClick={openPrintLabel}>
-          Label printen
-        </Button>
-        <Button
-          variant="outline"
-          onClick={downloadZpl}
-          className="h-10 text-sm font-medium text-muted-foreground hover:text-foreground"
-        >
-          Download ZPL (Zebra printer)
-        </Button>
-        <Button variant="secondary" size="lg" className="w-full" onClick={onDone}>
+        <Button size="lg" className="w-full h-14 text-lg" onClick={onDone}>
           Volgende doos scannen
         </Button>
         <button
@@ -302,7 +209,7 @@ function NewProductStep({
   onBack,
 }: {
   blob: Blob;
-  onCreated: (sku: { id: number; sku_code: string; name: string }) => void;
+  onCreated: () => void;
   onBack: () => void;
 }) {
   const [skuCode, setSkuCode] = useState("");
@@ -319,14 +226,13 @@ function NewProductStep({
     e.preventDefault();
     setSubmitting(true);
     try {
-      const sku = await api.createNewProduct(
+      await api.createNewProduct(
         blob,
         skuCode,
         name,
         description || undefined,
       );
-      toast.success(`Nieuw product "${name}" aangemaakt`);
-      onCreated({ id: sku.id, sku_code: sku.sku_code, name: sku.name });
+      onCreated();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Fout bij aanmaken");
     } finally {
@@ -366,7 +272,7 @@ function NewProductStep({
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="bijv. Château Margaux 2018"
+            placeholder="bijv. Chateau Margaux 2018"
             required
           />
         </div>

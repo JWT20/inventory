@@ -11,14 +11,14 @@ from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.models import User
 from app.events import init_producer, shutdown_producer
-from app.routers import auth, labels, receiving, skus, vision
+from app.routers import auth, orders, receiving, skus, vision
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Warehouse Receiving API",
-    description="Vision-based product identification for warehouse receiving and labeling",
+    description="Vision-based product identification for warehouse receiving",
     version="2.0.0",
 )
 
@@ -36,8 +36,8 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(skus.router, prefix="/api")
+app.include_router(orders.router, prefix="/api")
 app.include_router(receiving.router, prefix="/api")
-app.include_router(labels.router, prefix="/api")
 app.include_router(vision.router, prefix="/api")
 
 
@@ -100,10 +100,34 @@ def _migrate_embedding_dimension():
         logger.info("Embedding migration complete — old SKUs and images cleared")
 
 
+def _migrate_add_wine_fields():
+    """One-time migration: add wine-specific columns to skus table."""
+    inspector = inspect(engine)
+    if "skus" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("skus")}
+    new_cols = {
+        "producer": "VARCHAR(255)",
+        "wine_name": "VARCHAR(255)",
+        "wine_type": "VARCHAR(50)",
+        "vintage": "INTEGER",
+        "volume": "VARCHAR(20)",
+    }
+    to_add = {k: v for k, v in new_cols.items() if k not in columns}
+    if not to_add:
+        return
+    logger.info("Adding wine columns to skus: %s", list(to_add.keys()))
+    with engine.begin() as conn:
+        for col, dtype in to_add.items():
+            conn.execute(text(f"ALTER TABLE skus ADD COLUMN {col} {dtype}"))
+    logger.info("Wine columns migration complete")
+
+
 @app.on_event("startup")
 def on_startup():
     _migrate_is_admin_to_role()
     _migrate_embedding_dimension()
+    _migrate_add_wine_fields()
 
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)

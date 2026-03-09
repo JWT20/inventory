@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import logging
 
@@ -17,6 +18,30 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/skus", tags=["skus"])
 
 
+def generate_sku_code(producer: str, wine_name: str, wine_type: str, vintage: int | None, volume: str) -> str:
+    """Generate a deterministic SKU code from wine attributes."""
+    def slugify(s: str) -> str:
+        s = s.upper().strip()
+        s = re.sub(r"[^A-Z0-9]+", "-", s)
+        return s.strip("-")
+
+    vol = re.sub(r"[^0-9]", "", volume)
+    parts = [slugify(producer), slugify(wine_name), slugify(wine_type)]
+    if vintage:
+        parts.append(str(vintage))
+    parts.append(vol)
+    return "-".join(p for p in parts if p)
+
+
+def generate_display_name(producer: str, wine_name: str, vintage: int | None, volume: str) -> str:
+    """Generate a human-readable display name."""
+    parts = [producer, wine_name]
+    if vintage:
+        parts.append(str(vintage))
+    parts.append(volume)
+    return " ".join(parts)
+
+
 def _sku_to_response(sku: SKU) -> SKUResponse:
     return SKUResponse(
         id=sku.id,
@@ -24,6 +49,11 @@ def _sku_to_response(sku: SKU) -> SKUResponse:
         name=sku.name,
         description=sku.description,
         active=sku.active,
+        producer=sku.producer,
+        wine_name=sku.wine_name,
+        wine_type=sku.wine_type,
+        vintage=sku.vintage,
+        volume=sku.volume,
         created_at=sku.created_at,
         updated_at=sku.updated_at,
         image_count=len(sku.reference_images),
@@ -49,10 +79,23 @@ def create_sku(
     db: Session = Depends(get_db),
     user: User = Depends(require_product_manager),
 ):
-    existing = db.query(SKU).filter(SKU.sku_code == data.sku_code).first()
+    sku_code = generate_sku_code(data.producer, data.wine_name, data.wine_type, data.vintage, data.volume)
+    name = generate_display_name(data.producer, data.wine_name, data.vintage, data.volume)
+
+    existing = db.query(SKU).filter(SKU.sku_code == sku_code).first()
     if existing:
-        raise HTTPException(400, f"SKU code '{data.sku_code}' already exists")
-    sku = SKU(**data.model_dump())
+        raise HTTPException(400, f"SKU '{sku_code}' already exists")
+    sku = SKU(
+        sku_code=sku_code,
+        name=name,
+        description=data.description,
+        active=data.active,
+        producer=data.producer,
+        wine_name=data.wine_name,
+        wine_type=data.wine_type,
+        vintage=data.vintage,
+        volume=data.volume,
+    )
     db.add(sku)
     db.commit()
     db.refresh(sku)
@@ -91,6 +134,13 @@ def update_sku(
     changed_fields = data.model_dump(exclude_unset=True)
     for field, value in changed_fields.items():
         setattr(sku, field, value)
+
+    # Regenerate sku_code and name if wine fields changed
+    wine_fields = {"producer", "wine_name", "wine_type", "vintage", "volume"}
+    if wine_fields & changed_fields.keys():
+        sku.sku_code = generate_sku_code(sku.producer, sku.wine_name, sku.wine_type, sku.vintage, sku.volume)
+        sku.name = generate_display_name(sku.producer, sku.wine_name, sku.vintage, sku.volume)
+
     db.commit()
     db.refresh(sku)
     publish_event(

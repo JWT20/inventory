@@ -25,7 +25,6 @@ Eliminates person-dependency in the wine picking process by identifying boxes vi
 - **Embeddings**: gemini-embedding-001 (3072D) for vector matching
 - **Database**: PostgreSQL 16 + pgvector for cosine similarity search
 - **Event logging**: Kafka (KRaft) → Apache Pinot (real-time analytics)
-- **Labels**: Code128 barcode (PNG), printable PDF, Zebra ZPL
 - **Hosting**: Docker Compose, designed for Oracle Cloud Always Free (6GB RAM)
 
 ## Quick Start
@@ -46,32 +45,46 @@ docker compose up -d
 
 ## User Roles
 
-| Role     | Permissions                            |
-|----------|----------------------------------------|
-| admin    | Full access: SKUs, users, delete       |
-| merchant | Manage SKUs and reference images       |
-| courier  | Scan boxes only                        |
+| Role     | Permissions                                    |
+|----------|------------------------------------------------|
+| admin    | Full access: SKUs, orders, users, delete       |
+| merchant | Manage SKUs, import orders, upload images       |
+| courier  | Scan boxes only                                |
 
 ## Workflow
 
-### Register a new SKU
-1. Go to the **SKU's** tab
-2. Click **+ Nieuw**, fill in SKU code and name
-3. After saving: upload a photo of the box via **Foto toevoegen**
-4. Embedding is generated automatically via Gemini
+### 1. Import an order (CSV/Excel)
+Upload a CSV or Excel file with columns: `producent, wijnnaam, type, jaargang, volume, aantal`.
 
-### Identify a box (receiving)
-1. Go to the **Ontvangst** tab
-2. Camera opens automatically
-3. Point at the box and press **Scan**
-4. Result: matched SKU with confidence score, or "not recognized"
-5. If not recognized: create the product inline with a reference photo
+- Existing SKUs are matched automatically by generated SKU code
+- New SKUs are created (without reference image)
+- Order starts in **draft** status
 
-### Generate labels
-After identifying a box, generate:
-- **Barcode PNG** (Code128)
-- **Printable PDF** (4x2 inch label)
-- **ZPL** (for Zebra thermal printers)
+### 2. Upload reference images for new SKUs
+After import, the system shows which SKUs need a reference image. Upload a photo of each box.
+
+### 3. Activate the order
+Once all SKUs have at least one reference image, activate the order. Status becomes **active**.
+
+### 4. Scan boxes
+Open an active order and scan boxes with the camera:
+- Vision AI identifies the box → matches against order lines
+- Each scan books 1 box on the correct line
+- Display: **"Zet op rolcontainer [KLANT X]"**
+- When all lines are fully scanned → order status becomes **completed**
+
+### SKU structure
+Each SKU is identified by wine-specific attributes:
+
+| Field | Example |
+|-------|---------|
+| Producent | Château Margaux |
+| Wijnnaam | Grand Vin |
+| Type | Rood / Wit / Rosé / Mousserend |
+| Jaargang | 2019 (or empty for NV) |
+| Volume | 0.75L |
+
+The `sku_code` and display `name` are auto-generated from these fields.
 
 ## API Endpoints
 
@@ -84,16 +97,18 @@ After identifying a box, generate:
 | GET/POST | `/api/skus` | List / create SKUs |
 | GET/PATCH/DELETE | `/api/skus/{id}` | Read / update / delete SKU |
 | POST | `/api/skus/{id}/images` | Upload reference image |
-| POST | `/api/receiving/identify` | Identify box via camera |
-| POST | `/api/receiving/new-product` | Create SKU inline with image |
-| POST | `/api/vision/identify` | Ad-hoc box identification |
-| GET | `/api/labels/{sku_id}/barcode.png` | Barcode image |
-| GET | `/api/labels/{sku_id}/label.pdf` | Printable label |
-| GET | `/api/labels/{sku_id}/label.zpl` | Zebra ZPL label |
+| POST | `/api/orders/import` | Import order from CSV/Excel |
+| GET | `/api/orders` | List orders (filter by status) |
+| GET | `/api/orders/{id}` | Order detail with lines |
+| DELETE | `/api/orders/{id}` | Delete order |
+| POST | `/api/orders/{id}/activate` | Activate order |
+| POST | `/api/orders/{id}/scan` | Scan box for order |
+| POST | `/api/receiving/identify` | Ad-hoc box identification |
+| POST | `/api/vision/identify` | Ad-hoc vision identification |
 
 ## Event Logging
 
-All business operations are published to Kafka and ingested by Apache Pinot for real-time analytics. Events include logins, SKU changes, vision identifications (with LLM descriptions and confidence scores), and user management.
+All business operations are published to Kafka and ingested by Apache Pinot for real-time analytics. Events include logins, SKU changes, order imports, scans (with LLM descriptions and confidence scores), and user management.
 
 See [`docs/event-logging.md`](docs/event-logging.md) for query examples.
 
@@ -115,7 +130,7 @@ cd deploy
 ```
 backend/          FastAPI application
   app/
-    routers/      API endpoints (auth, skus, receiving, vision, labels)
+    routers/      API endpoints (auth, skus, orders, receiving, vision)
     services/     Gemini vision + embedding, pgvector matching
     events.py     Kafka event publisher
 frontend/         React + Vite + Tailwind + Shadcn/ui
