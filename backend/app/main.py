@@ -146,12 +146,26 @@ def _migrate_sku_wine_fields():
             conn.execute(text(f"ALTER TABLE skus ADD COLUMN {col} {dtype}"))
 
 
+def _migrate_order_line_klant():
+    """Add klant column to order_lines if missing."""
+    inspector = inspect(engine)
+    if "order_lines" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("order_lines")}
+    if "klant" in columns:
+        return
+    logger.info("Adding klant column to order_lines table")
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE order_lines ADD COLUMN klant VARCHAR(150) NOT NULL DEFAULT ''"))
+
+
 @app.on_event("startup")
 def on_startup():
     _migrate_is_admin_to_role()
     _migrate_embedding_dimension()
     _migrate_order_tables()
     _migrate_sku_wine_fields()
+    _migrate_order_line_klant()
 
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)

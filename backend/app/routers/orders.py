@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
 
 
-REQUIRED_CSV_COLUMNS = {"producent", "wijnaam", "type", "jaargang", "volume", "aantal"}
+REQUIRED_CSV_COLUMNS = {"klant", "producent", "wijnaam", "type", "jaargang", "volume", "aantal"}
 
 
 def _order_line_to_response(line: OrderLine) -> OrderLineResponse:
@@ -38,6 +38,7 @@ def _order_line_to_response(line: OrderLine) -> OrderLineResponse:
         sku_id=line.sku_id,
         sku_code=line.sku.sku_code,
         sku_name=line.sku.name,
+        klant=line.klant,
         quantity=line.quantity,
         booked_count=line.booked_count,
         has_image=len(line.sku.reference_images) > 0,
@@ -84,6 +85,7 @@ def _parse_csv(content: str) -> tuple[list[CSVRow], list[str]]:
                 errors.append(f"Rij {i}: aantal moet groter zijn dan 0")
                 continue
             csv_row = CSVRow(
+                klant=row_data["klant"],
                 producent=row_data["producent"],
                 wijnaam=row_data["wijnaam"],
                 type=row_data["type"],
@@ -152,16 +154,16 @@ async def upload_csv(
     db.add(order)
     db.flush()
 
-    # Group rows by SKU code and sum quantities
-    sku_quantities: dict[str, int] = {}
+    # Group rows by (SKU code, klant) and sum quantities
+    line_quantities: dict[tuple[str, str], int] = {}
     for row in rows:
-        code = row.sku_code
-        sku_quantities[code] = sku_quantities.get(code, 0) + row.aantal
+        key = (row.sku_code, row.klant)
+        line_quantities[key] = line_quantities.get(key, 0) + row.aantal
 
     all_skus = {s.sku_code: s for s in matched_skus + new_skus}
-    for sku_code, qty in sku_quantities.items():
+    for (sku_code, klant), qty in line_quantities.items():
         sku = all_skus[sku_code]
-        line = OrderLine(order_id=order.id, sku_id=sku.id, quantity=qty)
+        line = OrderLine(order_id=order.id, sku_id=sku.id, klant=klant, quantity=qty)
         db.add(line)
 
     # Determine status: if any new SKU has no image → pending_images
@@ -179,7 +181,7 @@ async def upload_csv(
             "order_reference": ref,
             "matched_count": len(matched_skus),
             "new_count": len(new_skus),
-            "total_lines": len(sku_quantities),
+            "total_lines": len(line_quantities),
         },
         user=user,
         resource_type="order",
@@ -209,18 +211,20 @@ def create_order(
     db.add(order)
     db.flush()
 
-    # Group by sku_code, sum quantities, resolve SKUs
-    sku_quantities: dict[str, int] = {}
-    sku_lines: dict[str, object] = {}
+    # Group by (sku_code, klant), sum quantities, resolve SKUs
+    line_key = tuple[str, str]  # (sku_code, klant)
+    line_quantities: dict[line_key, int] = {}
+    line_data: dict[str, object] = {}  # sku_code → first line (for SKU creation)
     for line in body.lines:
         code = generate_sku_code(line.producent, line.wijnaam, line.wijntype, line.jaargang, line.volume)
-        sku_quantities[code] = sku_quantities.get(code, 0) + line.quantity
-        if code not in sku_lines:
-            sku_lines[code] = line
+        key = (code, line.klant)
+        line_quantities[key] = line_quantities.get(key, 0) + line.quantity
+        if code not in line_data:
+            line_data[code] = line
 
     has_new = False
-    for code, qty in sku_quantities.items():
-        line = sku_lines[code]
+    for (code, klant), qty in line_quantities.items():
+        line = line_data[code]
         sku = db.query(SKU).filter(SKU.sku_code == code).first()
         if not sku:
             sku = SKU(
@@ -236,13 +240,13 @@ def create_order(
             db.add(sku)
             db.flush()
             has_new = True
-        db.add(OrderLine(order_id=order.id, sku_id=sku.id, quantity=qty))
+        db.add(OrderLine(order_id=order.id, sku_id=sku.id, klant=klant, quantity=qty))
 
     # Determine status
     if has_new:
         order.status = "pending_images"
     else:
-        all_skus = [db.query(SKU).filter(SKU.sku_code == c).first() for c in sku_quantities]
+        all_skus = [db.query(SKU).filter(SKU.sku_code == c).first() for c in line_data]
         all_have_images = all(len(s.reference_images) > 0 for s in all_skus)
         order.status = "active" if all_have_images else "pending_images"
 
@@ -251,7 +255,7 @@ def create_order(
 
     publish_event(
         "order_created_manual",
-        details={"order_reference": ref, "total_lines": len(sku_quantities)},
+        details={"order_reference": ref, "total_lines": len(line_quantities)},
         user=user,
         resource_type="order",
         resource_id=order.id,
@@ -348,8 +352,8 @@ def list_bookings(
             order_reference=order.reference,
             sku_code=b.sku.sku_code,
             sku_name=b.sku.name,
-            merchant_name=order.merchant.username,
-            rolcontainer=f"KLANT {order.merchant.username.upper()}",
+            klant=b.order_line.klant,
+            rolcontainer=f"KLANT {b.order_line.klant.upper()}",
             created_at=b.created_at,
         )
         for b in bookings

@@ -116,6 +116,7 @@ class MatchResult(BaseModel):
 
 # --- CSV Row ---
 class CSVRow(BaseModel):
+    klant: str
     producent: str
     wijnaam: str
     type: str
@@ -144,6 +145,7 @@ class OrderLineResponse(BaseModel):
     sku_id: int
     sku_code: str
     sku_name: str
+    klant: str
     quantity: int
     booked_count: int
     has_image: bool
@@ -166,6 +168,7 @@ class OrderResponse(BaseModel):
 
 
 class ManualOrderLineCreate(BaseModel):
+    klant: str = Field(..., min_length=1)
     producent: str = Field(..., min_length=1)
     wijnaam: str = Field(..., min_length=1)
     wijntype: str = Field(..., min_length=1)
@@ -185,7 +188,7 @@ class BookingResponse(BaseModel):
     order_reference: str
     sku_code: str
     sku_name: str
-    merchant_name: str
+    klant: str
     rolcontainer: str
     created_at: datetime
 

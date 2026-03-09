@@ -20,7 +20,7 @@ interface BookingResult {
   order_reference: string;
   sku_code: string;
   sku_name: string;
-  merchant_name: string;
+  klant: string;
   rolcontainer: string;
 }
 
@@ -292,8 +292,8 @@ function ResultStep({
             {booking.order_reference}
           </p>
           <p className="text-sm">
-            <span className="text-muted-foreground">Handelaar:</span>{" "}
-            {booking.merchant_name}
+            <span className="text-muted-foreground">Klant:</span>{" "}
+            {booking.klant}
           </p>
         </div>
       </Card>

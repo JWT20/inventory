@@ -5,18 +5,18 @@ import io
 from tests.conftest import auth_header
 
 
-VALID_CSV = """producent;wijnaam;type;jaargang;volume;aantal
-Château Grand;Cru Rouge;Rood;2019;750;6
-Domaine Belle;Blanc Premier;Wit;2021;750;12
-Château Grand;Cru Rouge;Rood;2019;750;4
+VALID_CSV = """klant;producent;wijnaam;type;jaargang;volume;aantal
+Restaurant De Zwaan;Château Grand;Cru Rouge;Rood;2019;750;6
+Wijnbar Zuid;Domaine Belle;Blanc Premier;Wit;2021;750;12
+Restaurant De Zwaan;Château Grand;Cru Rouge;Rood;2019;750;4
 """
 
 CSV_MISSING_COLUMN = """producent;wijnaam;type;jaargang;volume
 Château Grand;Cru Rouge;Rood;2019;750
 """
 
-CSV_INVALID_AANTAL = """producent;wijnaam;type;jaargang;volume;aantal
-Château Grand;Cru Rouge;Rood;2019;750;0
+CSV_INVALID_AANTAL = """klant;producent;wijnaam;type;jaargang;volume;aantal
+Restaurant De Zwaan;Château Grand;Cru Rouge;Rood;2019;750;0
 """
 
 
@@ -196,6 +196,7 @@ class TestSKUCodeGeneration:
         from app.schemas import CSVRow
 
         row = CSVRow(
+            klant="Restaurant De Zwaan",
             producent="Château Grand",
             wijnaam="Cru Rouge",
             type="Rood",
@@ -209,6 +210,7 @@ class TestSKUCodeGeneration:
         from app.schemas import CSVRow
 
         row = CSVRow(
+            klant="Wijnbar Zuid",
             producent="Domaine Belle",
             wijnaam="Blanc Premier",
             type="Wit",
@@ -222,6 +224,7 @@ class TestSKUCodeGeneration:
         from app.schemas import CSVRow
 
         row = CSVRow(
+            klant="Restaurant De Zwaan",
             producent="Château Grand",
             wijnaam="Cru Rouge",
             type="Rood",

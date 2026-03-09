@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 
 interface WineLine {
+  klant: string;
   producent: string;
   wijnaam: string;
   wijntype: string;
@@ -34,6 +35,7 @@ interface OrderLine {
   sku_id: number;
   sku_code: string;
   sku_name: string;
+  klant: string;
   quantity: number;
   booked_count: number;
   has_image: boolean;
@@ -168,7 +170,7 @@ export function OrdersPage() {
 }
 
 const EMPTY_LINE: WineLine = {
-  producent: "", wijnaam: "", wijntype: "", jaargang: "", volume: "", quantity: 1,
+  klant: "", producent: "", wijnaam: "", wijntype: "", jaargang: "", volume: "", quantity: 1,
 };
 
 function ManualOrderDialog({
@@ -217,7 +219,7 @@ function ManualOrderDialog({
       return;
     }
     const valid = lines.filter(
-      (l) => l.producent && l.wijnaam && l.wijntype && l.jaargang && l.volume && l.quantity > 0,
+      (l) => l.klant && l.producent && l.wijnaam && l.wijntype && l.jaargang && l.volume && l.quantity > 0,
     );
     if (valid.length === 0) {
       toast.error("Vul minimaal één complete regel in");
@@ -294,6 +296,12 @@ function ManualOrderDialog({
                       </Button>
                     )}
                   </div>
+                  <input
+                    className={inp}
+                    placeholder="Klant"
+                    value={line.klant}
+                    onChange={(e) => updateLine(idx, "klant", e.target.value)}
+                  />
                   <div className="grid grid-cols-2 gap-2">
                     <input
                       className={inp}
@@ -403,7 +411,7 @@ function CSVUploadDialog({
         <div className="space-y-4">
           <div>
             <Label className="mb-2 block text-sm">
-              Upload een CSV met kolommen: producent, wijnaam, type, jaargang,
+              Upload een CSV met kolommen: klant, producent, wijnaam, type, jaargang,
               volume, aantal (scheidingsteken: puntkomma)
             </Label>
             <Button
@@ -578,7 +586,7 @@ function OrderDetailDialog({
                   <div>
                     <p className="font-medium">{line.sku_name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {line.sku_code}
+                      {line.sku_code} &middot; Klant: {line.klant}
                     </p>
                   </div>
                   <div className="text-right flex items-center gap-2">
