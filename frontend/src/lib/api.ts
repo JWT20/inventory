@@ -140,7 +140,14 @@ export const api = {
   },
   createOrder: (data: {
     merchant_id: number;
-    lines: { sku_id: number; quantity: number }[];
+    lines: {
+      producent: string;
+      wijnaam: string;
+      wijntype: string;
+      jaargang: string;
+      volume: string;
+      quantity: number;
+    }[];
   }) => json("/orders", "POST", data),
   listOrders: () => request("/orders"),
   getOrder: (id: number) => request(`/orders/${id}`),

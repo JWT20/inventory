@@ -166,7 +166,11 @@ class OrderResponse(BaseModel):
 
 
 class ManualOrderLineCreate(BaseModel):
-    sku_id: int
+    producent: str = Field(..., min_length=1)
+    wijnaam: str = Field(..., min_length=1)
+    wijntype: str = Field(..., min_length=1)
+    jaargang: str = Field(..., min_length=1)
+    volume: str = Field(..., min_length=1)
     quantity: int = Field(..., gt=0)
 
 
