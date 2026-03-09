@@ -19,7 +19,7 @@ Each event contains:
 | timestamp_ms   | LONG   | Unix epoch in milliseconds           |
 | user_id        | INT    | ID of the user who triggered it      |
 | username       | STRING | Username                             |
-| resource_type  | STRING | e.g. `receiving`, `sku`, `order`     |
+| resource_type  | STRING | e.g. `receiving`, `sku`, `auth`      |
 | resource_id    | INT    | ID of the related resource           |
 | details        | JSON   | Event-specific payload               |
 
@@ -27,12 +27,10 @@ Each event contains:
 
 Events are published via `publish_event()` in `backend/app/events.py`. This is called from the API routers:
 
-- `backend/app/routers/auth.py` — login events
-- `backend/app/routers/skus.py` — SKU creation/updates
+- `backend/app/routers/auth.py` — login, user creation/deletion events
+- `backend/app/routers/skus.py` — SKU and reference image events
 - `backend/app/routers/receiving.py` — box identification (includes LLM vision output)
-- `backend/app/routers/picks.py` — pick events
-- `backend/app/routers/orders.py` — order events
-- `backend/app/routers/vision.py` — vision processing events
+- `backend/app/routers/vision.py` — ad-hoc vision identification events
 
 ## Querying Events
 

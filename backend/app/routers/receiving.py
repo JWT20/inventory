@@ -10,9 +10,10 @@ from app.config import settings
 from app.database import get_db
 from app.events import publish_event
 from app.models import SKU, ReferenceImage, User
+from app.routers.skus import _sku_to_response
 from app.schemas import MatchResult, SKUResponse
 from app.services.embedding import process_image
-from app.services.matching import find_best_match, find_best_matches
+from app.services.matching import find_best_matches
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -41,8 +42,11 @@ async def identify_box(
         f.write(image_bytes)
 
     description, embedding = process_image(image_bytes)
-    matched_sku, confidence = find_best_match(db, embedding)
     candidates = find_best_matches(db, embedding, top_n=5)
+
+    matched_sku, confidence = None, 0.0
+    if candidates and candidates[0][1] >= settings.match_threshold:
+        matched_sku, confidence = candidates[0]
 
     publish_event(
         "box_identified",
@@ -124,13 +128,4 @@ async def create_product_inline(
         resource_id=sku.id,
     )
 
-    return SKUResponse(
-        id=sku.id,
-        sku_code=sku.sku_code,
-        name=sku.name,
-        description=sku.description,
-        active=sku.active,
-        created_at=sku.created_at,
-        updated_at=sku.updated_at,
-        image_count=len(sku.reference_images),
-    )
+    return _sku_to_response(sku)
