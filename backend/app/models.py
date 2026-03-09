@@ -118,6 +118,7 @@ class OrderLine(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"))
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
+    klant: Mapped[str] = mapped_column(String(150), default="")
     quantity: Mapped[int] = mapped_column(Integer)
     booked_count: Mapped[int] = mapped_column(Integer, default=0)
 

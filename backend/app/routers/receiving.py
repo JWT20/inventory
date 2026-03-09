@@ -153,7 +153,7 @@ async def book_box(
 
     db.commit()
 
-    rolcontainer = f"KLANT {order.merchant.username.upper()}"
+    rolcontainer = f"KLANT {order_line.klant.upper()}"
 
     publish_event(
         "box_booked",
@@ -162,6 +162,7 @@ async def book_box(
             "sku_code": matched_sku.sku_code,
             "confidence": round(confidence, 4),
             "rolcontainer": rolcontainer,
+            "klant": order_line.klant,
             "order_completed": all_booked,
         },
         user=user,
@@ -175,7 +176,7 @@ async def book_box(
         order_reference=order.reference,
         sku_code=matched_sku.sku_code,
         sku_name=matched_sku.name,
-        merchant_name=order.merchant.username,
+        klant=order_line.klant,
         rolcontainer=rolcontainer,
         created_at=booking.created_at,
     )

@@ -141,6 +141,7 @@ export const api = {
   createOrder: (data: {
     merchant_id: number;
     lines: {
+      klant: string;
       producent: string;
       wijnaam: string;
       wijntype: string;
