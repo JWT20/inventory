@@ -14,6 +14,17 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+interface SKUOption {
+  id: number;
+  sku_code: string;
+  name: string;
+  producent?: string;
+  wijnaam?: string;
+  wijntype?: string;
+  jaargang?: string;
+  volume?: string;
+}
+
 interface WineLine {
   klant: string;
   producent: string;
@@ -184,6 +195,7 @@ function ManualOrderDialog({
 }) {
   const { user } = useAuth();
   const [merchants, setMerchants] = useState<UserOption[]>([]);
+  const [skus, setSkus] = useState<SKUOption[]>([]);
   const [merchantId, setMerchantId] = useState<number | "">("");
   const [lines, setLines] = useState<WineLine[]>([{ ...EMPTY_LINE }]);
   const [submitting, setSubmitting] = useState(false);
@@ -197,6 +209,7 @@ function ManualOrderDialog({
     api.listUsers().then((users: UserOption[]) =>
       setMerchants(users.filter((u) => u.role === "merchant" || u.role === "admin")),
     );
+    api.listSKUs().then((s: SKUOption[]) => setSkus(s));
   }, [open, user]);
 
   function addLine() {
@@ -210,6 +223,22 @@ function ManualOrderDialog({
   function updateLine(idx: number, field: keyof WineLine, value: string | number) {
     const updated = [...lines];
     updated[idx] = { ...updated[idx], [field]: value };
+    setLines(updated);
+  }
+
+  function selectSku(idx: number, skuId: string) {
+    if (!skuId) return;
+    const sku = skus.find((s) => s.id === Number(skuId));
+    if (!sku) return;
+    const updated = [...lines];
+    updated[idx] = {
+      ...updated[idx],
+      producent: sku.producent || "",
+      wijnaam: sku.wijnaam || "",
+      wijntype: sku.wijntype || "",
+      jaargang: sku.jaargang || "",
+      volume: sku.volume || "",
+    };
     setLines(updated);
   }
 
@@ -302,6 +331,18 @@ function ManualOrderDialog({
                     value={line.klant}
                     onChange={(e) => updateLine(idx, "klant", e.target.value)}
                   />
+                  <select
+                    className={inp}
+                    value=""
+                    onChange={(e) => selectSku(idx, e.target.value)}
+                  >
+                    <option value="">Bestaand product kiezen...</option>
+                    {skus.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.sku_code})
+                      </option>
+                    ))}
+                  </select>
                   <div className="grid grid-cols-2 gap-2">
                     <input
                       className={inp}
