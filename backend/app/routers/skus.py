@@ -172,6 +172,8 @@ def upload_reference_image(
         raise HTTPException(404, "SKU not found")
 
     image_bytes = file.file.read()
+    if len(image_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
 
     # Save image to disk
     ref_dir = os.path.join(settings.upload_dir, "reference_images", str(sku_id))
