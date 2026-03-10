@@ -1,4 +1,6 @@
 import logging
+import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -135,6 +137,22 @@ def _migrate_order_line_klant():
         conn.execute(text("ALTER TABLE order_lines ADD COLUMN klant VARCHAR(150) NOT NULL DEFAULT ''"))
 
 
+def _cleanup_old_scans():
+    """Delete scan images older than 30 days to prevent disk bloat."""
+    scan_dir = os.path.join(settings.upload_dir, "scans")
+    if not os.path.isdir(scan_dir):
+        return
+    cutoff = time.time() - 30 * 86400
+    removed = 0
+    for filename in os.listdir(scan_dir):
+        filepath = os.path.join(scan_dir, filename)
+        if os.path.isfile(filepath) and os.path.getmtime(filepath) < cutoff:
+            os.remove(filepath)
+            removed += 1
+    if removed:
+        logger.info("Scan cleanup: removed %d images older than 30 days", removed)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- startup ---
@@ -164,6 +182,7 @@ async def lifespan(app: FastAPI):
         db.close()
 
     init_producer()
+    _cleanup_old_scans()
 
     yield
 
