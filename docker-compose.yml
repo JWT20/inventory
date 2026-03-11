@@ -78,14 +78,15 @@ services:
     mem_limit: 512m
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-wijnpick}:${POSTGRES_PASSWORD:-changeme_in_production}@db:5432/${POSTGRES_DB:-wijnpick}
-      SECRET_KEY: ${SECRET_KEY:-changeme_in_production}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-2.5-flash}
       GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
       MATCH_THRESHOLD: ${MATCH_THRESHOLD:-0.80}
       UPLOAD_DIR: /app/uploads
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme_in_production}
-      TOKEN_EXPIRE_DAYS: ${TOKEN_EXPIRE_DAYS:-90}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
     volumes:
       - uploads:/app/uploads

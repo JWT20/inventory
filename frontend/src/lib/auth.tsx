@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
-import { api, setToken, clearToken } from "./api";
+import { api, setToken, setRefreshToken, clearToken } from "./api";
 
 type Role = "admin" | "merchant" | "courier";
 
@@ -38,6 +38,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function login(username: string, password: string) {
     const resp = await api.login(username, password);
     setToken(resp.access_token);
+    setRefreshToken(resp.refresh_token);
     setUser({ id: 0, username: resp.username, role: resp.role });
     // Refresh full user data
     const me = await api.me();

@@ -3,6 +3,12 @@
 Uses SQLite in-memory so tests run without PostgreSQL/pgvector.
 """
 
+import os
+
+# Set required env vars before importing app code
+os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
+os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.ext.compiler import compiles
@@ -21,7 +27,7 @@ def _compile_vector_sqlite(type_, compiler, **kw):
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.auth import create_token, hash_password  # noqa: E402
+from app.auth import create_token, hash_password, _failed_attempts  # noqa: E402
 from app.database import Base, get_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import SKU, User  # noqa: E402
@@ -46,6 +52,7 @@ def _setup_db():
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)
+    _failed_attempts.clear()
 
 
 @pytest.fixture
