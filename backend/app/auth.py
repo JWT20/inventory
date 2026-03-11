@@ -13,15 +13,17 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi_users.password import PasswordHelper
-from jose import JWTError, jwt
 
 from app.config import settings
 from app.models import User
-from app.users import current_active_user
+from app.users import current_active_user, get_jwt_strategy
 
 logger = logging.getLogger(__name__)
+
+_JWT_ALGORITHM = "HS256"
 
 
 # ---------------------------------------------------------------------------
@@ -60,20 +62,23 @@ def create_refresh_token(user_id: int) -> str:
     return jwt.encode(
         {"sub": str(user_id), "exp": expire, "type": "refresh"},
         settings.secret_key,
-        algorithm="HS256",
+        algorithm=_JWT_ALGORITHM,
     )
 
 
 def decode_refresh_token(token: str) -> int:
     """Decode a refresh JWT and return the user_id. Raises HTTPException on failure."""
     try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
+        payload = jwt.decode(
+            token, settings.secret_key, algorithms=[_JWT_ALGORITHM],
+            options={"require": ["exp", "sub", "type"]},
+        )
         user_id = payload.get("sub")
         token_type = payload.get("type", "")
         if user_id is None or token_type != "refresh":
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
         return int(user_id)
-    except JWTError:
+    except jwt.PyJWTError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
 
 
@@ -122,18 +127,26 @@ def require_product_manager(user: User = Depends(current_active_user)) -> User:
 
 
 # ---------------------------------------------------------------------------
-# Backwards-compat aliases used by tests
+# Token helpers (used by refresh endpoint + test fixtures)
 # ---------------------------------------------------------------------------
+async def create_access_token_for_user(user: User) -> str:
+    """Create an access token using FastAPI-Users' JWTStrategy (includes exp)."""
+    strategy = get_jwt_strategy()
+    return await strategy.write_token(user)
+
+
 def create_token(user_id: int) -> str:
-    """Create an access token compatible with FastAPI-Users' JWT strategy."""
-    return jwt.encode(
-        {
-            "sub": str(user_id),
-            "aud": "fastapi-users:auth",
-        },
-        settings.secret_key,
-        algorithm="HS256",
+    """Create an access token. Used by test fixtures only.
+
+    Mirrors what ``JWTStrategy.write_token`` produces so the token is accepted
+    by the ``current_active_user`` dependency during test runs.
+    """
+    from fastapi_users.jwt import generate_jwt
+
+    strategy = get_jwt_strategy()
+    return generate_jwt(
+        {"sub": str(user_id), "aud": strategy.token_audience},
+        strategy.encode_key,
+        strategy.lifetime_seconds,
+        algorithm=strategy.algorithm,
     )
-
-
-create_access_token = create_token
