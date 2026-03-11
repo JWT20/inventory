@@ -27,7 +27,7 @@ def _compile_vector_sqlite(type_, compiler, **kw):
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.auth import create_token, hash_password, _failed_attempts  # noqa: E402
+from app.auth import create_access_token, hash_password, _failed_attempts  # noqa: E402
 from app.database import Base, get_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import SKU, User  # noqa: E402
@@ -134,17 +134,17 @@ def courier_user(db):
 
 @pytest.fixture
 def admin_token(admin_user):
-    return create_token(admin_user.id)
+    return create_access_token(admin_user.id)
 
 
 @pytest.fixture
 def merchant_token(merchant_user):
-    return create_token(merchant_user.id)
+    return create_access_token(merchant_user.id)
 
 
 @pytest.fixture
 def courier_token(courier_user):
-    return create_token(courier_user.id)
+    return create_access_token(courier_user.id)
 
 
 # ---------------------------------------------------------------------------

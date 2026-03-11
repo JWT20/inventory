@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, UploadFile
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
@@ -10,6 +10,7 @@ from app.events import publish_event
 from app.models import User
 from app.schemas import MatchResult
 from app.services.embedding import process_image
+from app.services.images import read_image
 from app.services.matching import find_best_matches
 
 logger = logging.getLogger(__name__)
@@ -28,9 +29,7 @@ def identify_box(
 
     Useful for ad-hoc identification or testing.
     """
-    image_bytes = file.file.read()
-    if len(image_bytes) > 10 * 1024 * 1024:
-        raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
+    image_bytes = read_image(file)
     description, embedding = process_image(image_bytes)
     candidates = find_best_matches(db, embedding, top_n=5)
 

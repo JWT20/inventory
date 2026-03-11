@@ -13,24 +13,12 @@ from app.models import SKU, Booking, Order, OrderLine, ReferenceImage, User
 from app.routers.skus import _sku_to_response
 from app.schemas import BookingResponse, MatchResult, SKUResponse
 from app.services.embedding import process_image
+from app.services.images import read_image, save_scan_image
 from app.services.matching import find_best_matches
 
 logger = logging.getLogger(__name__)
 
-MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
-
-
-def _read_image(file: UploadFile) -> bytes:
-    """Read uploaded image bytes and reject files larger than 10 MB."""
-    image_bytes = file.file.read()
-    if len(image_bytes) > MAX_IMAGE_SIZE:
-        raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
-    return image_bytes
-
-
-router = APIRouter(
-    prefix="/receiving", tags=["receiving"], dependencies=[Depends(require_warehouse)]
-)
+router = APIRouter(prefix="/receiving", tags=["receiving"])
 
 
 @router.post("/identify", response_model=MatchResult | None)
@@ -43,15 +31,8 @@ def identify_box(
 
     Returns the matched SKU, or null if no match found.
     """
-    image_bytes = _read_image(file)
-
-    # Save scan image for later reference
-    scan_dir = os.path.join(settings.upload_dir, "scans")
-    os.makedirs(scan_dir, exist_ok=True)
-    filename = f"{uuid.uuid4().hex}.jpg"
-    scan_path = os.path.join(scan_dir, filename)
-    with open(scan_path, "wb") as f:
-        f.write(image_bytes)
+    image_bytes = read_image(file)
+    save_scan_image(image_bytes)
 
     description, embedding = process_image(image_bytes)
     candidates = find_best_matches(db, embedding, top_n=5)
@@ -105,15 +86,8 @@ def book_box(
     if order.status != "active":
         raise HTTPException(400, f"Order is niet actief (status: {order.status})")
 
-    image_bytes = _read_image(file)
-
-    # Save scan image
-    scan_dir = os.path.join(settings.upload_dir, "scans")
-    os.makedirs(scan_dir, exist_ok=True)
-    filename = f"{uuid.uuid4().hex}.jpg"
-    scan_path = os.path.join(scan_dir, filename)
-    with open(scan_path, "wb") as f:
-        f.write(image_bytes)
+    image_bytes = read_image(file)
+    scan_path = save_scan_image(image_bytes)
 
     # Vision match
     description, embedding = process_image(image_bytes)
@@ -215,7 +189,7 @@ def create_product_inline(
     db.add(sku)
     db.flush()
 
-    image_bytes = _read_image(file)
+    image_bytes = read_image(file)
 
     # Save reference image
     ref_dir = os.path.join(settings.upload_dir, "reference_images", str(sku.id))

@@ -6,7 +6,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.auth import get_current_user, require_admin, require_product_manager
 from app.database import get_db
@@ -17,6 +17,7 @@ from app.schemas import (
     CSVRow,
     CSVValidationResult,
     ManualOrderCreate,
+    ManualOrderLineCreate,
     OrderLineResponse,
     OrderResponse,
     SKUResponse,
@@ -214,7 +215,7 @@ def create_order(
     # Group by (sku_code, klant), sum quantities, resolve SKUs
     line_key = tuple[str, str]  # (sku_code, klant)
     line_quantities: dict[line_key, int] = {}
-    line_data: dict[str, object] = {}  # sku_code → first line (for SKU creation)
+    line_data: dict[str, ManualOrderLineCreate] = {}  # sku_code → first line (for SKU creation)
     for line in body.lines:
         code = generate_sku_code(line.producent, line.wijnaam, line.wijntype, line.jaargang, line.volume)
         key = (code, line.klant)
@@ -270,7 +271,10 @@ def list_orders(
     user: User = Depends(get_current_user),
 ):
     """List orders. Merchants see their own, admins see all."""
-    query = db.query(Order)
+    query = db.query(Order).options(
+        joinedload(Order.merchant),
+        selectinload(Order.lines).joinedload(OrderLine.sku).selectinload(SKU.reference_images),
+    )
     if user.role == "merchant":
         query = query.filter(Order.merchant_id == user.id)
     orders = query.order_by(Order.created_at.desc()).all()
