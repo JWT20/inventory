@@ -94,6 +94,11 @@ def _decode_token(token: str, expected_type: str) -> int:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
 
 
+# Backwards compatibility alias
+def create_token(user_id: int) -> str:
+    return create_access_token(user_id)
+
+
 # ---------------------------------------------------------------------------
 # FastAPI dependencies
 # ---------------------------------------------------------------------------
