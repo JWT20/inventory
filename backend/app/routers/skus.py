@@ -175,17 +175,17 @@ def upload_reference_image(
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
 
-    # Save image to disk
+    # Vision API first — fail fast before saving to disk
+    logger.info("Processing reference image for SKU %s via Gemini Vision", sku.sku_code)
+    description, embedding = process_image(image_bytes)
+
+    # Save image to disk only after successful processing
     ref_dir = os.path.join(settings.upload_dir, "reference_images", str(sku_id))
     os.makedirs(ref_dir, exist_ok=True)
     filename = f"{uuid.uuid4().hex}.jpg"
     image_path = os.path.join(ref_dir, filename)
     with open(image_path, "wb") as f:
         f.write(image_bytes)
-
-    # Vision API: describe image → generate text embedding
-    logger.info("Processing reference image for SKU %s via Gemini Vision", sku.sku_code)
-    description, embedding = process_image(image_bytes)
 
     ref_image = ReferenceImage(
         sku_id=sku_id,

@@ -1,5 +1,5 @@
 from pydantic import field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _INSECURE_DEFAULT = "INSECURE-DEV-KEY-CHANGE-IN-PRODUCTION"
 
@@ -42,8 +42,7 @@ class Settings(BaseSettings):
             )
         return v
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env")
 
 
 settings = Settings()
