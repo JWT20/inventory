@@ -28,7 +28,7 @@ function Main() {
 
   const tabs: { id: Page; label: string; hide?: (role: string) => boolean }[] = [
     { id: "orders", label: "Orders" },
-    { id: "receive", label: "Scan & Boek" },
+    { id: "receive", label: "Scan & Boek", hide: (r) => r === "merchant" },
     { id: "skus", label: "Producten", hide: (r) => r === "courier" },
     { id: "accounts", label: "Accounts", hide: (r) => r !== "admin" },
   ];

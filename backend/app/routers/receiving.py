@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user
+from app.auth import require_warehouse
 from app.config import settings
 from app.database import get_db
 from app.events import publish_event
@@ -29,7 +29,7 @@ def _read_image(file: UploadFile) -> bytes:
 
 
 router = APIRouter(
-    prefix="/receiving", tags=["receiving"], dependencies=[Depends(get_current_user)]
+    prefix="/receiving", tags=["receiving"], dependencies=[Depends(require_warehouse)]
 )
 
 
@@ -37,7 +37,7 @@ router = APIRouter(
 def identify_box(
     file: UploadFile,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_warehouse),
 ):
     """Scan a box and identify it against reference images.
 
@@ -92,7 +92,7 @@ def book_box(
     file: UploadFile,
     order_id: int = Form(...),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_warehouse),
 ):
     """1 scan = 1 box = 1 booking.
 
@@ -201,7 +201,7 @@ def create_product_inline(
     name: str = Form(...),
     description: str | None = Form(None),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_warehouse),
 ):
     """Quick-create a new SKU with a reference image from the camera.
 
