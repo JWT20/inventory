@@ -23,13 +23,22 @@ VALID_ROLES = ("admin", "merchant", "courier")
 
 
 class User(Base):
+    """User model compatible with FastAPI-Users.
+
+    FastAPI-Users requires: email, hashed_password, is_active, is_superuser,
+    is_verified.  We keep ``username`` as the primary login identifier and
+    ``role`` for fine-grained RBAC.
+    """
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(100), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255))
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(1024))
     role: Mapped[str] = mapped_column(String(20), default="courier")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_superuser: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
