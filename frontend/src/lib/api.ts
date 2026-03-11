@@ -10,6 +10,49 @@ export function setToken(token: string) {
 
 export function clearToken() {
   localStorage.removeItem("token");
+  localStorage.removeItem("refresh_token");
+}
+
+export function setRefreshToken(token: string) {
+  localStorage.setItem("refresh_token", token);
+}
+
+function getRefreshToken(): string | null {
+  return localStorage.getItem("refresh_token");
+}
+
+let refreshPromise: Promise<string> | null = null;
+
+async function tryRefresh(): Promise<string | null> {
+  const rt = getRefreshToken();
+  if (!rt) return null;
+
+  // Deduplicate concurrent refresh calls
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    try {
+      const resp = await fetch(`${BASE}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: rt }),
+      });
+      if (!resp.ok) {
+        clearToken();
+        return null;
+      }
+      const data = await resp.json();
+      setToken(data.access_token);
+      return data.access_token as string;
+    } catch {
+      clearToken();
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
 }
 
 async function request(path: string, options: RequestInit = {}) {
@@ -19,7 +62,16 @@ async function request(path: string, options: RequestInit = {}) {
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const resp = await fetch(`${BASE}${path}`, { ...options, headers });
+  let resp = await fetch(`${BASE}${path}`, { ...options, headers });
+
+  // If access token expired, try refreshing once
+  if (resp.status === 401 && getRefreshToken()) {
+    const newToken = await tryRefresh();
+    if (newToken) {
+      headers["Authorization"] = `Bearer ${newToken}`;
+      resp = await fetch(`${BASE}${path}`, { ...options, headers });
+    }
+  }
 
   if (resp.status === 401) {
     clearToken();

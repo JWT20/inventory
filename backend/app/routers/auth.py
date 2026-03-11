@@ -1,12 +1,17 @@
-"""Auth endpoints: login and user management."""
+"""Auth endpoints: login, token refresh, and user management."""
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.auth import (
-    create_token,
+    _check_rate_limit,
+    _clear_failed_attempts,
+    _decode_token,
+    _record_failed_attempt,
+    create_access_token,
+    create_refresh_token,
     get_current_user,
     hash_password,
     require_admin,
@@ -15,16 +20,29 @@ from app.auth import (
 from app.database import get_db
 from app.events import publish_event
 from app.models import User
-from app.schemas import LoginRequest, TokenResponse, UserCreate, UserResponse
+from app.schemas import (
+    LoginRequest,
+    RefreshRequest,
+    RefreshResponse,
+    TokenResponse,
+    UserCreate,
+    UserResponse,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest, db: Session = Depends(get_db)):
+def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    # Rate limit by IP + username combination
+    client_ip = request.client.host if request.client else "unknown"
+    rate_key = f"{client_ip}:{body.username}"
+    _check_rate_limit(rate_key)
+
     user = db.query(User).filter(User.username == body.username).first()
     if not user or not verify_password(body.password, user.password_hash):
+        _record_failed_attempt(rate_key)
         publish_event(
             "user_login",
             details={"username": body.username, "success": False},
@@ -33,6 +51,8 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(401, "Incorrect username or password")
     if not user.is_active:
         raise HTTPException(403, "Account is disabled")
+
+    _clear_failed_attempts(rate_key)
     publish_event(
         "user_login",
         details={"username": user.username, "success": True},
@@ -40,10 +60,21 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         resource_type="auth",
     )
     return TokenResponse(
-        access_token=create_token(user.id),
+        access_token=create_access_token(user.id),
+        refresh_token=create_refresh_token(user.id),
         username=user.username,
         role=user.role,
     )
+
+
+@router.post("/refresh", response_model=RefreshResponse)
+def refresh_token(body: RefreshRequest, db: Session = Depends(get_db)):
+    """Exchange a valid refresh token for a new access token."""
+    user_id = _decode_token(body.refresh_token, "refresh")
+    user = db.get(User, user_id)
+    if not user or not user.is_active:
+        raise HTTPException(401, "User not found or inactive")
+    return RefreshResponse(access_token=create_access_token(user.id))
 
 
 @router.get("/me", response_model=UserResponse)
