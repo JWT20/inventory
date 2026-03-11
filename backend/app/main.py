@@ -137,6 +137,65 @@ def _migrate_order_line_klant():
         conn.execute(text("ALTER TABLE order_lines ADD COLUMN klant VARCHAR(150) NOT NULL DEFAULT ''"))
 
 
+def _migrate_users_for_fastapi_users():
+    """Migrate users table to FastAPI-Users compatible schema.
+
+    Adds: email, hashed_password, is_superuser, is_verified.
+    Renames: password_hash → hashed_password.
+    """
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("users")}
+
+    with engine.begin() as conn:
+        # Rename password_hash → hashed_password
+        if "password_hash" in columns and "hashed_password" not in columns:
+            logger.info("Renaming users.password_hash → users.hashed_password")
+            conn.execute(text(
+                "ALTER TABLE users RENAME COLUMN password_hash TO hashed_password"
+            ))
+            # Widen column to 1024 chars for FastAPI-Users compatibility
+            conn.execute(text(
+                "ALTER TABLE users ALTER COLUMN hashed_password TYPE VARCHAR(1024)"
+            ))
+
+        # Add email column
+        if "email" not in columns:
+            logger.info("Adding users.email column")
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN email VARCHAR(320) NOT NULL DEFAULT ''"
+            ))
+            conn.execute(text(
+                "UPDATE users SET email = username || '@local' WHERE email = ''"
+            ))
+            conn.execute(text(
+                "ALTER TABLE users ADD CONSTRAINT uq_users_email UNIQUE (email)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX ix_users_email ON users (email)"
+            ))
+
+        # Add is_superuser column
+        if "is_superuser" not in columns:
+            logger.info("Adding users.is_superuser column")
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN is_superuser BOOLEAN NOT NULL DEFAULT false"
+            ))
+            conn.execute(text(
+                "UPDATE users SET is_superuser = true WHERE role = 'admin'"
+            ))
+
+        # Add is_verified column
+        if "is_verified" not in columns:
+            logger.info("Adding users.is_verified column")
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN is_verified BOOLEAN NOT NULL DEFAULT false"
+            ))
+            # Mark all existing users as verified
+            conn.execute(text("UPDATE users SET is_verified = true"))
+
+
 def _cleanup_old_scans():
     """Delete scan images older than 30 days to prevent disk bloat."""
     scan_dir = os.path.join(settings.upload_dir, "scans")
@@ -157,6 +216,7 @@ def _cleanup_old_scans():
 async def lifespan(app: FastAPI):
     # --- startup ---
     _migrate_is_admin_to_role()
+    _migrate_users_for_fastapi_users()
     _migrate_embedding_dimension()
     _migrate_order_tables()
     _migrate_sku_wine_fields()
@@ -172,8 +232,11 @@ async def lifespan(app: FastAPI):
         if db.query(User).first() is None:
             admin = User(
                 username="admin",
-                password_hash=hash_password(settings.admin_password),
+                email="admin@local",
+                hashed_password=hash_password(settings.admin_password),
                 role="admin",
+                is_superuser=True,
+                is_verified=True,
             )
             db.add(admin)
             db.commit()

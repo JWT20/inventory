@@ -1,24 +1,28 @@
-"""Authentication: password hashing, JWT tokens (access + refresh), FastAPI dependencies."""
+"""Authentication helpers: rate limiting, refresh tokens, role-based dependencies.
+
+Access-token creation & validation is handled by FastAPI-Users (see users.py).
+This module keeps:
+ - in-memory login rate limiting
+ - refresh-token creation / validation (FastAPI-Users does not support refresh
+   tokens out of the box)
+ - role-based FastAPI dependencies (require_admin, require_warehouse, …)
+"""
 
 import logging
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import Depends, HTTPException, status
+from fastapi_users.password import PasswordHelper
 from jose import JWTError, jwt
-from passlib.context import CryptContext
-from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import get_db
 from app.models import User
+from app.users import current_active_user
 
 logger = logging.getLogger(__name__)
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 # ---------------------------------------------------------------------------
 # Rate limiting (in-memory, per-process)
@@ -32,7 +36,6 @@ _failed_attempts: dict[str, list[float]] = defaultdict(list)
 def _check_rate_limit(key: str) -> None:
     """Raise 429 if too many failed login attempts within the lockout window."""
     now = time.monotonic()
-    # Prune old entries
     _failed_attempts[key] = [t for t in _failed_attempts[key] if now - t < LOCKOUT_SECONDS]
     if len(_failed_attempts[key]) >= MAX_LOGIN_ATTEMPTS:
         raise HTTPException(
@@ -50,28 +53,8 @@ def _clear_failed_attempts(key: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Password hashing
+# Refresh tokens (custom — FastAPI-Users only handles access tokens)
 # ---------------------------------------------------------------------------
-def hash_password(plain: str) -> str:
-    return pwd_context.hash(plain[:72])
-
-
-def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain[:72], hashed)
-
-
-# ---------------------------------------------------------------------------
-# JWT tokens (access + refresh)
-# ---------------------------------------------------------------------------
-def create_access_token(user_id: int) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
-    return jwt.encode(
-        {"sub": str(user_id), "exp": expire, "type": "access"},
-        settings.secret_key,
-        algorithm="HS256",
-    )
-
-
 def create_refresh_token(user_id: int) -> str:
     expire = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
     return jwt.encode(
@@ -81,54 +64,76 @@ def create_refresh_token(user_id: int) -> str:
     )
 
 
-def _decode_token(token: str, expected_type: str) -> int:
-    """Decode a JWT and return the user_id. Raises HTTPException on failure."""
+def decode_refresh_token(token: str) -> int:
+    """Decode a refresh JWT and return the user_id. Raises HTTPException on failure."""
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
         user_id = payload.get("sub")
-        token_type = payload.get("type", "access")
-        if user_id is None or token_type != expected_type:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
+        token_type = payload.get("type", "")
+        if user_id is None or token_type != "refresh":
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
         return int(user_id)
     except JWTError:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
-
-
-# Backwards compatibility alias
-def create_token(user_id: int) -> str:
-    return create_access_token(user_id)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid refresh token")
 
 
 # ---------------------------------------------------------------------------
-# FastAPI dependencies
+# Password hashing (delegates to FastAPI-Users' PasswordHelper)
 # ---------------------------------------------------------------------------
-def get_current_user(
-    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
-) -> User:
-    """Verify access token → return User."""
-    user_id = _decode_token(token, "access")
-    user = db.get(User, user_id)
-    if not user or not user.is_active:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or inactive")
+_password_helper = PasswordHelper()
+
+
+def hash_password(plain: str) -> str:
+    return _password_helper.hash(plain)
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    verified, _ = _password_helper.verify_and_update(plain, hashed)
+    return verified
+
+
+# ---------------------------------------------------------------------------
+# FastAPI dependencies — role guards
+# ---------------------------------------------------------------------------
+def get_current_user(user: User = Depends(current_active_user)) -> User:
+    """Thin wrapper so existing ``Depends(get_current_user)`` calls still work."""
     return user
 
 
-def require_admin(user: User = Depends(get_current_user)) -> User:
+def require_admin(user: User = Depends(current_active_user)) -> User:
     """Must be admin."""
     if not user.is_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
     return user
 
 
-def require_warehouse(user: User = Depends(get_current_user)) -> User:
+def require_warehouse(user: User = Depends(current_active_user)) -> User:
     """Must be admin or courier (warehouse workers who scan & book)."""
     if user.role not in ("admin", "courier"):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Warehouse access required")
     return user
 
 
-def require_product_manager(user: User = Depends(get_current_user)) -> User:
+def require_product_manager(user: User = Depends(current_active_user)) -> User:
     """Must be admin or merchant."""
     if not user.can_manage_products:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Merchant or admin access required")
     return user
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compat aliases used by tests
+# ---------------------------------------------------------------------------
+def create_token(user_id: int) -> str:
+    """Create an access token compatible with FastAPI-Users' JWT strategy."""
+    return jwt.encode(
+        {
+            "sub": str(user_id),
+            "aud": "fastapi-users:auth",
+        },
+        settings.secret_key,
+        algorithm="HS256",
+    )
+
+
+create_access_token = create_token

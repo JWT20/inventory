@@ -1,6 +1,8 @@
 """Shared fixtures for backend tests.
 
 Uses SQLite in-memory so tests run without PostgreSQL/pgvector.
+Provides an async session wrapper so FastAPI-Users' async dependencies
+work transparently with the sync SQLite test engine.
 """
 
 import os
@@ -28,7 +30,7 @@ def _compile_vector_sqlite(type_, compiler, **kw):
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.auth import create_token, hash_password, _failed_attempts  # noqa: E402
-from app.database import Base, get_db  # noqa: E402
+from app.database import Base, get_db, get_async_session  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import SKU, User  # noqa: E402
 
@@ -40,6 +42,40 @@ engine = create_engine(
     poolclass=StaticPool,
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+# ---------------------------------------------------------------------------
+# Async session wrapper (lets FastAPI-Users work with sync SQLite in tests)
+# ---------------------------------------------------------------------------
+
+class _AsyncSessionWrapper:
+    """Thin async facade around a synchronous SQLAlchemy session.
+
+    FastAPI-Users calls ``await session.execute(...)``, ``await session.commit()``
+    etc.  This wrapper delegates to the underlying sync session, making those
+    calls return immediately.
+    """
+
+    def __init__(self, sync_session):
+        self._sync = sync_session
+
+    async def execute(self, statement, *args, **kwargs):
+        return self._sync.execute(statement, *args, **kwargs)
+
+    async def commit(self):
+        self._sync.commit()
+
+    async def flush(self):
+        self._sync.flush()
+
+    async def refresh(self, instance, *args, **kwargs):
+        self._sync.refresh(instance, *args, **kwargs)
+
+    def add(self, instance):
+        self._sync.add(instance)
+
+    async def get(self, model, ident):
+        return self._sync.get(model, ident)
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +116,11 @@ def client(db):
     def _override_get_db():
         yield db
 
+    async def _override_get_async_session():
+        yield _AsyncSessionWrapper(db)
+
     app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_async_session] = _override_get_async_session
     yield TestClient(app, raise_server_exceptions=True)
     app.dependency_overrides.clear()
 
@@ -93,8 +133,11 @@ def client(db):
 def admin_user(db):
     user = User(
         username="admin",
-        password_hash=hash_password("adminpass"),
+        email="admin@local",
+        hashed_password=hash_password("adminpass"),
         role="admin",
+        is_superuser=True,
+        is_verified=True,
     )
     db.add(user)
     db.commit()
@@ -106,8 +149,10 @@ def admin_user(db):
 def merchant_user(db):
     user = User(
         username="merchant",
-        password_hash=hash_password("merchantpass"),
+        email="merchant@local",
+        hashed_password=hash_password("merchantpass"),
         role="merchant",
+        is_verified=True,
     )
     db.add(user)
     db.commit()
@@ -119,8 +164,10 @@ def merchant_user(db):
 def courier_user(db):
     user = User(
         username="courier",
-        password_hash=hash_password("courierpass"),
+        email="courier@local",
+        hashed_password=hash_password("courierpass"),
         role="courier",
+        is_verified=True,
     )
     db.add(user)
     db.commit()
