@@ -12,18 +12,27 @@ logger = logging.getLogger(__name__)
 
 _client: genai.Client | None = None
 
-VISION_PROMPT = """You are identifying a wine box or bottle for inventory matching. Produce a precise, structured description that uniquely distinguishes this product from similar ones.
+VISION_PROMPT = """You are identifying a wine box or bottle for inventory matching. Your description will be embedded and matched against a database using cosine similarity. Accuracy is critical.
 
-Extract and report EXACTLY what you see — do not guess or infer missing information.
+RULES:
+- Transcribe ALL visible text exactly as printed, stamped, or handwritten — even partial, blurry, or tiny text.
+- Do not guess or infer missing information. Only report what you can see.
+- Do not use markdown formatting.
 
-1. **Brand / Producer**: Transcribe the exact producer or château name as printed.
-2. **Wine name / Cuvée**: Transcribe the exact wine name, cuvée, or product line.
-3. **Vintage**: The year, if visible. Write "not visible" if absent.
-4. **Appellation / Region**: e.g. Bordeaux, Burgundy, Rioja — only if printed on the box.
-5. **Color & Design**: Dominant colors of the box/label, notable design elements (crests, coats of arms, illustrations, patterns).
-6. **Distinguishing text**: Any other unique text, serial numbers, or volume info (e.g. "750ml", "Grand Cru Classé").
+EXTRACT IN ORDER OF IMPORTANCE:
 
-Format as a compact paragraph optimized for text-similarity search. Start with the most distinctive identifiers (brand + wine name + vintage) and work toward less unique details. Be specific and literal — transcribe text exactly as printed."""
+1. BRAND / PRODUCER: Exact name as printed (château, domaine, maison, etc.)
+2. WINE NAME / CUVÉE: Product line or cuvée name.
+3. VINTAGE: Year if visible, otherwise "not visible".
+4. APPELLATION / REGION: Only if printed (e.g. Bordeaux, Burgundy, Rioja).
+5. CLASSIFICATION: e.g. Grand Cru Classé, Premier Cru, AOC, IGP.
+6. ALL OTHER TEXT: Serial numbers, lot numbers, volume (750ml, 1.5L), barcodes (if digits are readable), handwritten notes, checkmarks, stamps, stickers — transcribe everything.
+7. PHYSICAL APPEARANCE: Box or bottle color, material (wood, cardboard, metal), notable design elements (crests, illustrations, embossing, foil).
+8. TEXT PLACEMENT: Where text appears (top, bottom, side, stamped on corner, handwritten on flap, sticker on side).
+
+If the item has minimal branding (e.g. a plain white box), focus on every small distinguishing detail: any stamped text, checkbox marks, sticker residue, handwriting, printed codes, or subtle markings. These small details are the primary identifiers.
+
+Format as a single compact paragraph. Start with the most distinctive identifiers and work toward less unique details. Be literal and specific."""
 
 
 def _get_client() -> genai.Client:
@@ -42,14 +51,7 @@ def describe_image(image_bytes: bytes) -> str:
 
     response = client.models.generate_content(
         model=settings.gemini_vision_model,
-        contents=[
-            "You are a wine product identification specialist. "
-            "Your descriptions will be embedded and matched against a database "
-            "of reference product descriptions using cosine similarity. "
-            "Accuracy and specificity are critical — a wrong match means the "
-            "wrong product gets shipped.\n\n" + VISION_PROMPT,
-            image,
-        ],
+        contents=[VISION_PROMPT, image],
     )
 
     description = response.text
