@@ -58,6 +58,13 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+def require_warehouse(user: User = Depends(get_current_user)) -> User:
+    """Must be admin or courier (warehouse workers who scan & book)."""
+    if user.role not in ("admin", "courier"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Warehouse access required")
+    return user
+
+
 def require_product_manager(user: User = Depends(get_current_user)) -> User:
     """Must be admin or merchant."""
     if not user.can_manage_products:
