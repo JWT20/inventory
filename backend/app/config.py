@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://wijnpick:wijnpick@db:5432/wijnpick"
     secret_key: str = _INSECURE_DEFAULT
     gemini_api_key: str = ""
-    gemini_vision_model: str = "gemini-3-flash"
+    gemini_vision_model: str = "gemini-2.5-flash"
     gemini_embedding_model: str = "gemini-embedding-001"
     match_threshold: float = 0.80
     upload_dir: str = "/app/uploads"
