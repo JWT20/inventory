@@ -32,7 +32,7 @@ runcmd:
     POSTGRES_DB=wijnpick
     SECRET_KEY=$(openssl rand -hex 32)
     GEMINI_API_KEY=${gemini_api_key}
-    GEMINI_VISION_MODEL=gemini-3-flash
+    GEMINI_VISION_MODEL=gemini-2.5-flash
     GEMINI_EMBEDDING_MODEL=gemini-embedding-001
     MATCH_THRESHOLD=0.75
     ADMIN_PASSWORD=$(openssl rand -hex 16)

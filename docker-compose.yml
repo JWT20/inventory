@@ -80,7 +80,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-wijnpick}:${POSTGRES_PASSWORD:-changeme_in_production}@db:5432/${POSTGRES_DB:-wijnpick}
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-      GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-3-flash}
+      GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-2.5-flash}
       GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
       MATCH_THRESHOLD: ${MATCH_THRESHOLD:-0.80}
       UPLOAD_DIR: /app/uploads
