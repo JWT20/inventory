@@ -253,7 +253,12 @@ def create_product_inline(
 
     publish_event(
         "product_created_inline",
-        details={"sku_code": sku.sku_code, "name": sku.name},
+        details={
+            "sku_code": sku.sku_code,
+            "name": sku.name,
+            "vision_description": vision_description,
+            "embedding_dimensions": len(embedding),
+        },
         user=user,
         resource_type="sku",
         resource_id=sku.id,
