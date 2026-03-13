@@ -16,12 +16,14 @@ logger = logging.getLogger(__name__)
 _producer = None
 
 
-def init_producer():
-    """Initialize the Kafka producer. Call on app startup."""
+def _get_producer():
+    """Return the Kafka producer, reinitializing if needed."""
     global _producer
+    if _producer is not None:
+        return _producer
+
     if not settings.kafka_bootstrap_servers:
-        logger.info("KAFKA_BOOTSTRAP_SERVERS not set — event publishing disabled")
-        return
+        return None
 
     try:
         from confluent_kafka import Producer
@@ -32,9 +34,15 @@ def init_producer():
             "batch.num.messages": 50,
         })
         logger.info("Kafka producer initialized (%s)", settings.kafka_bootstrap_servers)
+        return _producer
     except Exception:
         logger.warning("Failed to initialize Kafka producer", exc_info=True)
-        _producer = None
+        return None
+
+
+def init_producer():
+    """Initialize the Kafka producer. Call on app startup."""
+    _get_producer()
 
 
 def shutdown_producer():
@@ -67,7 +75,8 @@ def publish_event(
     Non-blocking — events are buffered and sent asynchronously.
     If Kafka is unavailable, logs a warning and returns silently.
     """
-    if _producer is None:
+    producer = _get_producer()
+    if producer is None:
         return
 
     event = {
@@ -82,12 +91,16 @@ def publish_event(
     }
 
     try:
-        _producer.produce(
+        producer.produce(
             "warehouse_events",
             key=event_type,
             value=json.dumps(event).encode("utf-8"),
             callback=_delivery_report,
         )
-        _producer.poll(0)
+        producer.poll(0)
+    except BufferError:
+        logger.warning("Kafka producer buffer full, dropping event %s", event_type)
     except Exception:
-        logger.warning("Failed to publish event %s", event_type, exc_info=True)
+        global _producer
+        logger.warning("Failed to publish event %s — resetting producer", event_type, exc_info=True)
+        _producer = None
