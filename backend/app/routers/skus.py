@@ -185,7 +185,11 @@ def upload_reference_image(
 
     # Vision API: describe image → generate text embedding
     logger.info("Processing reference image for SKU %s via Gemini Vision", sku.sku_code)
-    description, embedding = process_image(image_bytes)
+    try:
+        description, embedding = process_image(image_bytes)
+    except Exception:
+        logger.exception("Failed to process reference image for SKU %s", sku.sku_code)
+        raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
 
     ref_image = ReferenceImage(
         sku_id=sku_id,

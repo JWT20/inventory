@@ -31,7 +31,11 @@ def identify_box(
     image_bytes = file.file.read()
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
-    description, embedding = process_image(image_bytes)
+    try:
+        description, embedding = process_image(image_bytes)
+    except Exception:
+        logger.exception("Vision processing failed during ad-hoc identify")
+        raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
     candidates = find_best_matches(db, embedding, top_n=5)
 
     matched_sku, confidence = None, 0.0

@@ -1,7 +1,9 @@
 import logging
+import time
 
 from google import genai
 from google.genai import types
+from google.genai.errors import ClientError
 from PIL import Image
 import io
 
@@ -9,6 +11,9 @@ from app.config import settings
 from app.models import EMBEDDING_DIM
 
 logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 10  # seconds
 
 _client: genai.Client | None = None
 
@@ -40,17 +45,29 @@ def describe_image(image_bytes: bytes) -> str:
 
     image = Image.open(io.BytesIO(image_bytes))
 
-    response = client.models.generate_content(
-        model=settings.gemini_vision_model,
-        contents=[
-            "You are a wine product identification specialist. "
-            "Your descriptions will be embedded and matched against a database "
-            "of reference product descriptions using cosine similarity. "
-            "Accuracy and specificity are critical — a wrong match means the "
-            "wrong product gets shipped.\n\n" + VISION_PROMPT,
-            image,
-        ],
-    )
+    logger.info("Calling Gemini Vision model=%s", settings.gemini_vision_model)
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = client.models.generate_content(
+                model=settings.gemini_vision_model,
+                contents=[
+                    "You are a wine product identification specialist. "
+                    "Your descriptions will be embedded and matched against a database "
+                    "of reference product descriptions using cosine similarity. "
+                    "Accuracy and specificity are critical — a wrong match means the "
+                    "wrong product gets shipped.\n\n" + VISION_PROMPT,
+                    image,
+                ],
+            )
+            break
+        except ClientError as e:
+            if e.code == 429 and attempt < MAX_RETRIES:
+                delay = RETRY_BASE_DELAY * attempt
+                logger.warning("Gemini rate limited (attempt %d/%d), retrying in %ds", attempt, MAX_RETRIES, delay)
+                time.sleep(delay)
+            else:
+                logger.exception("Gemini Vision API call failed (model=%s, attempt=%d)", settings.gemini_vision_model, attempt)
+                raise
 
     description = response.text
     logger.info("Vision description: %s", description[:100])
@@ -61,11 +78,23 @@ def generate_embedding(text: str) -> list[float]:
     """Generate a text embedding using gemini-embedding-001."""
     client = _get_client()
 
-    result = client.models.embed_content(
-        model=settings.gemini_embedding_model,
-        contents=text,
-        config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIM),
-    )
+    logger.info("Calling Gemini Embedding model=%s", settings.gemini_embedding_model)
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            result = client.models.embed_content(
+                model=settings.gemini_embedding_model,
+                contents=text,
+                config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIM),
+            )
+            break
+        except ClientError as e:
+            if e.code == 429 and attempt < MAX_RETRIES:
+                delay = RETRY_BASE_DELAY * attempt
+                logger.warning("Gemini rate limited (attempt %d/%d), retrying in %ds", attempt, MAX_RETRIES, delay)
+                time.sleep(delay)
+            else:
+                logger.exception("Gemini Embedding API call failed (model=%s, attempt=%d)", settings.gemini_embedding_model, attempt)
+                raise
 
     return result.embeddings[0].values
 
@@ -75,6 +104,8 @@ def process_image(image_bytes: bytes) -> tuple[str, list[float]]:
 
     Returns (description, embedding).
     """
+    logger.info("Processing image (%d bytes)", len(image_bytes))
     description = describe_image(image_bytes)
     embedding = generate_embedding(description)
+    logger.info("Image processed successfully")
     return description, embedding

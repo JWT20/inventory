@@ -53,7 +53,11 @@ def identify_box(
     with open(scan_path, "wb") as f:
         f.write(image_bytes)
 
-    description, embedding = process_image(image_bytes)
+    try:
+        description, embedding = process_image(image_bytes)
+    except Exception:
+        logger.exception("Vision processing failed during identify")
+        raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
     candidates = find_best_matches(db, embedding, top_n=5)
 
     matched_sku, confidence = None, 0.0
@@ -116,7 +120,11 @@ def book_box(
         f.write(image_bytes)
 
     # Vision match
-    description, embedding = process_image(image_bytes)
+    try:
+        description, embedding = process_image(image_bytes)
+    except Exception:
+        logger.exception("Vision processing failed during booking")
+        raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
     candidates = find_best_matches(db, embedding, top_n=5)
 
     matched_sku, confidence = None, 0.0
@@ -227,7 +235,11 @@ def create_product_inline(
 
     # Process with Vision API
     logger.info("Processing reference image for new SKU %s", sku_code)
-    vision_description, embedding = process_image(image_bytes)
+    try:
+        vision_description, embedding = process_image(image_bytes)
+    except Exception:
+        logger.exception("Failed to process image for new SKU %s", sku_code)
+        raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
 
     ref_image = ReferenceImage(
         sku_id=sku.id,
