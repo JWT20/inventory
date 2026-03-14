@@ -211,3 +211,110 @@ No in-app dashboard — Pinot's built-in console is sufficient for now.
 | `pinot/table.json` | **New** — Pinot realtime table config |
 | `pinot/init.sh` | **New** — One-shot Pinot table creation |
 | `.env.example` | Add `KAFKA_BOOTSTRAP_SERVERS` |
+
+---
+---
+
+# Plan: Reject Non-Wine Items & Prevent False Positives
+
+## Problem
+
+The pipeline always returns the nearest-neighbor match regardless of whether the
+scanned item is actually wine. A shoe box gets embedded, compared via cosine
+similarity, and the closest wine reference wins — even at 0.94 confidence.
+There is no "this isn't wine" gate.
+
+## Root Cause
+
+`describe_image()` → `generate_embedding()` → `find_best_match()` is a straight
+pipeline with only a similarity threshold (0.80). Cosine similarity between
+unrelated items in a small reference DB can still be very high because the
+vectors don't spread far apart.
+
+## Changes
+
+### 1. Add wine-relevance classification to the vision prompt
+
+**File:** `backend/app/services/embedding.py`
+
+Extend `VISION_PROMPT` to ask the model to start its response with a structured
+flag: `WINE_PRODUCT: YES` or `WINE_PRODUCT: NO`.
+
+Add a new function `parse_vision_response(raw: str) -> tuple[bool, str]` that:
+- Extracts the `WINE_PRODUCT` flag
+- Returns `(is_wine, cleaned_description)` — the description without the flag
+  line, so embeddings stay clean
+
+Update `describe_image()` to return `(description, is_wine)`.
+
+### 2. Gate the matching pipeline on `is_wine`
+
+**File:** `backend/app/services/embedding.py`
+
+Update `process_image()` signature to return `(description, embedding, is_wine)`.
+
+**Files:** `backend/app/routers/receiving.py`, `backend/app/routers/vision.py`
+
+Before calling `find_best_match`, check `is_wine`. If `False`:
+- Skip embedding search entirely
+- Return a clear rejection: `{"match": null, "rejected": true, "reason": "not_wine"}`
+- Log the event (Kafka) with `rejection_reason: "not_wine"`
+
+### 3. Add `rejected` / `rejection_reason` to API responses
+
+**File:** `backend/app/schemas.py`
+
+Add optional fields to `IdentifyResponse` / `BookingResponse`:
+- `rejected: bool = False`
+- `rejection_reason: str | None = None`
+
+### 4. Store rejected scans for audit/review
+
+**File:** `backend/app/models.py`
+
+Add a lightweight `ScanLog` model:
+- `id`, `scanned_by`, `scan_image_path`, `vision_description`,
+  `is_wine: bool`, `best_similarity: float | None`,
+  `matched_sku_id: int | None`, `rejected: bool`, `rejection_reason: str | None`,
+  `created_at`
+
+This lets operators inspect what was rejected and why — important for tuning.
+
+Write to `ScanLog` on every scan (successful match, no-match, and rejection).
+
+Generate an Alembic migration for the new table.
+
+### 5. Update frontend to show rejection state
+
+**File:** `frontend/src/components/receive.tsx`
+
+When `rejected === true`:
+- Show a distinct red banner: "Dit is geen wijnproduct" (or similar)
+- Do NOT show the "Doos niet herkend" generic error — make the distinction clear
+- Allow the user to scan again immediately
+
+### 6. Increase default threshold (optional, config-only)
+
+Consider raising `match_threshold` from 0.80 → 0.85 in `config.py`. This is a
+secondary defence — the vision gate is the primary one. This can be tuned via
+the `MATCH_THRESHOLD` env var without code changes.
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `backend/app/services/embedding.py` | Vision prompt + `parse_vision_response` + updated returns |
+| `backend/app/services/matching.py` | No changes needed |
+| `backend/app/routers/receiving.py` | Gate on `is_wine`, write `ScanLog` |
+| `backend/app/routers/vision.py` | Gate on `is_wine`, write `ScanLog` |
+| `backend/app/schemas.py` | Add `rejected`/`rejection_reason` fields |
+| `backend/app/models.py` | Add `ScanLog` model |
+| `backend/alembic/versions/xxx_add_scan_logs.py` | Migration |
+| `frontend/src/components/receive.tsx` | Rejection UI |
+| `frontend/src/lib/api.ts` | Handle new response fields |
+
+## Out of Scope
+
+- Re-ranking or multi-stage matching (future improvement)
+- Category-specific embedding models
+- Human-in-the-loop confirmation for low-confidence matches
