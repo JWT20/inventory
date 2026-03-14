@@ -321,7 +321,7 @@ async def create_product_inline(
     if not is_wine:
         # Roll back the SKU creation
         db.rollback()
-        raise HTTPException(422, "Dit is geen wijndoos — upload alleen foto's van wijndozen")
+        raise HTTPException(400, "Dit is geen wijndoos — upload alleen foto's van wijndozen")
 
     ref_image = ReferenceImage(
         sku_id=sku.id,
