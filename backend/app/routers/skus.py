@@ -248,7 +248,12 @@ def upload_reference_image(
 
     publish_event(
         "reference_image_uploaded",
-        details={"sku_code": sku.sku_code, "image_id": ref_image.id},
+        details={
+            "sku_code": sku.sku_code,
+            "image_id": ref_image.id,
+            "vision_description": description,
+            "embedding_dimensions": len(embedding),
+        },
         user=user,
         resource_type="sku",
         resource_id=sku_id,
