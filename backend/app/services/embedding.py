@@ -18,45 +18,75 @@ MAX_VISION_DIMENSION = 1024  # px – downscale before sending to Gemini
 
 _client: genai.Client | None = None
 
-VISION_PROMPT = """You are identifying a wine box or bottle for inventory matching. Your FIRST task is to determine whether this image shows a wine product (wine box, wine bottle, wine case, or wine packaging). Your SECOND task is to describe it if it is wine.
+VISION_PROMPT = """Analyze this image and respond in EXACTLY this JSON format — no markdown fencing, no extra text:
 
-**Line 1 — Classification (REQUIRED):**
-If this is a wine product, write exactly: WINE_PRODUCT: YES
-If this is NOT a wine product (e.g. shoes, electronics, food, random objects), write exactly: WINE_PRODUCT: NO
+{"is_wine": true, "description": "..."}
 
-**Line 2+ — Description (only if WINE_PRODUCT: YES):**
-Extract and report EXACTLY what you see — do not guess or infer missing information.
+Set "is_wine" to true ONLY if the image shows a wine product (wine bottle, wine box, wine case, wine crate, or wine packaging). Set it to false for everything else (electronics, shoes, food, appliances, random objects, etc).
 
-1. **Brand / Producer**: Transcribe the exact producer or château name as printed.
-2. **Wine name / Cuvée**: Transcribe the exact wine name, cuvée, or product line.
-3. **Vintage**: The year, if visible. Write "not visible" if absent.
-4. **Appellation / Region**: e.g. Bordeaux, Burgundy, Rioja — only if printed on the box.
-5. **Color & Design**: Dominant colors of the box/label, notable design elements (crests, coats of arms, illustrations, patterns).
-6. **Distinguishing text**: Any other unique text, serial numbers, or volume info (e.g. "750ml", "Grand Cru Classé").
+If is_wine is true, write a description that includes:
+- Brand / Producer name (transcribe exactly as printed)
+- Wine name / Cuvée (transcribe exactly)
+- Vintage year (if visible, otherwise omit)
+- Appellation / Region (only if printed)
+- Color & design details (dominant colors, crests, illustrations)
+- Any other distinguishing text (volume, classification like "Grand Cru Classé")
+Format as a compact paragraph optimized for text-similarity search, starting with the most distinctive identifiers.
 
-Format as a compact paragraph optimized for text-similarity search. Start with the most distinctive identifiers (brand + wine name + vintage) and work toward less unique details. Be specific and literal — transcribe text exactly as printed.
+If is_wine is false, write a brief description of what the object actually is (e.g. "laptop computer", "shoe box")."""
 
-If WINE_PRODUCT: NO, write a brief one-line description of what the object actually is."""
+
+_WINE_KEYWORDS = {
+    "wine", "wijn", "vin", "vino", "château", "chateau", "domaine",
+    "bodega", "cantina", "weingut", "cuvée", "cuvee", "bordeaux",
+    "burgundy", "rioja", "champagne", "prosecco", "merlot", "cabernet",
+    "chardonnay", "pinot", "syrah", "shiraz", "sauvignon", "riesling",
+    "tempranillo", "sangiovese", "nebbiolo", "malbec", "grenache",
+    "750ml", "375ml", "1500ml", "magnum",
+}
 
 
 def parse_vision_response(raw: str) -> tuple[bool, str]:
-    """Extract the WINE_PRODUCT flag and return (is_wine, clean_description).
+    """Extract wine classification and description from vision response.
 
-    The clean description has the flag line stripped so embeddings stay clean.
+    Tries JSON first, then falls back to the old WINE_PRODUCT: line format,
+    then to keyword heuristics.  Returns (is_wine, clean_description).
     """
-    lines = raw.strip().splitlines()
+    import json as _json
+
+    text = raw.strip()
+
+    # Strip markdown code fences if present
+    if text.startswith("```"):
+        text = "\n".join(text.split("\n")[1:])
+    if text.endswith("```"):
+        text = "\n".join(text.split("\n")[:-1])
+    text = text.strip()
+
+    # --- Try JSON ---
+    try:
+        data = _json.loads(text)
+        if isinstance(data, dict) and "is_wine" in data:
+            is_wine = bool(data["is_wine"])
+            description = str(data.get("description", "")).strip()
+            return is_wine, description
+    except (_json.JSONDecodeError, TypeError, ValueError):
+        pass
+
+    # --- Fallback: WINE_PRODUCT: YES/NO line ---
+    lines = text.splitlines()
     first_line = lines[0].strip().upper() if lines else ""
 
     if "WINE_PRODUCT:" in first_line:
         is_wine = "YES" in first_line
         description = "\n".join(lines[1:]).strip()
-    else:
-        # Model didn't follow format — assume wine to avoid false rejections
-        logger.warning("Vision response missing WINE_PRODUCT flag, assuming YES")
-        is_wine = True
-        description = raw.strip()
+        return is_wine, description
 
-    return is_wine, description
+    # --- Last resort: keyword heuristic (reject if no wine words found) ---
+    logger.warning("Vision response not in expected format, using keyword heuristic")
+    lower = text.lower()
+    has_wine_keyword = any(kw in lower for kw in _WINE_KEYWORDS)
+    return has_wine_keyword, text
 
 
 def _get_client() -> genai.Client:
