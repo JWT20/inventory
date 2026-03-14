@@ -18,8 +18,13 @@ MAX_VISION_DIMENSION = 1024  # px – downscale before sending to Gemini
 
 _client: genai.Client | None = None
 
-VISION_PROMPT = """You are identifying a wine box or bottle for inventory matching. Produce a precise, structured description that uniquely distinguishes this product from similar ones.
+VISION_PROMPT = """You are identifying a wine box or bottle for inventory matching. Your FIRST task is to determine whether this image shows a wine product (wine box, wine bottle, wine case, or wine packaging). Your SECOND task is to describe it if it is wine.
 
+**Line 1 — Classification (REQUIRED):**
+If this is a wine product, write exactly: WINE_PRODUCT: YES
+If this is NOT a wine product (e.g. shoes, electronics, food, random objects), write exactly: WINE_PRODUCT: NO
+
+**Line 2+ — Description (only if WINE_PRODUCT: YES):**
 Extract and report EXACTLY what you see — do not guess or infer missing information.
 
 1. **Brand / Producer**: Transcribe the exact producer or château name as printed.
@@ -29,7 +34,29 @@ Extract and report EXACTLY what you see — do not guess or infer missing inform
 5. **Color & Design**: Dominant colors of the box/label, notable design elements (crests, coats of arms, illustrations, patterns).
 6. **Distinguishing text**: Any other unique text, serial numbers, or volume info (e.g. "750ml", "Grand Cru Classé").
 
-Format as a compact paragraph optimized for text-similarity search. Start with the most distinctive identifiers (brand + wine name + vintage) and work toward less unique details. Be specific and literal — transcribe text exactly as printed."""
+Format as a compact paragraph optimized for text-similarity search. Start with the most distinctive identifiers (brand + wine name + vintage) and work toward less unique details. Be specific and literal — transcribe text exactly as printed.
+
+If WINE_PRODUCT: NO, write a brief one-line description of what the object actually is."""
+
+
+def parse_vision_response(raw: str) -> tuple[bool, str]:
+    """Extract the WINE_PRODUCT flag and return (is_wine, clean_description).
+
+    The clean description has the flag line stripped so embeddings stay clean.
+    """
+    lines = raw.strip().splitlines()
+    first_line = lines[0].strip().upper() if lines else ""
+
+    if "WINE_PRODUCT:" in first_line:
+        is_wine = "YES" in first_line
+        description = "\n".join(lines[1:]).strip()
+    else:
+        # Model didn't follow format — assume wine to avoid false rejections
+        logger.warning("Vision response missing WINE_PRODUCT flag, assuming YES")
+        is_wine = True
+        description = raw.strip()
+
+    return is_wine, description
 
 
 def _get_client() -> genai.Client:
@@ -56,8 +83,11 @@ def optimize_for_vision(image_bytes: bytes) -> Image.Image:
     return image
 
 
-def describe_image(image_bytes: bytes) -> str:
-    """Use Gemini Vision to generate a detailed description of a wine box."""
+def describe_image(image_bytes: bytes) -> tuple[str, bool]:
+    """Use Gemini Vision to describe a wine box and classify whether it is wine.
+
+    Returns (description, is_wine).
+    """
     client = _get_client()
 
     t0 = time.perf_counter()
@@ -91,10 +121,13 @@ def describe_image(image_bytes: bytes) -> str:
                 raise
     vision_ms = (time.perf_counter() - t0) * 1000
 
-    description = response.text
+    raw_text = response.text
     logger.info("[TIMING] gemini_vision=%.0fms", vision_ms)
-    logger.info("Vision description: %s", description[:100])
-    return description
+    logger.info("Vision raw response: %s", raw_text[:120])
+
+    is_wine, description = parse_vision_response(raw_text)
+    logger.info("Wine classification: is_wine=%s, description: %s", is_wine, description[:100])
+    return description, is_wine
 
 
 def generate_embedding(text: str) -> list[float]:
@@ -125,15 +158,22 @@ def generate_embedding(text: str) -> list[float]:
     return result.embeddings[0].values
 
 
-def process_image(image_bytes: bytes) -> tuple[str, list[float]]:
+def process_image(image_bytes: bytes) -> tuple[str, list[float] | None, bool]:
     """Full pipeline: image → vision description → text embedding.
 
-    Returns (description, embedding).
+    Returns (description, embedding, is_wine).
+    If the image is not wine, embedding is None (skipped to save cost/time).
     """
     t_start = time.perf_counter()
     logger.info("Processing image (%d bytes)", len(image_bytes))
-    description = describe_image(image_bytes)
+    description, is_wine = describe_image(image_bytes)
+
+    if not is_wine:
+        total_ms = (time.perf_counter() - t_start) * 1000
+        logger.info("[TIMING] process_image_total=%.0fms (rejected: not wine)", total_ms)
+        return description, None, False
+
     embedding = generate_embedding(description)
     total_ms = (time.perf_counter() - t_start) * 1000
     logger.info("[TIMING] process_image_total=%.0fms", total_ms)
-    return description, embedding
+    return description, embedding, True
