@@ -66,13 +66,23 @@ async def identify_box(
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
     t_process = time.perf_counter()
 
-    if not is_wine:
+    # Always try vector matching — non-wine images may match overridden references
+    candidates = find_best_matches(db, embedding, top_n=5)
+    t_match = time.perf_counter()
+
+    matched_sku, confidence = None, 0.0
+    if candidates and candidates[0][1] >= settings.match_threshold:
+        matched_sku, confidence = candidates[0]
+
+    # If not wine AND no match found, reject
+    if not is_wine and matched_sku is None:
         logger.info(
-            "[TIMING] identify total=%.0fms (rejected: not wine) | read=%.0fms save=%.0fms process_image=%.0fms",
-            (t_process - t_start) * 1000,
+            "[TIMING] identify total=%.0fms (not wine, no match) | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms",
+            (t_match - t_start) * 1000,
             (t_read - t_start) * 1000,
             (t_save - t_read) * 1000,
             (t_process - t_save) * 1000,
+            (t_match - t_process) * 1000,
         )
         publish_event(
             "box_identified",
@@ -90,12 +100,11 @@ async def identify_box(
         )
         return None
 
-    candidates = find_best_matches(db, embedding, top_n=5)
-    t_match = time.perf_counter()
-
-    matched_sku, confidence = None, 0.0
-    if candidates and candidates[0][1] >= settings.match_threshold:
-        matched_sku, confidence = candidates[0]
+    if not is_wine and matched_sku:
+        logger.info(
+            "Non-wine image matched overridden reference: SKU %s (confidence=%.4f)",
+            matched_sku.sku_code, confidence,
+        )
 
     logger.info(
         "[TIMING] identify total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms",
@@ -173,7 +182,16 @@ async def book_box(
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
     t_process = time.perf_counter()
 
-    if not is_wine:
+    # Always try vector matching — non-wine images may match overridden references
+    candidates = find_best_matches(db, embedding, top_n=5)
+    t_match = time.perf_counter()
+
+    matched_sku, confidence = None, 0.0
+    if candidates and candidates[0][1] >= settings.match_threshold:
+        matched_sku, confidence = candidates[0]
+
+    # If not wine AND no match found, reject
+    if not is_wine and matched_sku is None:
         publish_event(
             "box_booked",
             details={
@@ -190,12 +208,11 @@ async def book_box(
             "Dit is geen wijnproduct — scan een wijndoos",
         )
 
-    candidates = find_best_matches(db, embedding, top_n=5)
-    t_match = time.perf_counter()
-
-    matched_sku, confidence = None, 0.0
-    if candidates and candidates[0][1] >= settings.match_threshold:
-        matched_sku, confidence = candidates[0]
+    if not is_wine and matched_sku:
+        logger.info(
+            "Non-wine image matched overridden reference during booking: SKU %s (confidence=%.4f)",
+            matched_sku.sku_code, confidence,
+        )
 
     if matched_sku is None:
         raise HTTPException(
