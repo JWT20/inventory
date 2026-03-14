@@ -133,6 +133,7 @@ function SKUDialog({
   const [deleting, setDeleting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [stagedFiles, setStagedFiles] = useState<{ file: File; preview: string }[]>([]);
+  const [wineRejected, setWineRejected] = useState<{ file: File; preview: string }[]>([]);
 
   useEffect(() => {
     if (open && sku) {
@@ -154,6 +155,10 @@ function SKUDialog({
     }
     if (!open) {
       setStagedFiles((prev) => {
+        prev.forEach((s) => URL.revokeObjectURL(s.preview));
+        return [];
+      });
+      setWineRejected((prev) => {
         prev.forEach((s) => URL.revokeObjectURL(s.preview));
         return [];
       });
@@ -197,28 +202,7 @@ function SKUDialog({
       }
 
       if (stagedFiles.length > 0) {
-        setUploading(true);
-        const infoToast = toast("Beelden uploaden en verwerken...");
-        const results = await Promise.allSettled(
-          stagedFiles.map((staged) => api.uploadImage(skuId, staged.file)),
-        );
-        const failures = results.filter(
-          (r): r is PromiseRejectedResult => r.status === "rejected",
-        );
-        toast.dismiss(infoToast);
-        if (failures.length > 0) {
-          const msg =
-            failures[0].reason instanceof Error
-              ? failures[0].reason.message
-              : `${failures.length} beeld(en) niet geüpload`;
-          toast.error(msg);
-        } else {
-          toast.success(`${stagedFiles.length} referentiebeeld(en) toegevoegd`);
-        }
-        stagedFiles.forEach((s) => URL.revokeObjectURL(s.preview));
-        setStagedFiles([]);
-        setUploading(false);
-        loadImages(skuId);
+        await uploadImages(skuId, stagedFiles, false);
       }
 
       onSaved();
@@ -227,6 +211,66 @@ function SKUDialog({
     } finally {
       setSubmitting(false);
     }
+  }
+
+  const WINE_REJECTION_MSG = "Dit is geen wijndoos";
+
+  async function uploadImages(
+    skuId: number,
+    files: { file: File; preview: string }[],
+    skipWineCheck: boolean,
+  ) {
+    setUploading(true);
+    const infoToast = toast("Beelden uploaden en verwerken...");
+    const results = await Promise.allSettled(
+      files.map((staged) => api.uploadImage(skuId, staged.file, skipWineCheck)),
+    );
+    toast.dismiss(infoToast);
+
+    const rejected: { file: File; preview: string }[] = [];
+    const otherErrors: string[] = [];
+    let successCount = 0;
+
+    results.forEach((r, i) => {
+      if (r.status === "fulfilled") {
+        URL.revokeObjectURL(files[i].preview);
+        successCount++;
+      } else {
+        const msg = r.reason instanceof Error ? r.reason.message : "";
+        if (msg.includes(WINE_REJECTION_MSG)) {
+          rejected.push(files[i]);
+        } else {
+          URL.revokeObjectURL(files[i].preview);
+          otherErrors.push(msg || "Upload mislukt");
+        }
+      }
+    });
+
+    if (successCount > 0) {
+      toast.success(`${successCount} referentiebeeld(en) toegevoegd`);
+    }
+    if (otherErrors.length > 0) {
+      toast.error(otherErrors[0]);
+    }
+    if (rejected.length > 0) {
+      setWineRejected(rejected);
+      toast.error("Afbeelding niet herkend als wijndoos");
+    }
+
+    setStagedFiles([]);
+    setUploading(false);
+    loadImages(skuId);
+  }
+
+  async function forceUploadRejected() {
+    if (!currentId || wineRejected.length === 0) return;
+    await uploadImages(currentId, wineRejected, true);
+    setWineRejected([]);
+  }
+
+  function dismissRejected() {
+    wineRejected.forEach((s) => URL.revokeObjectURL(s.preview));
+    setWineRejected([]);
   }
 
   function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -423,6 +467,45 @@ function SKUDialog({
                 className="hidden"
                 onChange={handleUpload}
               />
+              {wineRejected.length > 0 && (
+                <div className="mt-3 p-3 rounded-lg border-2 border-yellow-600/50 bg-yellow-600/10">
+                  <p className="text-sm font-medium mb-1">
+                    Niet herkend als wijndoos
+                  </p>
+                  <div className="flex gap-2 mb-2">
+                    {wineRejected.map((f, i) => (
+                      <img
+                        key={i}
+                        src={f.preview}
+                        alt="rejected"
+                        className="w-14 h-14 object-cover rounded border border-border"
+                      />
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Dit beeld werd niet herkend als een wijndoos. Is het toch een wijndoos?
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      type="button"
+                      disabled={uploading}
+                      onClick={forceUploadRejected}
+                    >
+                      Toch uploaden
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      type="button"
+                      onClick={dismissRejected}
+                    >
+                      Annuleren
+                    </Button>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
