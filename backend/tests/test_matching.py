@@ -138,10 +138,9 @@ class TestDescribeImage:
             mock_img.size = (800, 600)
             mock_pil.open.return_value = mock_img
             mock_pil.LANCZOS = 1
-            description, is_wine = describe_image(b"fake-image-bytes")
+            result = describe_image(b"fake-image-bytes")
 
-        assert description == "Château Margaux 2015 Bordeaux"
-        assert is_wine is True  # No WINE_PRODUCT flag → defaults to True
+        assert result == "Château Margaux 2015 Bordeaux"
         mock_client.models.generate_content.assert_called_once()
 
     def test_sends_image_to_model(self):
@@ -200,61 +199,11 @@ class TestProcessImage:
     def test_pipeline_chains_describe_then_embed(self):
         from app.services.embedding import process_image
 
-        with patch("app.services.embedding.describe_image", return_value=("A fine Bordeaux", True)) as mock_desc, \
+        with patch("app.services.embedding.describe_image", return_value="A fine Bordeaux") as mock_desc, \
              patch("app.services.embedding.generate_embedding", return_value=[0.5] * 3072) as mock_emb:
-            description, embedding, is_wine = process_image(b"image-data")
+            description, embedding = process_image(b"image-data")
 
         assert description == "A fine Bordeaux"
         assert len(embedding) == 3072
-        assert is_wine is True
         mock_desc.assert_called_once_with(b"image-data")
         mock_emb.assert_called_once_with("A fine Bordeaux")
-
-    def test_non_wine_skips_embedding(self):
-        from app.services.embedding import process_image
-
-        with patch("app.services.embedding.describe_image", return_value=("A shoe box", False)) as mock_desc, \
-             patch("app.services.embedding.generate_embedding") as mock_emb:
-            description, embedding, is_wine = process_image(b"image-data")
-
-        assert description == "A shoe box"
-        assert embedding is None
-        assert is_wine is False
-        mock_desc.assert_called_once_with(b"image-data")
-        mock_emb.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# embedding.parse_vision_response
-# ---------------------------------------------------------------------------
-
-class TestParseVisionResponse:
-    def test_wine_product_yes(self):
-        from app.services.embedding import parse_vision_response
-
-        is_wine, desc = parse_vision_response("WINE_PRODUCT: YES\nChâteau Margaux 2018 Bordeaux red box")
-        assert is_wine is True
-        assert desc == "Château Margaux 2018 Bordeaux red box"
-
-    def test_wine_product_no(self):
-        from app.services.embedding import parse_vision_response
-
-        is_wine, desc = parse_vision_response("WINE_PRODUCT: NO\nNorthwave Corsair 2 cycling shoe box")
-        assert is_wine is False
-        assert desc == "Northwave Corsair 2 cycling shoe box"
-
-    def test_missing_flag_defaults_to_wine(self):
-        from app.services.embedding import parse_vision_response
-
-        is_wine, desc = parse_vision_response("Château Margaux 2018 Bordeaux red box")
-        assert is_wine is True
-        assert desc == "Château Margaux 2018 Bordeaux red box"
-
-    def test_case_insensitive(self):
-        from app.services.embedding import parse_vision_response
-
-        is_wine, _ = parse_vision_response("wine_product: no\nSome shoe")
-        assert is_wine is False
-
-        is_wine, _ = parse_vision_response("Wine_Product: Yes\nSome wine")
-        assert is_wine is True

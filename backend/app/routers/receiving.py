@@ -13,7 +13,7 @@ from app.database import get_db
 from app.events import publish_event
 from app.models import SKU, Booking, Order, OrderLine, ReferenceImage, User
 from app.routers.skus import _sku_to_response
-from app.schemas import BookingResponse, IdentifyResponse, MatchResult, SKUResponse
+from app.schemas import BookingResponse, MatchResult, SKUResponse
 from app.services.embedding import process_image
 from app.services.matching import find_best_matches
 
@@ -35,7 +35,7 @@ router = APIRouter(
 )
 
 
-@router.post("/identify", response_model=IdentifyResponse)
+@router.post("/identify", response_model=MatchResult | None)
 async def identify_box(
     file: UploadFile,
     db: Session = Depends(get_db),
@@ -43,7 +43,7 @@ async def identify_box(
 ):
     """Scan a box and identify it against reference images.
 
-    Returns the matched SKU, or a rejection if the item is not wine.
+    Returns the matched SKU, or null if no match found.
     """
     t_start = time.perf_counter()
 
@@ -88,7 +88,7 @@ async def identify_box(
             user=user,
             resource_type="receiving",
         )
-        return IdentifyResponse(rejected=True, rejection_reason="not_wine")
+        return None
 
     candidates = find_best_matches(db, embedding, top_n=5)
     t_match = time.perf_counter()
@@ -123,15 +123,13 @@ async def identify_box(
     )
 
     if matched_sku is None:
-        return IdentifyResponse()
+        return None
 
-    return IdentifyResponse(
-        match=MatchResult(
-            sku_id=matched_sku.id,
-            sku_code=matched_sku.sku_code,
-            sku_name=matched_sku.name,
-            confidence=confidence,
-        )
+    return MatchResult(
+        sku_id=matched_sku.id,
+        sku_code=matched_sku.sku_code,
+        sku_name=matched_sku.name,
+        confidence=confidence,
     )
 
 
