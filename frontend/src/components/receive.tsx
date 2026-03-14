@@ -194,7 +194,7 @@ function ScanStep({
     canvas.getContext("2d")!.drawImage(videoRef.current, 0, 0);
 
     const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", 0.85),
+      canvas.toBlob(resolve, "image/jpeg", 0.75),
     );
     if (!blob) {
       setScanning(false);

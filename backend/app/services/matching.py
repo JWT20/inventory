@@ -25,6 +25,7 @@ def find_best_matches(
             FROM reference_images ri
             JOIN skus s ON s.id = ri.sku_id
             WHERE s.active = true
+              AND ri.embedding IS NOT NULL
             ORDER BY ri.embedding <=> :embedding
             LIMIT :top_n
         """),

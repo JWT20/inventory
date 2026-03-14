@@ -137,6 +137,24 @@ def _migrate_order_line_klant():
         conn.execute(text("ALTER TABLE order_lines ADD COLUMN klant VARCHAR(150) NOT NULL DEFAULT ''"))
 
 
+def _migrate_reference_image_processing_status():
+    """Add processing_status column to reference_images if missing and make embedding nullable."""
+    inspector = inspect(engine)
+    if "reference_images" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("reference_images")}
+    if "processing_status" not in columns:
+        logger.info("Adding processing_status column to reference_images table")
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE reference_images ADD COLUMN processing_status VARCHAR(20) NOT NULL DEFAULT 'done'"
+            ))
+            # Allow NULL embeddings for images still being processed
+            conn.execute(text(
+                "ALTER TABLE reference_images ALTER COLUMN embedding DROP NOT NULL"
+            ))
+
+
 def _migrate_users_for_fastapi_users():
     """Migrate users table to FastAPI-Users compatible schema.
 
@@ -221,6 +239,7 @@ async def lifespan(app: FastAPI):
     _migrate_order_tables()
     _migrate_sku_wine_fields()
     _migrate_order_line_klant()
+    _migrate_reference_image_processing_status()
 
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)

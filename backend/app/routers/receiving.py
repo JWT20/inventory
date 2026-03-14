@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import uuid
@@ -34,7 +35,7 @@ router = APIRouter(
 
 
 @router.post("/identify", response_model=MatchResult | None)
-def identify_box(
+async def identify_box(
     file: UploadFile,
     db: Session = Depends(get_db),
     user: User = Depends(require_warehouse),
@@ -54,7 +55,7 @@ def identify_box(
         f.write(image_bytes)
 
     try:
-        description, embedding = process_image(image_bytes)
+        description, embedding = await asyncio.to_thread(process_image, image_bytes)
     except Exception:
         logger.exception("Vision processing failed during identify")
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
@@ -92,7 +93,7 @@ def identify_box(
 
 
 @router.post("/book", response_model=BookingResponse)
-def book_box(
+async def book_box(
     file: UploadFile,
     order_id: int = Form(...),
     db: Session = Depends(get_db),
@@ -121,7 +122,7 @@ def book_box(
 
     # Vision match
     try:
-        description, embedding = process_image(image_bytes)
+        description, embedding = await asyncio.to_thread(process_image, image_bytes)
     except Exception:
         logger.exception("Vision processing failed during booking")
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
@@ -203,7 +204,7 @@ def book_box(
 
 
 @router.post("/new-product", response_model=SKUResponse)
-def create_product_inline(
+async def create_product_inline(
     file: UploadFile,
     sku_code: str = Form(...),
     name: str = Form(...),
@@ -236,7 +237,7 @@ def create_product_inline(
     # Process with Vision API
     logger.info("Processing reference image for new SKU %s", sku_code)
     try:
-        vision_description, embedding = process_image(image_bytes)
+        vision_description, embedding = await asyncio.to_thread(process_image, image_bytes)
     except Exception:
         logger.exception("Failed to process image for new SKU %s", sku_code)
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")

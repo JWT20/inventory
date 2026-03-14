@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 10  # seconds
+MAX_VISION_DIMENSION = 1024  # px – downscale before sending to Gemini
 
 _client: genai.Client | None = None
 
@@ -39,11 +40,27 @@ def _get_client() -> genai.Client:
     return _client
 
 
+def optimize_for_vision(image_bytes: bytes) -> Image.Image:
+    """Downscale image so its longest side is at most MAX_VISION_DIMENSION px.
+
+    Returns a PIL Image ready for the Vision API.  Images already within the
+    limit are returned as-is (no re-encoding quality loss).
+    """
+    image = Image.open(io.BytesIO(image_bytes))
+    w, h = image.size
+    if max(w, h) > MAX_VISION_DIMENSION:
+        scale = MAX_VISION_DIMENSION / max(w, h)
+        new_w, new_h = int(w * scale), int(h * scale)
+        image = image.resize((new_w, new_h), Image.LANCZOS)
+        logger.info("Resized image from %dx%d to %dx%d for vision", w, h, new_w, new_h)
+    return image
+
+
 def describe_image(image_bytes: bytes) -> str:
     """Use Gemini Vision to generate a detailed description of a wine box."""
     client = _get_client()
 
-    image = Image.open(io.BytesIO(image_bytes))
+    image = optimize_for_vision(image_bytes)
 
     logger.info("Calling Gemini Vision model=%s", settings.gemini_vision_model)
     for attempt in range(1, MAX_RETRIES + 1):

@@ -1,13 +1,13 @@
+import logging
 import os
 import uuid
-import logging
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth import get_current_user, require_admin, require_product_manager
 from app.config import settings
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.events import publish_event
 from app.models import SKU, ReferenceImage, User
 from app.schemas import (
@@ -160,10 +160,44 @@ def delete_sku(
     )
 
 
+def _process_reference_image_background(image_id: int, image_path: str, sku_code: str) -> None:
+    """Background task: run vision + embedding and update the DB record."""
+    db = SessionLocal()
+    try:
+        ref_image = db.get(ReferenceImage, image_id)
+        if not ref_image:
+            logger.error("Reference image %d not found for background processing", image_id)
+            return
+        ref_image.processing_status = "processing"
+        db.commit()
+
+        with open(image_path, "rb") as f:
+            image_bytes = f.read()
+
+        description, embedding = process_image(image_bytes)
+        ref_image.vision_description = description
+        ref_image.embedding = embedding
+        ref_image.processing_status = "done"
+        db.commit()
+        logger.info("Background processing complete for reference image %d (SKU %s)", image_id, sku_code)
+    except Exception:
+        logger.exception("Background processing failed for reference image %d (SKU %s)", image_id, sku_code)
+        try:
+            ref_image = db.get(ReferenceImage, image_id)
+            if ref_image:
+                ref_image.processing_status = "failed"
+                db.commit()
+        except Exception:
+            logger.exception("Failed to mark reference image %d as failed", image_id)
+    finally:
+        db.close()
+
+
 @router.post("/{sku_id}/images", response_model=ReferenceImageResponse, status_code=201)
 def upload_reference_image(
     sku_id: int,
     file: UploadFile,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(require_product_manager),
 ):
@@ -183,23 +217,16 @@ def upload_reference_image(
     with open(image_path, "wb") as f:
         f.write(image_bytes)
 
-    # Vision API: describe image → generate text embedding
-    logger.info("Processing reference image for SKU %s via Gemini Vision", sku.sku_code)
-    try:
-        description, embedding = process_image(image_bytes)
-    except Exception:
-        logger.exception("Failed to process reference image for SKU %s", sku.sku_code)
-        raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
-
+    # Create DB record immediately with pending status
     ref_image = ReferenceImage(
         sku_id=sku_id,
         image_path=image_path,
-        vision_description=description,
-        embedding=embedding,
+        processing_status="pending",
     )
     db.add(ref_image)
     db.commit()
     db.refresh(ref_image)
+
     publish_event(
         "reference_image_uploaded",
         details={"sku_code": sku.sku_code, "image_id": ref_image.id},
@@ -207,6 +234,12 @@ def upload_reference_image(
         resource_type="sku",
         resource_id=sku_id,
     )
+
+    # Process vision + embedding in background
+    background_tasks.add_task(
+        _process_reference_image_background, ref_image.id, image_path, sku.sku_code,
+    )
+
     return ref_image
 
 
