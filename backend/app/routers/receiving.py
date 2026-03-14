@@ -315,10 +315,15 @@ async def create_product_inline(
     # Process with Vision API
     logger.info("Processing reference image for new SKU %s", sku_code)
     try:
-        vision_description, embedding, _is_wine = await asyncio.to_thread(process_image, image_bytes)
+        vision_description, embedding, is_wine = await asyncio.to_thread(process_image, image_bytes)
     except Exception:
         logger.exception("Failed to process image for new SKU %s", sku_code)
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
+
+    if not is_wine:
+        # Roll back the SKU creation
+        db.rollback()
+        raise HTTPException(422, "Dit is geen wijndoos — upload alleen foto's van wijndozen")
 
     ref_image = ReferenceImage(
         sku_id=sku.id,

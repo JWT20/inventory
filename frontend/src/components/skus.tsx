@@ -202,10 +202,16 @@ function SKUDialog({
         const results = await Promise.allSettled(
           stagedFiles.map((staged) => api.uploadImage(skuId, staged.file)),
         );
-        const uploadErrors = results.filter((r) => r.status === "rejected").length;
+        const failures = results.filter(
+          (r): r is PromiseRejectedResult => r.status === "rejected",
+        );
         toast.dismiss(infoToast);
-        if (uploadErrors > 0) {
-          toast.error(`${uploadErrors} beeld(en) niet geüpload`);
+        if (failures.length > 0) {
+          const msg =
+            failures[0].reason instanceof Error
+              ? failures[0].reason.message
+              : `${failures.length} beeld(en) niet geüpload`;
+          toast.error(msg);
         } else {
           toast.success(`${stagedFiles.length} referentiebeeld(en) toegevoegd`);
         }

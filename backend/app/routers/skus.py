@@ -18,7 +18,7 @@ from app.schemas import (
     generate_display_name,
     generate_sku_code,
 )
-from app.services.embedding import process_image
+from app.services.embedding import describe_image, process_image
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/skus", tags=["skus"])
@@ -174,8 +174,13 @@ def _process_reference_image_background(image_id: int, image_path: str, sku_code
         with open(image_path, "rb") as f:
             image_bytes = f.read()
 
-        description, embedding, _is_wine = process_image(image_bytes)
+        description, embedding, is_wine = process_image(image_bytes)
         ref_image.vision_description = description
+        if not is_wine:
+            ref_image.processing_status = "failed"
+            db.commit()
+            logger.warning("Background processing rejected non-wine image %d (SKU %s)", image_id, sku_code)
+            return
         ref_image.embedding = embedding
         ref_image.processing_status = "done"
         db.commit()
@@ -208,6 +213,11 @@ def upload_reference_image(
     image_bytes = file.file.read()
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
+
+    # Synchronous wine classification check before saving
+    _description, is_wine = describe_image(image_bytes)
+    if not is_wine:
+        raise HTTPException(422, "Dit is geen wijndoos — upload alleen foto's van wijndozen")
 
     # Save image to disk
     ref_dir = os.path.join(settings.upload_dir, "reference_images", str(sku_id))
