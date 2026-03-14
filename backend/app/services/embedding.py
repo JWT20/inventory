@@ -192,7 +192,7 @@ def process_image(image_bytes: bytes) -> tuple[str, list[float] | None, bool]:
     """Full pipeline: image → vision description → text embedding.
 
     Returns (description, embedding, is_wine).
-    If the image is not wine, embedding is None (skipped to save cost/time).
+    If the image is not wine, embedding is None (skipped to save cost).
     """
     t_start = time.perf_counter()
     logger.info("Processing image (%d bytes)", len(image_bytes))
