@@ -219,7 +219,7 @@ function SKUDialog({
     skuId: number,
     files: { file: File; preview: string }[],
     skipWineCheck: boolean,
-  ) {
+  ): Promise<boolean> {
     setUploading(true);
     const infoToast = toast("Beelden uploaden en verwerken...");
     const results = await Promise.allSettled(
@@ -254,12 +254,12 @@ function SKUDialog({
     }
     if (rejected.length > 0) {
       setWineRejected(rejected);
-      toast.error("Afbeelding niet herkend als wijndoos");
     }
 
     setStagedFiles([]);
     setUploading(false);
     loadImages(skuId);
+    return rejected.length > 0;
   }
 
   async function forceUploadRejected() {

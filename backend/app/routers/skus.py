@@ -219,7 +219,7 @@ def upload_reference_image(
     if not skip_wine_check:
         _description, is_wine = describe_image(image_bytes)
         if not is_wine:
-            raise HTTPException(422, "Dit is geen wijndoos — upload alleen foto's van wijndozen")
+            raise HTTPException(400, "Dit is geen wijndoos — upload alleen foto's van wijndozen")
 
     # Save image to disk
     ref_dir = os.path.join(settings.upload_dir, "reference_images", str(sku_id))
