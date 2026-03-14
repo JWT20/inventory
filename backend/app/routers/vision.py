@@ -9,7 +9,7 @@ from app.config import settings
 from app.database import get_db
 from app.events import publish_event
 from app.models import User
-from app.schemas import IdentifyResponse, MatchResult
+from app.schemas import MatchResult
 from app.services.embedding import process_image
 from app.services.matching import find_best_matches
 
@@ -19,7 +19,7 @@ router = APIRouter(
 )
 
 
-@router.post("/identify", response_model=IdentifyResponse)
+@router.post("/identify", response_model=MatchResult | None)
 async def identify_box(
     file: UploadFile,
     db: Session = Depends(get_db),
@@ -33,28 +33,10 @@ async def identify_box(
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
     try:
-        description, embedding, is_wine = await asyncio.to_thread(process_image, image_bytes)
+        description, embedding = await asyncio.to_thread(process_image, image_bytes)
     except Exception:
         logger.exception("Vision processing failed during ad-hoc identify")
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
-
-    if not is_wine:
-        publish_event(
-            "vision_identify",
-            details={
-                "matched_sku_code": None,
-                "confidence": None,
-                "vision_description": description,
-                "candidates": [],
-                "threshold": settings.match_threshold,
-                "rejected": True,
-                "rejection_reason": "not_wine",
-            },
-            user=user,
-            resource_type="vision",
-        )
-        return IdentifyResponse(rejected=True, rejection_reason="not_wine")
-
     candidates = find_best_matches(db, embedding, top_n=5)
 
     matched_sku, confidence = None, 0.0
@@ -78,13 +60,11 @@ async def identify_box(
     )
 
     if matched_sku is None:
-        return IdentifyResponse()
+        return None
 
-    return IdentifyResponse(
-        match=MatchResult(
-            sku_id=matched_sku.id,
-            sku_code=matched_sku.sku_code,
-            sku_name=matched_sku.name,
-            confidence=confidence,
-        )
+    return MatchResult(
+        sku_id=matched_sku.id,
+        sku_code=matched_sku.sku_code,
+        sku_name=matched_sku.name,
+        confidence=confidence,
     )

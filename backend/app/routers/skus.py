@@ -174,7 +174,7 @@ def _process_reference_image_background(image_id: int, image_path: str, sku_code
         with open(image_path, "rb") as f:
             image_bytes = f.read()
 
-        description, embedding, _is_wine = process_image(image_bytes)
+        description, embedding = process_image(image_bytes)
         ref_image.vision_description = description
         ref_image.embedding = embedding
         ref_image.processing_status = "done"

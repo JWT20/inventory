@@ -125,12 +125,6 @@ class MatchResult(BaseModel):
     confidence: float
 
 
-class IdentifyResponse(BaseModel):
-    match: MatchResult | None = None
-    rejected: bool = False
-    rejection_reason: str | None = None
-
-
 # --- CSV Row ---
 class CSVRow(BaseModel):
     klant: str
