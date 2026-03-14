@@ -134,7 +134,10 @@ class TestDescribeImage:
 
         with patch("app.services.embedding._get_client", return_value=mock_client), \
              patch("app.services.embedding.Image") as mock_pil:
-            mock_pil.open.return_value = MagicMock()
+            mock_img = MagicMock()
+            mock_img.size = (800, 600)
+            mock_pil.open.return_value = mock_img
+            mock_pil.LANCZOS = 1
             result = describe_image(b"fake-image-bytes")
 
         assert result == "Château Margaux 2015 Bordeaux"
@@ -148,10 +151,12 @@ class TestDescribeImage:
         mock_response.text = "description"
         mock_client.models.generate_content.return_value = mock_response
         fake_image = MagicMock()
+        fake_image.size = (800, 600)
 
         with patch("app.services.embedding._get_client", return_value=mock_client), \
              patch("app.services.embedding.Image") as mock_pil:
             mock_pil.open.return_value = fake_image
+            mock_pil.LANCZOS = 1
             describe_image(b"test")
 
         # generate_content should receive contents list with prompt and image

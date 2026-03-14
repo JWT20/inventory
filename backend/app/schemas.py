@@ -111,6 +111,7 @@ class ReferenceImageResponse(BaseModel):
     sku_id: int
     image_path: str
     vision_description: str | None = None
+    processing_status: str = "done"
     created_at: datetime
 
     model_config = {"from_attributes": True}

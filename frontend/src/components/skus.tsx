@@ -34,6 +34,7 @@ interface RefImage {
   sku_id: number;
   image_path: string;
   vision_description: string | null;
+  processing_status: string;
 }
 
 export function SKUsPage() {
@@ -198,14 +199,10 @@ function SKUDialog({
       if (stagedFiles.length > 0) {
         setUploading(true);
         const infoToast = toast("Beelden uploaden en verwerken...");
-        let uploadErrors = 0;
-        for (const staged of stagedFiles) {
-          try {
-            await api.uploadImage(skuId, staged.file);
-          } catch {
-            uploadErrors++;
-          }
-        }
+        const results = await Promise.allSettled(
+          stagedFiles.map((staged) => api.uploadImage(skuId, staged.file)),
+        );
+        const uploadErrors = results.filter((r) => r.status === "rejected").length;
         toast.dismiss(infoToast);
         if (uploadErrors > 0) {
           toast.error(`${uploadErrors} beeld(en) niet geüpload`);
@@ -360,8 +357,17 @@ function SKUDialog({
                   <img
                     src={`/api/uploads/reference_images/${img.sku_id}/${img.image_path.split("/").pop()}`}
                     alt="ref"
-                    className="w-full h-full object-cover"
+                    className={`w-full h-full object-cover${img.processing_status !== "done" ? " opacity-50" : ""}`}
                   />
+                  {img.processing_status === "pending" || img.processing_status === "processing" ? (
+                    <span className="absolute bottom-1 left-1 text-[10px] bg-yellow-600/80 text-white px-1 rounded">
+                      Verwerken...
+                    </span>
+                  ) : img.processing_status === "failed" ? (
+                    <span className="absolute bottom-1 left-1 text-[10px] bg-red-600/80 text-white px-1 rounded">
+                      Mislukt
+                    </span>
+                  ) : null}
                   {user && user.role !== "courier" && (
                     <button
                       onClick={() => deleteImage(img.id)}

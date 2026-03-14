@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -19,7 +20,7 @@ router = APIRouter(
 
 
 @router.post("/identify", response_model=MatchResult | None)
-def identify_box(
+async def identify_box(
     file: UploadFile,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -32,7 +33,7 @@ def identify_box(
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
     try:
-        description, embedding = process_image(image_bytes)
+        description, embedding = await asyncio.to_thread(process_image, image_bytes)
     except Exception:
         logger.exception("Vision processing failed during ad-hoc identify")
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")

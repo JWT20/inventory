@@ -87,7 +87,10 @@ class ReferenceImage(Base):
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="CASCADE"))
     image_path: Mapped[str] = mapped_column(String(500))
     vision_description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    embedding = mapped_column(Vector(EMBEDDING_DIM))
+    embedding = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+    processing_status: Mapped[str] = mapped_column(
+        String(20), default="done"
+    )  # "pending", "processing", "done", "failed"
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
