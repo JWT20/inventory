@@ -60,9 +60,13 @@ def describe_image(image_bytes: bytes) -> str:
     """Use Gemini Vision to generate a detailed description of a wine box."""
     client = _get_client()
 
+    t0 = time.perf_counter()
     image = optimize_for_vision(image_bytes)
+    resize_ms = (time.perf_counter() - t0) * 1000
 
+    logger.info("[TIMING] image_resize=%.0fms", resize_ms)
     logger.info("Calling Gemini Vision model=%s", settings.gemini_vision_model)
+    t0 = time.perf_counter()
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             response = client.models.generate_content(
@@ -85,8 +89,10 @@ def describe_image(image_bytes: bytes) -> str:
             else:
                 logger.exception("Gemini Vision API call failed (model=%s, attempt=%d)", settings.gemini_vision_model, attempt)
                 raise
+    vision_ms = (time.perf_counter() - t0) * 1000
 
     description = response.text
+    logger.info("[TIMING] gemini_vision=%.0fms", vision_ms)
     logger.info("Vision description: %s", description[:100])
     return description
 
@@ -96,6 +102,7 @@ def generate_embedding(text: str) -> list[float]:
     client = _get_client()
 
     logger.info("Calling Gemini Embedding model=%s", settings.gemini_embedding_model)
+    t0 = time.perf_counter()
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             result = client.models.embed_content(
@@ -112,7 +119,9 @@ def generate_embedding(text: str) -> list[float]:
             else:
                 logger.exception("Gemini Embedding API call failed (model=%s, attempt=%d)", settings.gemini_embedding_model, attempt)
                 raise
+    embedding_ms = (time.perf_counter() - t0) * 1000
 
+    logger.info("[TIMING] gemini_embedding=%.0fms", embedding_ms)
     return result.embeddings[0].values
 
 
@@ -121,8 +130,10 @@ def process_image(image_bytes: bytes) -> tuple[str, list[float]]:
 
     Returns (description, embedding).
     """
+    t_start = time.perf_counter()
     logger.info("Processing image (%d bytes)", len(image_bytes))
     description = describe_image(image_bytes)
     embedding = generate_embedding(description)
-    logger.info("Image processed successfully")
+    total_ms = (time.perf_counter() - t_start) * 1000
+    logger.info("[TIMING] process_image_total=%.0fms", total_ms)
     return description, embedding

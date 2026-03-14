@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
@@ -44,7 +45,10 @@ async def identify_box(
 
     Returns the matched SKU, or null if no match found.
     """
+    t_start = time.perf_counter()
+
     image_bytes = _read_image(file)
+    t_read = time.perf_counter()
 
     # Save scan image for later reference
     scan_dir = os.path.join(settings.upload_dir, "scans")
@@ -53,17 +57,30 @@ async def identify_box(
     scan_path = os.path.join(scan_dir, filename)
     with open(scan_path, "wb") as f:
         f.write(image_bytes)
+    t_save = time.perf_counter()
 
     try:
         description, embedding = await asyncio.to_thread(process_image, image_bytes)
     except Exception:
         logger.exception("Vision processing failed during identify")
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
+    t_process = time.perf_counter()
+
     candidates = find_best_matches(db, embedding, top_n=5)
+    t_match = time.perf_counter()
 
     matched_sku, confidence = None, 0.0
     if candidates and candidates[0][1] >= settings.match_threshold:
         matched_sku, confidence = candidates[0]
+
+    logger.info(
+        "[TIMING] identify total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms",
+        (t_match - t_start) * 1000,
+        (t_read - t_start) * 1000,
+        (t_save - t_read) * 1000,
+        (t_process - t_save) * 1000,
+        (t_match - t_process) * 1000,
+    )
 
     publish_event(
         "box_identified",
@@ -104,6 +121,8 @@ async def book_box(
     Scans the box, identifies the SKU, finds the matching order line,
     and creates a booking. Returns the rolcontainer assignment.
     """
+    t_start = time.perf_counter()
+
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, "Order niet gevonden")
@@ -111,6 +130,7 @@ async def book_box(
         raise HTTPException(400, f"Order is niet actief (status: {order.status})")
 
     image_bytes = _read_image(file)
+    t_read = time.perf_counter()
 
     # Save scan image
     scan_dir = os.path.join(settings.upload_dir, "scans")
@@ -119,6 +139,7 @@ async def book_box(
     scan_path = os.path.join(scan_dir, filename)
     with open(scan_path, "wb") as f:
         f.write(image_bytes)
+    t_save = time.perf_counter()
 
     # Vision match
     try:
@@ -126,7 +147,10 @@ async def book_box(
     except Exception:
         logger.exception("Vision processing failed during booking")
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
+    t_process = time.perf_counter()
+
     candidates = find_best_matches(db, embedding, top_n=5)
+    t_match = time.perf_counter()
 
     matched_sku, confidence = None, 0.0
     if candidates and candidates[0][1] >= settings.match_threshold:
@@ -173,8 +197,19 @@ async def book_box(
         order.status = "completed"
 
     db.commit()
+    t_booking = time.perf_counter()
 
     rolcontainer = f"KLANT {order_line.klant.upper()}"
+
+    logger.info(
+        "[TIMING] book total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms booking=%.0fms",
+        (t_booking - t_start) * 1000,
+        (t_read - t_start) * 1000,
+        (t_save - t_read) * 1000,
+        (t_process - t_save) * 1000,
+        (t_match - t_process) * 1000,
+        (t_booking - t_match) * 1000,
+    )
 
     publish_event(
         "box_booked",

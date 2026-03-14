@@ -1,4 +1,5 @@
 import logging
+import time
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -17,6 +18,7 @@ def find_best_matches(
     Returns a list of (sku, similarity) tuples, ordered by similarity descending.
     Only includes active SKUs.
     """
+    t0 = time.perf_counter()
     embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
 
     rows = db.execute(
@@ -31,18 +33,24 @@ def find_best_matches(
         """),
         {"embedding": embedding_str, "top_n": top_n},
     ).fetchall()
+    vector_ms = (time.perf_counter() - t0) * 1000
 
     if not rows:
+        logger.info("[TIMING] pgvector_search=%.0fms (no results)", vector_ms)
         return []
 
+    t1 = time.perf_counter()
     sku_ids = [row[0] for row in rows]
     skus_by_id = {s.id: s for s in db.query(SKU).filter(SKU.id.in_(sku_ids)).all()}
+    sku_load_ms = (time.perf_counter() - t1) * 1000
 
     results = []
     for sku_id, similarity in rows:
         sku = skus_by_id.get(sku_id)
         if sku:
             results.append((sku, float(similarity)))
+
+    logger.info("[TIMING] pgvector_search=%.0fms sku_load=%.0fms (%d results)", vector_ms, sku_load_ms, len(results))
     return results
 
 
