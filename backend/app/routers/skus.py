@@ -160,7 +160,9 @@ def delete_sku(
     )
 
 
-def _process_reference_image_background(image_id: int, image_path: str, sku_code: str) -> None:
+def _process_reference_image_background(
+    image_id: int, image_path: str, sku_code: str, force: bool = False,
+) -> None:
     """Background task: run vision + embedding and update the DB record."""
     db = SessionLocal()
     try:
@@ -176,11 +178,16 @@ def _process_reference_image_background(image_id: int, image_path: str, sku_code
 
         description, embedding, is_wine = process_image(image_bytes)
         ref_image.vision_description = description
-        if not is_wine:
+        if not is_wine and not force:
             ref_image.processing_status = "failed"
             db.commit()
             logger.warning("Background processing rejected non-wine image %d (SKU %s)", image_id, sku_code)
             return
+        if not is_wine and force:
+            # User overrode wine check — generate embedding from description anyway
+            from app.services.embedding import generate_embedding
+            embedding = generate_embedding(description)
+            logger.info("Forced embedding for overridden non-wine image %d (SKU %s)", image_id, sku_code)
         ref_image.embedding = embedding
         ref_image.processing_status = "done"
         db.commit()
@@ -250,6 +257,7 @@ def upload_reference_image(
     # Process vision + embedding in background
     background_tasks.add_task(
         _process_reference_image_background, ref_image.id, image_path, sku.sku_code,
+        force=skip_wine_check,
     )
 
     return ref_image
