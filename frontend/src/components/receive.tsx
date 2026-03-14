@@ -413,9 +413,11 @@ function IdentifyScanStep({
     }
 
     try {
-      const result: IdentifyResult | null = await api.identifyBox(blob);
-      if (result) {
-        onIdentified(result);
+      const response = await api.identifyBox(blob);
+      if (response?.rejected) {
+        toast.error("Dit is geen wijnproduct — scan een wijndoos");
+      } else if (response?.match) {
+        onIdentified(response.match);
       } else {
         toast.error("Doos niet herkend — geen match gevonden");
       }
