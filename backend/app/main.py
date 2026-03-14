@@ -239,8 +239,15 @@ def _migrate_reference_image_wine_override():
     if "wine_check_overridden" not in columns:
         logger.info("Adding wine_check_overridden column to reference_images table")
         with engine.begin() as conn:
+            # Default existing rows to true so previously overridden images
+            # (like force-uploaded non-wine references) are immediately matchable.
+            # New uploads will explicitly set this to false/true.
             conn.execute(text(
-                "ALTER TABLE reference_images ADD COLUMN wine_check_overridden BOOLEAN NOT NULL DEFAULT false"
+                "ALTER TABLE reference_images ADD COLUMN wine_check_overridden BOOLEAN NOT NULL DEFAULT true"
+            ))
+            # Set the model default (false) for future inserts
+            conn.execute(text(
+                "ALTER TABLE reference_images ALTER COLUMN wine_check_overridden SET DEFAULT false"
             ))
 
 
