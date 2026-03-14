@@ -66,7 +66,41 @@ async def identify_box(
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
     t_process = time.perf_counter()
 
-    # Always try vector matching — non-wine images may match overridden references
+    # For non-wine images: only generate embedding if overridden references exist
+    if not is_wine and embedding is None:
+        has_overridden = db.query(ReferenceImage).filter(
+            ReferenceImage.wine_check_overridden.is_(True),
+            ReferenceImage.embedding.isnot(None),
+        ).first() is not None
+        if has_overridden:
+            from app.services.embedding import generate_embedding
+            logger.info("Non-wine image — generating embedding to match against overridden references")
+            embedding = await asyncio.to_thread(generate_embedding, description)
+
+    if not is_wine and embedding is None:
+        logger.info(
+            "[TIMING] identify total=%.0fms (rejected: not wine) | read=%.0fms save=%.0fms process_image=%.0fms",
+            (t_process - t_start) * 1000,
+            (t_read - t_start) * 1000,
+            (t_save - t_read) * 1000,
+            (t_process - t_save) * 1000,
+        )
+        publish_event(
+            "box_identified",
+            details={
+                "matched_sku_code": None,
+                "confidence": None,
+                "vision_description": description,
+                "candidates": [],
+                "threshold": settings.match_threshold,
+                "rejected": True,
+                "rejection_reason": "not_wine",
+            },
+            user=user,
+            resource_type="receiving",
+        )
+        return None
+
     candidates = find_best_matches(db, embedding, top_n=5)
     t_match = time.perf_counter()
 
@@ -74,7 +108,7 @@ async def identify_box(
     if candidates and candidates[0][1] >= settings.match_threshold:
         matched_sku, confidence = candidates[0]
 
-    # If not wine AND no match found, reject
+    # Non-wine with no match: reject
     if not is_wine and matched_sku is None:
         logger.info(
             "[TIMING] identify total=%.0fms (not wine, no match) | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms",
@@ -182,7 +216,34 @@ async def book_box(
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
     t_process = time.perf_counter()
 
-    # Always try vector matching — non-wine images may match overridden references
+    # For non-wine images: only generate embedding if overridden references exist
+    if not is_wine and embedding is None:
+        has_overridden = db.query(ReferenceImage).filter(
+            ReferenceImage.wine_check_overridden.is_(True),
+            ReferenceImage.embedding.isnot(None),
+        ).first() is not None
+        if has_overridden:
+            from app.services.embedding import generate_embedding
+            logger.info("Non-wine image — generating embedding to match against overridden references")
+            embedding = await asyncio.to_thread(generate_embedding, description)
+
+    if not is_wine and embedding is None:
+        publish_event(
+            "box_booked",
+            details={
+                "order_reference": order.reference,
+                "rejected": True,
+                "rejection_reason": "not_wine",
+                "vision_description": description,
+            },
+            user=user,
+            resource_type="booking",
+        )
+        raise HTTPException(
+            422,
+            "Dit is geen wijnproduct — scan een wijndoos",
+        )
+
     candidates = find_best_matches(db, embedding, top_n=5)
     t_match = time.perf_counter()
 
@@ -190,7 +251,7 @@ async def book_box(
     if candidates and candidates[0][1] >= settings.match_threshold:
         matched_sku, confidence = candidates[0]
 
-    # If not wine AND no match found, reject
+    # Non-wine with no match: reject
     if not is_wine and matched_sku is None:
         publish_event(
             "box_booked",

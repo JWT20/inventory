@@ -162,17 +162,18 @@ def process_image(image_bytes: bytes) -> tuple[str, list[float] | None, bool]:
     """Full pipeline: image → vision description → text embedding.
 
     Returns (description, embedding, is_wine).
-    Embedding is always generated so non-wine images can still match
-    against overridden reference images.
+    If the image is not wine, embedding is None (skipped to save cost).
     """
     t_start = time.perf_counter()
     logger.info("Processing image (%d bytes)", len(image_bytes))
     description, is_wine = describe_image(image_bytes)
 
+    if not is_wine:
+        total_ms = (time.perf_counter() - t_start) * 1000
+        logger.info("[TIMING] process_image_total=%.0fms (rejected: not wine)", total_ms)
+        return description, None, False
+
     embedding = generate_embedding(description)
     total_ms = (time.perf_counter() - t_start) * 1000
-    if not is_wine:
-        logger.info("[TIMING] process_image_total=%.0fms (not wine, embedding generated for matching)", total_ms)
-    else:
-        logger.info("[TIMING] process_image_total=%.0fms", total_ms)
-    return description, embedding, is_wine
+    logger.info("[TIMING] process_image_total=%.0fms", total_ms)
+    return description, embedding, True

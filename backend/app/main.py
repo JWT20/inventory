@@ -230,6 +230,20 @@ def _cleanup_old_scans():
         logger.info("Scan cleanup: removed %d images older than 30 days", removed)
 
 
+def _migrate_reference_image_wine_override():
+    """Add wine_check_overridden column to reference_images if missing."""
+    inspector = inspect(engine)
+    if "reference_images" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("reference_images")}
+    if "wine_check_overridden" not in columns:
+        logger.info("Adding wine_check_overridden column to reference_images table")
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE reference_images ADD COLUMN wine_check_overridden BOOLEAN NOT NULL DEFAULT false"
+            ))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- startup ---
@@ -240,6 +254,7 @@ async def lifespan(app: FastAPI):
     _migrate_sku_wine_fields()
     _migrate_order_line_klant()
     _migrate_reference_image_processing_status()
+    _migrate_reference_image_wine_override()
 
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)

@@ -241,6 +241,7 @@ def upload_reference_image(
         sku_id=sku_id,
         image_path=image_path,
         processing_status="pending",
+        wine_check_overridden=skip_wine_check,
     )
     db.add(ref_image)
     db.commit()
