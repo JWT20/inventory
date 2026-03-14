@@ -60,11 +60,35 @@ async def identify_box(
     t_save = time.perf_counter()
 
     try:
-        description, embedding = await asyncio.to_thread(process_image, image_bytes)
+        description, embedding, is_wine = await asyncio.to_thread(process_image, image_bytes)
     except Exception:
         logger.exception("Vision processing failed during identify")
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
     t_process = time.perf_counter()
+
+    if not is_wine:
+        logger.info(
+            "[TIMING] identify total=%.0fms (rejected: not wine) | read=%.0fms save=%.0fms process_image=%.0fms",
+            (t_process - t_start) * 1000,
+            (t_read - t_start) * 1000,
+            (t_save - t_read) * 1000,
+            (t_process - t_save) * 1000,
+        )
+        publish_event(
+            "box_identified",
+            details={
+                "matched_sku_code": None,
+                "confidence": None,
+                "vision_description": description,
+                "candidates": [],
+                "threshold": settings.match_threshold,
+                "rejected": True,
+                "rejection_reason": "not_wine",
+            },
+            user=user,
+            resource_type="receiving",
+        )
+        return None
 
     candidates = find_best_matches(db, embedding, top_n=5)
     t_match = time.perf_counter()
@@ -143,11 +167,28 @@ async def book_box(
 
     # Vision match
     try:
-        description, embedding = await asyncio.to_thread(process_image, image_bytes)
+        description, embedding, is_wine = await asyncio.to_thread(process_image, image_bytes)
     except Exception:
         logger.exception("Vision processing failed during booking")
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
     t_process = time.perf_counter()
+
+    if not is_wine:
+        publish_event(
+            "box_booked",
+            details={
+                "order_reference": order.reference,
+                "rejected": True,
+                "rejection_reason": "not_wine",
+                "vision_description": description,
+            },
+            user=user,
+            resource_type="booking",
+        )
+        raise HTTPException(
+            422,
+            "Dit is geen wijnproduct — scan een wijndoos",
+        )
 
     candidates = find_best_matches(db, embedding, top_n=5)
     t_match = time.perf_counter()
@@ -272,10 +313,15 @@ async def create_product_inline(
     # Process with Vision API
     logger.info("Processing reference image for new SKU %s", sku_code)
     try:
-        vision_description, embedding = await asyncio.to_thread(process_image, image_bytes)
+        vision_description, embedding, is_wine = await asyncio.to_thread(process_image, image_bytes)
     except Exception:
         logger.exception("Failed to process image for new SKU %s", sku_code)
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
+
+    if not is_wine:
+        # Roll back the SKU creation
+        db.rollback()
+        raise HTTPException(422, "Dit is geen wijndoos — upload alleen foto's van wijndozen")
 
     ref_image = ReferenceImage(
         sku_id=sku.id,

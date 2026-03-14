@@ -129,7 +129,7 @@ class TestDescribeImage:
 
         mock_client = MagicMock()
         mock_response = MagicMock()
-        mock_response.text = "Château Margaux 2015 Bordeaux"
+        mock_response.text = "WINE_PRODUCT: YES\nChâteau Margaux 2015 Bordeaux"
         mock_client.models.generate_content.return_value = mock_response
 
         with patch("app.services.embedding._get_client", return_value=mock_client), \
@@ -138,9 +138,10 @@ class TestDescribeImage:
             mock_img.size = (800, 600)
             mock_pil.open.return_value = mock_img
             mock_pil.LANCZOS = 1
-            result = describe_image(b"fake-image-bytes")
+            description, is_wine = describe_image(b"fake-image-bytes")
 
-        assert result == "Château Margaux 2015 Bordeaux"
+        assert description == "Château Margaux 2015 Bordeaux"
+        assert is_wine is True
         mock_client.models.generate_content.assert_called_once()
 
     def test_sends_image_to_model(self):
@@ -148,7 +149,7 @@ class TestDescribeImage:
 
         mock_client = MagicMock()
         mock_response = MagicMock()
-        mock_response.text = "description"
+        mock_response.text = "WINE_PRODUCT: YES\ndescription"
         mock_client.models.generate_content.return_value = mock_response
         fake_image = MagicMock()
         fake_image.size = (800, 600)
@@ -199,11 +200,25 @@ class TestProcessImage:
     def test_pipeline_chains_describe_then_embed(self):
         from app.services.embedding import process_image
 
-        with patch("app.services.embedding.describe_image", return_value="A fine Bordeaux") as mock_desc, \
+        with patch("app.services.embedding.describe_image", return_value=("A fine Bordeaux", True)) as mock_desc, \
              patch("app.services.embedding.generate_embedding", return_value=[0.5] * 3072) as mock_emb:
-            description, embedding = process_image(b"image-data")
+            description, embedding, is_wine = process_image(b"image-data")
 
         assert description == "A fine Bordeaux"
+        assert is_wine is True
         assert len(embedding) == 3072
         mock_desc.assert_called_once_with(b"image-data")
         mock_emb.assert_called_once_with("A fine Bordeaux")
+
+    def test_pipeline_skips_embedding_for_non_wine(self):
+        from app.services.embedding import process_image
+
+        with patch("app.services.embedding.describe_image", return_value=("A black shoe box", False)) as mock_desc, \
+             patch("app.services.embedding.generate_embedding") as mock_emb:
+            description, embedding, is_wine = process_image(b"image-data")
+
+        assert description == "A black shoe box"
+        assert is_wine is False
+        assert embedding is None
+        mock_desc.assert_called_once_with(b"image-data")
+        mock_emb.assert_not_called()

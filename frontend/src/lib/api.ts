@@ -160,8 +160,12 @@ export const api = {
 
   // Reference images
   listImages: (skuId: number) => request(`/skus/${skuId}/images`),
-  uploadImage: (skuId: number, file: Blob) =>
-    upload(`/skus/${skuId}/images`, file, "image.jpg"),
+  uploadImage: (skuId: number, file: Blob, skipWineCheck = false) => {
+    if (skipWineCheck) {
+      return uploadWithFields(`/skus/${skuId}/images`, file, { skip_wine_check: "true" }, "image.jpg");
+    }
+    return upload(`/skus/${skuId}/images`, file, "image.jpg");
+  },
   deleteImage: (skuId: number, imageId: number) =>
     request(`/skus/${skuId}/images/${imageId}`, { method: "DELETE" }),
 
