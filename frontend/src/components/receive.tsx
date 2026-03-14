@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -24,12 +25,20 @@ interface BookingResult {
   rolcontainer: string;
 }
 
-type Step = "select-order" | "scan" | "result";
+interface IdentifyResult {
+  sku_id: number;
+  sku_code: string;
+  sku_name: string;
+  confidence: number;
+}
+
+type Step = "select-order" | "scan" | "result" | "identify-scan" | "identify-result";
 
 export function ReceivePage() {
   const [step, setStep] = useState<Step>("select-order");
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [lastBooking, setLastBooking] = useState<BookingResult | null>(null);
+  const [lastIdentify, setLastIdentify] = useState<IdentifyResult | null>(null);
 
   function handleOrderSelected(order: Order) {
     setSelectedOrder(order);
@@ -41,6 +50,11 @@ export function ReceivePage() {
     setStep("result");
   }
 
+  function handleIdentified(result: IdentifyResult) {
+    setLastIdentify(result);
+    setStep("identify-result");
+  }
+
   function scanNext() {
     setLastBooking(null);
     setStep("scan");
@@ -50,6 +64,7 @@ export function ReceivePage() {
     setStep("select-order");
     setSelectedOrder(null);
     setLastBooking(null);
+    setLastIdentify(null);
   }
 
   return (
@@ -57,7 +72,10 @@ export function ReceivePage() {
       <h2 className="text-xl font-bold mb-4">Scan & Boek</h2>
 
       {step === "select-order" && (
-        <OrderSelectStep onSelect={handleOrderSelected} />
+        <OrderSelectStep
+          onSelect={handleOrderSelected}
+          onIdentify={() => setStep("identify-scan")}
+        />
       )}
 
       {step === "scan" && selectedOrder && (
@@ -76,6 +94,21 @@ export function ReceivePage() {
           onDone={reset}
         />
       )}
+
+      {step === "identify-scan" && (
+        <IdentifyScanStep
+          onIdentified={handleIdentified}
+          onBack={reset}
+        />
+      )}
+
+      {step === "identify-result" && (
+        <IdentifyResultStep
+          result={lastIdentify}
+          onNext={() => { setLastIdentify(null); setStep("identify-scan"); }}
+          onDone={reset}
+        />
+      )}
     </div>
   );
 }
@@ -84,9 +117,12 @@ export function ReceivePage() {
 
 function OrderSelectStep({
   onSelect,
+  onIdentify,
 }: {
   onSelect: (order: Order) => void;
+  onIdentify: () => void;
 }) {
+  const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -139,11 +175,21 @@ function OrderSelectStep({
           ))}
         </div>
       )}
+
+      {user?.role === "admin" && (
+        <Button
+          variant="secondary"
+          className="w-full mt-4"
+          onClick={onIdentify}
+        >
+          Scan zonder order
+        </Button>
+      )}
     </>
   );
 }
 
-/* ---------- Step 2: Camera Scan ---------- */
+/* ---------- Step 2: Camera Scan (with order) ---------- */
 
 function ScanStep({
   order,
@@ -301,6 +347,171 @@ function ResultStep({
       <div className="flex flex-col gap-3">
         <Button size="lg" className="w-full h-14 text-lg" onClick={onNext}>
           Volgende doos scannen
+        </Button>
+        <Button variant="secondary" className="w-full" onClick={onDone}>
+          Terug naar orders
+        </Button>
+      </div>
+    </>
+  );
+}
+
+/* ---------- Identify Scan (without order) ---------- */
+
+function IdentifyScanStep({
+  onIdentified,
+  onBack,
+}: {
+  onIdentified: (result: IdentifyResult) => void;
+  onBack: () => void;
+}) {
+  const [scanning, setScanning] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  useEffect(() => {
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 960 },
+          },
+        });
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+      } catch {
+        toast.error("Camera niet beschikbaar");
+      }
+    }
+    startCamera();
+    return () => {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  async function capture() {
+    if (!videoRef.current || !canvasRef.current) return;
+    setScanning(true);
+
+    const canvas = canvasRef.current;
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    canvas.getContext("2d")!.drawImage(videoRef.current, 0, 0);
+
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.75),
+    );
+    if (!blob) {
+      setScanning(false);
+      return;
+    }
+
+    try {
+      const result: IdentifyResult | null = await api.identifyBox(blob);
+      if (result) {
+        onIdentified(result);
+      } else {
+        toast.error("Doos niet herkend — geen match gevonden");
+      }
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Scanfout");
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  return (
+    <>
+      <Card className="p-3 mb-3">
+        <p className="text-sm font-semibold">Scan zonder order</p>
+        <p className="text-xs text-muted-foreground">
+          Identificeer een doos zonder te boeken
+        </p>
+      </Card>
+
+      <p className="text-sm text-muted-foreground mb-3">
+        Richt de camera op de doos en druk op Scan
+      </p>
+      <div className="relative w-full aspect-[4/3] rounded-lg overflow-hidden bg-black mb-3">
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          className="w-full h-full object-cover"
+        />
+        <canvas ref={canvasRef} className="hidden" />
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="w-[70%] h-[70%] border-[3px] border-white/50 rounded-2xl" />
+        </div>
+      </div>
+      <Button
+        size="lg"
+        className="w-full text-lg h-14"
+        onClick={capture}
+        disabled={scanning}
+      >
+        {scanning ? "Herkennen..." : "Scan"}
+      </Button>
+      <button
+        onClick={onBack}
+        className="text-sm text-muted-foreground underline w-full text-center block mt-3"
+      >
+        Terug naar orders
+      </button>
+    </>
+  );
+}
+
+/* ---------- Identify Result (without order) ---------- */
+
+function IdentifyResultStep({
+  result,
+  onNext,
+  onDone,
+}: {
+  result: IdentifyResult | null;
+  onNext: () => void;
+  onDone: () => void;
+}) {
+  if (!result) return null;
+
+  return (
+    <>
+      <div className="p-6 rounded-lg bg-blue-600/20 border-2 border-blue-600 text-center mb-4">
+        <p className="text-blue-400 text-2xl font-bold mb-2">
+          Product herkend
+        </p>
+        <p className="text-blue-300 text-xl font-black">
+          {result.sku_name}
+        </p>
+      </div>
+
+      <Card className="p-4 mb-4">
+        <div className="space-y-1">
+          <p className="text-sm">
+            <span className="text-muted-foreground">Product:</span>{" "}
+            <span className="font-semibold">{result.sku_name}</span>
+          </p>
+          <p className="text-sm">
+            <span className="text-muted-foreground">SKU:</span>{" "}
+            <span className="font-mono">{result.sku_code}</span>
+          </p>
+          <p className="text-sm">
+            <span className="text-muted-foreground">Zekerheid:</span>{" "}
+            {Math.round(result.confidence * 100)}%
+          </p>
+        </div>
+      </Card>
+
+      <div className="flex flex-col gap-3">
+        <Button size="lg" className="w-full h-14 text-lg" onClick={onNext}>
+          Opnieuw scannen
         </Button>
         <Button variant="secondary" className="w-full" onClick={onDone}>
           Terug naar orders
