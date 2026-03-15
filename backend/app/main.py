@@ -304,6 +304,10 @@ async def lifespan(app: FastAPI):
     init_producer()
     _cleanup_old_scans()
 
+    # Serve uploaded images (scans, reference images)
+    os.makedirs(settings.upload_dir, exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")
+
     yield
 
     # --- shutdown ---
@@ -334,10 +338,6 @@ app.include_router(skus.router, prefix="/api")
 app.include_router(orders.router, prefix="/api")
 app.include_router(receiving.router, prefix="/api")
 app.include_router(vision.router, prefix="/api")
-
-# Serve uploaded images (scans, reference images)
-os.makedirs(settings.upload_dir, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")
 
 
 @app.get("/api/health")
