@@ -190,7 +190,9 @@ async def book_box(
             "Dit is geen doos of verpakking — scan een productdoos",
         )
 
-    candidates = find_best_matches(db, embedding, top_n=5)
+    # Only match against SKUs in this order
+    order_sku_ids = [line.sku_id for line in order.lines]
+    candidates = find_best_matches(db, embedding, top_n=5, sku_ids=order_sku_ids)
     t_match = time.perf_counter()
 
     matched_sku, confidence = None, 0.0
@@ -200,10 +202,10 @@ async def book_box(
     if matched_sku is None:
         raise HTTPException(
             404,
-            "Doos niet herkend — geen match gevonden met referentiebeelden",
+            "Doos niet herkend — geen match gevonden met SKUs in deze order",
         )
 
-    # Find matching order line
+    # Find matching order line with remaining quantity
     order_line = (
         db.query(OrderLine)
         .filter(
@@ -216,7 +218,7 @@ async def book_box(
     if not order_line:
         raise HTTPException(
             400,
-            f"SKU {matched_sku.sku_code} zit niet in deze order of is al volledig geboekt",
+            f"SKU {matched_sku.sku_code} is al volledig geboekt in deze order",
         )
 
     # Create booking
