@@ -27,9 +27,9 @@ _signer = URLSafeTimedSerializer(settings.secret_key, salt="booking-confirm")
 
 
 def _scan_url(scan_path: str) -> str:
-    """Convert an absolute file path to a URL relative to /uploads."""
+    """Convert an absolute file path to a URL served via /api/uploads/."""
     rel = os.path.relpath(scan_path, settings.upload_dir)
-    return f"/uploads/{rel}"
+    return f"/api/uploads/{rel}"
 
 
 def _best_reference_image_url(db: Session, sku_id: int) -> str:
