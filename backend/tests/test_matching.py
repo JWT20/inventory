@@ -120,16 +120,16 @@ class TestFindBestMatches:
 
 
 # ---------------------------------------------------------------------------
-# embedding.describe_image
+# embedding.classify_image
 # ---------------------------------------------------------------------------
 
-class TestDescribeImage:
-    def test_returns_vision_description(self):
-        from app.services.embedding import describe_image
+class TestClassifyImage:
+    def test_classifies_package(self):
+        from app.services.embedding import classify_image
 
         mock_client = MagicMock()
         mock_response = MagicMock()
-        mock_response.text = "WINE_PRODUCT: YES\nChâteau Margaux 2015 Bordeaux"
+        mock_response.text = '{"is_package": true, "summary": "wine box"}'
         mock_client.models.generate_content.return_value = mock_response
 
         with patch("app.services.embedding._get_client", return_value=mock_client), \
@@ -138,34 +138,55 @@ class TestDescribeImage:
             mock_img.size = (800, 600)
             mock_pil.open.return_value = mock_img
             mock_pil.LANCZOS = 1
-            description, is_wine = describe_image(b"fake-image-bytes")
+            is_package, summary = classify_image(b"fake-image-bytes")
 
-        assert description == "Château Margaux 2015 Bordeaux"
-        assert is_wine is True
+        assert is_package is True
+        assert summary == "wine box"
         mock_client.models.generate_content.assert_called_once()
 
-    def test_sends_image_to_model(self):
-        from app.services.embedding import describe_image
+    def test_classifies_non_package(self):
+        from app.services.embedding import classify_image
 
         mock_client = MagicMock()
         mock_response = MagicMock()
-        mock_response.text = "WINE_PRODUCT: YES\ndescription"
+        mock_response.text = '{"is_package": false, "summary": "candles on table"}'
         mock_client.models.generate_content.return_value = mock_response
-        fake_image = MagicMock()
-        fake_image.size = (800, 600)
 
         with patch("app.services.embedding._get_client", return_value=mock_client), \
              patch("app.services.embedding.Image") as mock_pil:
-            mock_pil.open.return_value = fake_image
+            mock_img = MagicMock()
+            mock_img.size = (800, 600)
+            mock_pil.open.return_value = mock_img
             mock_pil.LANCZOS = 1
-            describe_image(b"test")
+            is_package, summary = classify_image(b"fake-image-bytes")
 
-        # generate_content should receive contents list with prompt and image
-        call_kwargs = mock_client.models.generate_content.call_args[1]
-        contents = call_kwargs["contents"]
-        assert isinstance(contents, list)
-        assert len(contents) == 2
-        assert contents[1] is fake_image
+        assert is_package is False
+        assert summary == "candles on table"
+
+
+# ---------------------------------------------------------------------------
+# embedding.describe_package
+# ---------------------------------------------------------------------------
+
+class TestDescribePackage:
+    def test_returns_description(self):
+        from app.services.embedding import describe_package
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = "ROBERT WEIL Junior Pinot Gris 2023. Dark blue box with white text."
+        mock_client.models.generate_content.return_value = mock_response
+
+        with patch("app.services.embedding._get_client", return_value=mock_client), \
+             patch("app.services.embedding.Image") as mock_pil:
+            mock_img = MagicMock()
+            mock_img.size = (800, 600)
+            mock_pil.open.return_value = mock_img
+            mock_pil.LANCZOS = 1
+            description = describe_package(b"fake-image-bytes")
+
+        assert "ROBERT WEIL" in description
+        mock_client.models.generate_content.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -197,28 +218,53 @@ class TestGenerateEmbedding:
 # ---------------------------------------------------------------------------
 
 class TestProcessImage:
-    def test_pipeline_chains_describe_then_embed(self):
+    def test_pipeline_classifies_then_describes_then_embeds(self):
         from app.services.embedding import process_image
 
-        with patch("app.services.embedding.describe_image", return_value=("A fine Bordeaux", True)) as mock_desc, \
+        with patch("app.services.embedding.classify_image", return_value=(True, "wine box")) as mock_cls, \
+             patch("app.services.embedding.describe_package", return_value="A fine Bordeaux") as mock_desc, \
              patch("app.services.embedding.generate_embedding", return_value=[0.5] * 3072) as mock_emb:
-            description, embedding, is_wine = process_image(b"image-data")
+            description, embedding, is_package = process_image(b"image-data")
 
         assert description == "A fine Bordeaux"
-        assert is_wine is True
+        assert is_package is True
         assert len(embedding) == 3072
+        mock_cls.assert_called_once_with(b"image-data")
         mock_desc.assert_called_once_with(b"image-data")
         mock_emb.assert_called_once_with("A fine Bordeaux")
 
-    def test_pipeline_skips_embedding_for_non_wine(self):
+    def test_pipeline_skips_describe_and_embed_for_non_package(self):
         from app.services.embedding import process_image
 
-        with patch("app.services.embedding.describe_image", return_value=("A black shoe box", False)) as mock_desc, \
+        with patch("app.services.embedding.classify_image", return_value=(False, "digital clock")) as mock_cls, \
+             patch("app.services.embedding.describe_package") as mock_desc, \
              patch("app.services.embedding.generate_embedding") as mock_emb:
-            description, embedding, is_wine = process_image(b"image-data")
+            description, embedding, is_package = process_image(b"image-data")
 
-        assert description == "A black shoe box"
-        assert is_wine is False
+        assert description == "digital clock"
+        assert is_package is False
         assert embedding is None
-        mock_desc.assert_called_once_with(b"image-data")
+        mock_cls.assert_called_once_with(b"image-data")
+        mock_desc.assert_not_called()
         mock_emb.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# embedding.describe_and_embed (override path)
+# ---------------------------------------------------------------------------
+
+class TestDescribeAndEmbed:
+    def test_skips_classification(self):
+        from app.services.embedding import describe_and_embed
+
+        with patch("app.services.embedding.classify_image") as mock_cls, \
+             patch("app.services.embedding.describe_package", return_value="NORTHWAVE CORSAIR 2 shoe box, black with red accents") as mock_desc, \
+             patch("app.services.embedding.generate_embedding", return_value=[0.5] * 3072) as mock_emb:
+            description, embedding, quality = describe_and_embed(b"image-data")
+
+        mock_cls.assert_not_called()
+        mock_desc.assert_called_once_with(b"image-data")
+        mock_emb.assert_called_once()
+        assert "NORTHWAVE" in description
+        assert len(embedding) == 3072
+        assert quality in ("high", "medium", "low")
