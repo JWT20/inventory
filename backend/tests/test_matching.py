@@ -218,34 +218,30 @@ class TestGenerateEmbedding:
 # ---------------------------------------------------------------------------
 
 class TestProcessImage:
-    def test_pipeline_classifies_then_describes_then_embeds(self):
+    def test_pipeline_single_call_then_embeds(self):
         from app.services.embedding import process_image
 
-        with patch("app.services.embedding.classify_image", return_value=(True, "wine box")) as mock_cls, \
-             patch("app.services.embedding.describe_package", return_value="A fine Bordeaux") as mock_desc, \
+        with patch("app.services.embedding.classify_and_describe", return_value=(True, "A fine Bordeaux")) as mock_cd, \
              patch("app.services.embedding.generate_embedding", return_value=[0.5] * 3072) as mock_emb:
             description, embedding, is_package = process_image(b"image-data")
 
         assert description == "A fine Bordeaux"
         assert is_package is True
         assert len(embedding) == 3072
-        mock_cls.assert_called_once_with(b"image-data")
-        mock_desc.assert_called_once_with(b"image-data")
+        mock_cd.assert_called_once_with(b"image-data")
         mock_emb.assert_called_once_with("A fine Bordeaux")
 
-    def test_pipeline_skips_describe_and_embed_for_non_package(self):
+    def test_pipeline_skips_embed_for_non_package(self):
         from app.services.embedding import process_image
 
-        with patch("app.services.embedding.classify_image", return_value=(False, "digital clock")) as mock_cls, \
-             patch("app.services.embedding.describe_package") as mock_desc, \
+        with patch("app.services.embedding.classify_and_describe", return_value=(False, "digital clock")) as mock_cd, \
              patch("app.services.embedding.generate_embedding") as mock_emb:
             description, embedding, is_package = process_image(b"image-data")
 
         assert description == "digital clock"
         assert is_package is False
         assert embedding is None
-        mock_cls.assert_called_once_with(b"image-data")
-        mock_desc.assert_not_called()
+        mock_cd.assert_called_once_with(b"image-data")
         mock_emb.assert_not_called()
 
 
