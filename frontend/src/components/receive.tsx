@@ -423,7 +423,7 @@ function ConfirmStep({
           Controleer match
         </p>
         <p className="text-yellow-300 text-sm">
-          Lage beschrijvingskwaliteit — bevestig handmatig
+          Lage zekerheid — bevestig handmatig
         </p>
       </div>
 

@@ -27,9 +27,9 @@ _signer = URLSafeTimedSerializer(settings.secret_key, salt="booking-confirm")
 
 
 def _scan_url(scan_path: str) -> str:
-    """Convert an absolute file path to a URL relative to /uploads."""
+    """Convert an absolute file path to a URL served via /api/uploads/."""
     rel = os.path.relpath(scan_path, settings.upload_dir)
-    return f"/uploads/{rel}"
+    return f"/api/uploads/{rel}"
 
 
 def _best_reference_image_url(db: Session, sku_id: int) -> str:
@@ -232,12 +232,12 @@ async def book_box(
             "Doos niet herkend — geen match gevonden met SKUs in deze order",
         )
 
-    # Gate low-quality descriptions: require human confirmation
-    quality = assess_description_quality(description)
-    if quality == "low":
+    # Gate low-confidence matches: require human confirmation
+    CONFIRM_THRESHOLD = 0.84
+    if confidence < CONFIRM_THRESHOLD:
         logger.info(
-            "Low-quality description for SKU %s (confidence=%.2f) — requesting confirmation",
-            matched_sku.sku_code, confidence,
+            "Low confidence for SKU %s (confidence=%.2f < %.2f) — requesting confirmation",
+            matched_sku.sku_code, confidence, CONFIRM_THRESHOLD,
         )
         token_data = {
             "order_id": order_id,
