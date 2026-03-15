@@ -11,27 +11,39 @@ logger = logging.getLogger(__name__)
 
 
 def find_best_matches(
-    db: Session, embedding: list[float], top_n: int = 5
+    db: Session,
+    embedding: list[float],
+    top_n: int = 5,
+    sku_ids: list[int] | None = None,
 ) -> list[tuple[SKU, float]]:
     """Return the top-N matching SKUs for a given embedding.
 
     Returns a list of (sku, similarity) tuples, ordered by similarity descending.
-    Only includes active SKUs.
+    Only includes active SKUs.  When *sku_ids* is provided, only matches against
+    reference images belonging to those SKUs (order-aware scanning).
     """
     t0 = time.perf_counter()
     embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
 
+    params: dict = {"embedding": embedding_str, "top_n": top_n}
+
+    sku_filter = ""
+    if sku_ids:
+        sku_filter = "AND ri.sku_id = ANY(:sku_ids)"
+        params["sku_ids"] = sku_ids
+
     rows = db.execute(
-        text("""
+        text(f"""
             SELECT ri.sku_id, 1 - (ri.embedding <=> :embedding) AS similarity
             FROM reference_images ri
             JOIN skus s ON s.id = ri.sku_id
             WHERE s.active = true
               AND ri.embedding IS NOT NULL
+              {sku_filter}
             ORDER BY ri.embedding <=> :embedding
             LIMIT :top_n
         """),
-        {"embedding": embedding_str, "top_n": top_n},
+        params,
     ).fetchall()
     vector_ms = (time.perf_counter() - t0) * 1000
 
