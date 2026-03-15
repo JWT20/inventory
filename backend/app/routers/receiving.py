@@ -232,12 +232,12 @@ async def book_box(
             "Doos niet herkend — geen match gevonden met SKUs in deze order",
         )
 
-    # Gate low-confidence matches: require human confirmation
-    CONFIRM_THRESHOLD = 0.84
-    if confidence < CONFIRM_THRESHOLD:
+    # Gate low-quality descriptions: require human confirmation
+    quality = assess_description_quality(description)
+    if quality == "low":
         logger.info(
-            "Low confidence for SKU %s (confidence=%.2f < %.2f) — requesting confirmation",
-            matched_sku.sku_code, confidence, CONFIRM_THRESHOLD,
+            "Low-quality description for SKU %s (confidence=%.2f) — requesting confirmation",
+            matched_sku.sku_code, confidence,
         )
         token_data = {
             "order_id": order_id,
