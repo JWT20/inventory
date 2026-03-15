@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from sqlalchemy import inspect, text
 
@@ -302,6 +303,10 @@ async def lifespan(app: FastAPI):
 
     init_producer()
     _cleanup_old_scans()
+
+    # Serve uploaded images (scans, reference images)
+    os.makedirs(settings.upload_dir, exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")
 
     yield
 

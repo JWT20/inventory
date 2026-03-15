@@ -5,6 +5,7 @@ import time
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy.orm import Session
 
 from app.auth import require_warehouse
@@ -13,13 +14,30 @@ from app.database import get_db
 from app.events import publish_event
 from app.models import SKU, Booking, Order, OrderLine, ReferenceImage, User
 from app.routers.skus import _sku_to_response
-from app.schemas import BookingResponse, MatchResult, SKUResponse
-from app.services.embedding import process_image
+from app.schemas import BookingConfirmation, BookingResponse, ConfirmBookingRequest, MatchResult, SKUResponse
+from app.services.embedding import assess_description_quality, process_image
 from app.services.matching import find_best_matches
 
 logger = logging.getLogger(__name__)
 
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
+CONFIRMATION_TOKEN_MAX_AGE = 120  # seconds
+
+_signer = URLSafeTimedSerializer(settings.secret_key, salt="booking-confirm")
+
+
+def _scan_url(scan_path: str) -> str:
+    """Convert an absolute file path to a URL relative to /uploads."""
+    rel = os.path.relpath(scan_path, settings.upload_dir)
+    return f"/uploads/{rel}"
+
+
+def _best_reference_image_url(db: Session, sku_id: int) -> str:
+    """Return the URL of the first reference image for a SKU."""
+    ref = db.query(ReferenceImage).filter(ReferenceImage.sku_id == sku_id).first()
+    if ref and ref.image_path:
+        return _scan_url(ref.image_path)
+    return ""
 
 
 def _read_image(file: UploadFile) -> bytes:
@@ -133,7 +151,7 @@ async def identify_box(
     )
 
 
-@router.post("/book", response_model=BookingResponse)
+@router.post("/book", response_model=BookingResponse | BookingConfirmation)
 async def book_box(
     file: UploadFile,
     order_id: int = Form(...),
@@ -214,6 +232,30 @@ async def book_box(
             "Doos niet herkend — geen match gevonden met SKUs in deze order",
         )
 
+    # Gate low-quality descriptions: require human confirmation
+    quality = assess_description_quality(description)
+    if quality == "low":
+        logger.info(
+            "Low-quality description for SKU %s (confidence=%.2f) — requesting confirmation",
+            matched_sku.sku_code, confidence,
+        )
+        token_data = {
+            "order_id": order_id,
+            "sku_id": matched_sku.id,
+            "confidence": round(confidence, 4),
+            "scan_image_path": scan_path,
+            "user_id": user.id,
+        }
+        token = _signer.dumps(token_data)
+        return BookingConfirmation(
+            confirmation_token=token,
+            sku_code=matched_sku.sku_code,
+            sku_name=matched_sku.name,
+            confidence=confidence,
+            scan_image_url=_scan_url(scan_path),
+            reference_image_url=_best_reference_image_url(db, matched_sku.id),
+        )
+
     # Find matching order line with remaining quantity
     order_line = (
         db.query(OrderLine)
@@ -284,6 +326,93 @@ async def book_box(
         order_reference=order.reference,
         sku_code=matched_sku.sku_code,
         sku_name=matched_sku.name,
+        klant=order_line.klant,
+        rolcontainer=rolcontainer,
+        created_at=booking.created_at,
+    )
+
+
+@router.post("/book/confirm", response_model=BookingResponse)
+def confirm_booking(
+    body: ConfirmBookingRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_warehouse),
+):
+    """Confirm a booking that was flagged for human approval (low-quality description)."""
+    try:
+        data = _signer.loads(body.confirmation_token, max_age=CONFIRMATION_TOKEN_MAX_AGE)
+    except SignatureExpired:
+        raise HTTPException(410, "Bevestigingstoken verlopen — scan opnieuw")
+    except BadSignature:
+        raise HTTPException(400, "Ongeldig bevestigingstoken")
+
+    order = db.get(Order, data["order_id"])
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+    if order.status != "active":
+        raise HTTPException(400, f"Order is niet actief (status: {order.status})")
+
+    sku = db.get(SKU, data["sku_id"])
+    if not sku:
+        raise HTTPException(404, "SKU niet gevonden")
+
+    order_line = (
+        db.query(OrderLine)
+        .filter(
+            OrderLine.order_id == data["order_id"],
+            OrderLine.sku_id == data["sku_id"],
+            OrderLine.booked_count < OrderLine.quantity,
+        )
+        .first()
+    )
+    if not order_line:
+        raise HTTPException(
+            400,
+            f"SKU {sku.sku_code} is al volledig geboekt in deze order",
+        )
+
+    booking = Booking(
+        order_id=data["order_id"],
+        order_line_id=order_line.id,
+        sku_id=data["sku_id"],
+        scanned_by=user.id,
+        scan_image_path=data.get("scan_image_path"),
+        confidence=data.get("confidence"),
+    )
+    db.add(booking)
+    order_line.booked_count += 1
+    db.flush()
+
+    all_booked = all(l.booked_count >= l.quantity for l in order.lines)
+    if all_booked:
+        order.status = "completed"
+
+    db.commit()
+
+    rolcontainer = f"KLANT {order_line.klant.upper()}"
+
+    publish_event(
+        "box_booked",
+        details={
+            "order_reference": order.reference,
+            "sku_code": sku.sku_code,
+            "confidence": data.get("confidence"),
+            "rolcontainer": rolcontainer,
+            "klant": order_line.klant,
+            "order_completed": all_booked,
+            "confirmed_by_human": True,
+        },
+        user=user,
+        resource_type="booking",
+        resource_id=booking.id,
+    )
+
+    return BookingResponse(
+        id=booking.id,
+        order_id=order.id,
+        order_reference=order.reference,
+        sku_code=sku.sku_code,
+        sku_name=sku.name,
         klant=order_line.klant,
         rolcontainer=rolcontainer,
         created_at=booking.created_at,
