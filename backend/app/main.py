@@ -251,6 +251,20 @@ def _migrate_reference_image_wine_override():
             ))
 
 
+def _migrate_reference_image_description_quality():
+    """Add description_quality column to reference_images if missing."""
+    inspector = inspect(engine)
+    if "reference_images" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("reference_images")}
+    if "description_quality" not in columns:
+        logger.info("Adding description_quality column to reference_images table")
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE reference_images ADD COLUMN description_quality VARCHAR(10)"
+            ))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- startup ---
@@ -262,6 +276,7 @@ async def lifespan(app: FastAPI):
     _migrate_order_line_klant()
     _migrate_reference_image_processing_status()
     _migrate_reference_image_wine_override()
+    _migrate_reference_image_description_quality()
 
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)
