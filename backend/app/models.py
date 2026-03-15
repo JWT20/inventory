@@ -91,6 +91,7 @@ class ReferenceImage(Base):
     processing_status: Mapped[str] = mapped_column(
         String(20), default="done"
     )  # "pending", "processing", "done", "failed"
+    description_quality: Mapped[str | None] = mapped_column(String(10), nullable=True)
     wine_check_overridden: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()

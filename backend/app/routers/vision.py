@@ -25,7 +25,7 @@ async def identify_box(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Identify a wine box by image without order context.
+    """Identify a box by image without order context.
 
     Useful for ad-hoc identification or testing.
     """
@@ -33,10 +33,28 @@ async def identify_box(
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
     try:
-        description, embedding = await asyncio.to_thread(process_image, image_bytes)
+        description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
     except Exception:
         logger.exception("Vision processing failed during ad-hoc identify")
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
+
+    if not is_package:
+        publish_event(
+            "vision_identify",
+            details={
+                "matched_sku_code": None,
+                "confidence": None,
+                "vision_description": description,
+                "candidates": [],
+                "threshold": settings.match_threshold,
+                "rejected": True,
+                "rejection_reason": "not_a_package",
+            },
+            user=user,
+            resource_type="vision",
+        )
+        return None
+
     candidates = find_best_matches(db, embedding, top_n=5)
 
     matched_sku, confidence = None, 0.0

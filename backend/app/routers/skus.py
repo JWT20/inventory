@@ -18,7 +18,12 @@ from app.schemas import (
     generate_display_name,
     generate_sku_code,
 )
-from app.services.embedding import describe_image, process_image
+from app.services.embedding import (
+    assess_description_quality,
+    classify_image,
+    describe_and_embed,
+    process_image,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/skus", tags=["skus"])
@@ -176,22 +181,30 @@ def _process_reference_image_background(
         with open(image_path, "rb") as f:
             image_bytes = f.read()
 
-        description, embedding, is_wine = process_image(image_bytes)
+        if force:
+            # User overrode classification — skip classify, go straight to describe + embed
+            description, embedding, quality = describe_and_embed(image_bytes)
+            ref_image.vision_description = description
+            ref_image.embedding = embedding
+            ref_image.description_quality = quality
+            ref_image.processing_status = "done"
+            db.commit()
+            logger.info("Background processing complete (overridden) for reference image %d (SKU %s, quality=%s)", image_id, sku_code, quality)
+            return
+
+        description, embedding, is_package = process_image(image_bytes)
         ref_image.vision_description = description
-        if not is_wine and not force:
+        if not is_package:
             ref_image.processing_status = "failed"
             db.commit()
-            logger.warning("Background processing rejected non-wine image %d (SKU %s)", image_id, sku_code)
+            logger.warning("Background processing rejected non-package image %d (SKU %s)", image_id, sku_code)
             return
-        if not is_wine and force:
-            # User overrode wine check — generate embedding from description anyway
-            from app.services.embedding import generate_embedding
-            embedding = generate_embedding(description)
-            logger.info("Forced embedding for overridden non-wine image %d (SKU %s)", image_id, sku_code)
+        quality = assess_description_quality(description)
         ref_image.embedding = embedding
+        ref_image.description_quality = quality
         ref_image.processing_status = "done"
         db.commit()
-        logger.info("Background processing complete for reference image %d (SKU %s)", image_id, sku_code)
+        logger.info("Background processing complete for reference image %d (SKU %s, quality=%s)", image_id, sku_code, quality)
     except Exception:
         logger.exception("Background processing failed for reference image %d (SKU %s)", image_id, sku_code)
         try:
@@ -222,11 +235,11 @@ def upload_reference_image(
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
 
-    # Synchronous wine classification check before saving (can be overridden)
+    # Synchronous package classification check before saving (can be overridden)
     if not skip_wine_check:
-        _description, is_wine = describe_image(image_bytes)
-        if not is_wine:
-            raise HTTPException(400, "Dit is geen wijndoos — upload alleen foto's van wijndozen")
+        is_package, summary = classify_image(image_bytes)
+        if not is_package:
+            raise HTTPException(400, f"Dit is geen doos of verpakking ({summary}) — upload alleen foto's van dozen")
 
     # Save image to disk
     ref_dir = os.path.join(settings.upload_dir, "reference_images", str(sku_id))

@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 
 from google import genai
@@ -18,75 +19,71 @@ MAX_VISION_DIMENSION = 1024  # px – downscale before sending to Gemini
 
 _client: genai.Client | None = None
 
-VISION_PROMPT = """Analyze this image and respond in EXACTLY this JSON format — no markdown fencing, no extra text:
+# ---------------------------------------------------------------------------
+# Step 1: Classification — is this a box/package?
+# ---------------------------------------------------------------------------
 
-{"is_wine": true, "description": "..."}
+CLASSIFY_PROMPT = """Analyze this image and respond in EXACTLY this JSON format — no markdown fencing, no extra text:
 
-Set "is_wine" to true ONLY if the image shows a wine product (wine bottle, wine box, wine case, wine crate, or wine packaging). Set it to false for everything else (electronics, shoes, food, appliances, random objects, etc).
+{"is_package": true, "summary": "brief 5-word description"}
 
-If is_wine is true, write a description that includes:
-- Brand / Producer name (transcribe exactly as printed)
-- Wine name / Cuvée (transcribe exactly)
-- Vintage year (if visible, otherwise omit)
-- Appellation / Region (only if printed)
-- Color & design details (dominant colors, crests, illustrations)
-- Any other distinguishing text (volume, classification like "Grand Cru Classé")
-Format as a compact paragraph optimized for text-similarity search, starting with the most distinctive identifiers.
+Set "is_package" to true if the image shows any kind of box, case, crate, carton, or product packaging.
+Set it to false for loose objects, scenes, furniture, electronics without packaging, food without packaging, etc.
 
-If is_wine is false, write a brief description of what the object actually is (e.g. "laptop computer", "shoe box")."""
+Examples of true: wine box, shoe box, cardboard carton, wooden crate, sealed package, shipping parcel.
+Examples of false: a clock, candles on a table, a laptop, a pair of shoes, a glass of wine."""
+
+# ---------------------------------------------------------------------------
+# Step 2: Description — describe everything on the packaging
+# ---------------------------------------------------------------------------
+
+DESCRIBE_PROMPT = """Describe this product packaging for identification matching.
+Your description will be embedded and compared against a reference database using cosine similarity.
+Accuracy and specificity are critical — a wrong match means the wrong product gets shipped.
+
+Transcribe ALL visible text exactly as printed (brand names, product names, years, volumes, certifications, codes).
+Describe visual elements: dominant colors, logos, crests, illustrations, label placement, box material.
+If this appears to be wine, pay special attention to: producer/domaine, wine name/cuvée, vintage year, appellation/region, classification.
+
+ONLY describe what you can actually see. Do NOT mention things that are "not visible" or "not present" — simply omit them.
+
+Format as a compact paragraph starting with the most distinctive identifiers, optimized for text-similarity search."""
 
 
-_WINE_KEYWORDS = {
-    "wine", "wijn", "vin", "vino", "château", "chateau", "domaine",
-    "bodega", "cantina", "weingut", "cuvée", "cuvee", "bordeaux",
-    "burgundy", "rioja", "champagne", "prosecco", "merlot", "cabernet",
-    "chardonnay", "pinot", "syrah", "shiraz", "sauvignon", "riesling",
-    "tempranillo", "sangiovese", "nebbiolo", "malbec", "grenache",
-    "750ml", "375ml", "1500ml", "magnum",
-}
-
-
-def parse_vision_response(raw: str) -> tuple[bool, str]:
-    """Extract wine classification and description from vision response.
-
-    Tries JSON first, then falls back to the old WINE_PRODUCT: line format,
-    then to keyword heuristics.  Returns (is_wine, clean_description).
-    """
-    import json as _json
-
-    text = raw.strip()
-
-    # Strip markdown code fences if present
+def _strip_markdown_fences(text: str) -> str:
+    """Remove markdown code fences if present."""
+    text = text.strip()
     if text.startswith("```"):
         text = "\n".join(text.split("\n")[1:])
     if text.endswith("```"):
         text = "\n".join(text.split("\n")[:-1])
-    text = text.strip()
+    return text.strip()
 
-    # --- Try JSON ---
+
+def parse_classify_response(raw: str) -> tuple[bool, str]:
+    """Parse the classification response.
+
+    Returns (is_package, summary).
+    """
+    import json as _json
+
+    text = _strip_markdown_fences(raw)
+
     try:
         data = _json.loads(text)
-        if isinstance(data, dict) and "is_wine" in data:
-            is_wine = bool(data["is_wine"])
-            description = str(data.get("description", "")).strip()
-            return is_wine, description
+        if isinstance(data, dict) and "is_package" in data:
+            is_package = bool(data["is_package"])
+            summary = str(data.get("summary", "")).strip()
+            return is_package, summary
     except (_json.JSONDecodeError, TypeError, ValueError):
         pass
 
-    # --- Fallback: WINE_PRODUCT: YES/NO line ---
-    lines = text.splitlines()
-    first_line = lines[0].strip().upper() if lines else ""
-
-    if "WINE_PRODUCT:" in first_line:
-        is_wine = "YES" in first_line
-        description = "\n".join(lines[1:]).strip()
-        return is_wine, description
-
-    # --- Last resort: keyword heuristic (reject if no wine words found) ---
-    logger.warning("Vision response not in expected format, using keyword heuristic")
+    # Fallback: look for keywords suggesting packaging
+    logger.warning("Classification response not valid JSON, using heuristic: %s", text[:100])
     lower = text.lower()
-    has_wine_keyword = any(kw in lower for kw in _WINE_KEYWORDS)
-    return has_wine_keyword, text
+    package_words = {"box", "case", "crate", "carton", "package", "packaging", "parcel"}
+    has_package_word = any(w in lower for w in package_words)
+    return has_package_word, text[:50]
 
 
 def _get_client() -> genai.Client:
@@ -113,32 +110,16 @@ def optimize_for_vision(image_bytes: bytes) -> Image.Image:
     return image
 
 
-def describe_image(image_bytes: bytes) -> tuple[str, bool]:
-    """Use Gemini Vision to describe a wine box and classify whether it is wine.
-
-    Returns (description, is_wine).
-    """
+def _call_vision(image: Image.Image, prompt: str) -> str:
+    """Call Gemini Vision with retry logic. Returns raw response text."""
     client = _get_client()
-
-    t0 = time.perf_counter()
-    image = optimize_for_vision(image_bytes)
-    resize_ms = (time.perf_counter() - t0) * 1000
-
-    logger.info("[TIMING] image_resize=%.0fms", resize_ms)
     logger.info("Calling Gemini Vision model=%s", settings.gemini_vision_model)
     t0 = time.perf_counter()
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             response = client.models.generate_content(
                 model=settings.gemini_vision_model,
-                contents=[
-                    "You are a wine product identification specialist. "
-                    "Your descriptions will be embedded and matched against a database "
-                    "of reference product descriptions using cosine similarity. "
-                    "Accuracy and specificity are critical — a wrong match means the "
-                    "wrong product gets shipped.\n\n" + VISION_PROMPT,
-                    image,
-                ],
+                contents=[prompt, image],
             )
             break
         except ClientError as e:
@@ -150,14 +131,59 @@ def describe_image(image_bytes: bytes) -> tuple[str, bool]:
                 logger.exception("Gemini Vision API call failed (model=%s, attempt=%d)", settings.gemini_vision_model, attempt)
                 raise
     vision_ms = (time.perf_counter() - t0) * 1000
-
-    raw_text = response.text
     logger.info("[TIMING] gemini_vision=%.0fms", vision_ms)
-    logger.info("Vision raw response: %s", raw_text[:120])
+    return response.text
 
-    is_wine, description = parse_vision_response(raw_text)
-    logger.info("Wine classification: is_wine=%s, description: %s", is_wine, description[:100])
-    return description, is_wine
+
+def classify_image(image_bytes: bytes) -> tuple[bool, str]:
+    """Step 1: Classify whether the image shows a box/package.
+
+    Returns (is_package, summary).
+    """
+    t0 = time.perf_counter()
+    image = optimize_for_vision(image_bytes)
+    resize_ms = (time.perf_counter() - t0) * 1000
+    logger.info("[TIMING] image_resize=%.0fms", resize_ms)
+
+    raw_text = _call_vision(image, CLASSIFY_PROMPT)
+    logger.info("Classification raw response: %s", raw_text[:120])
+
+    is_package, summary = parse_classify_response(raw_text)
+    logger.info("Classification result: is_package=%s, summary: %s", is_package, summary)
+    return is_package, summary
+
+
+def describe_package(image_bytes: bytes) -> str:
+    """Step 2: Describe the packaging for embedding.
+
+    Returns a description optimized for text-similarity search.
+    Always call this AFTER classify_image confirms it's a package,
+    or when the user has overridden classification.
+    """
+    image = optimize_for_vision(image_bytes)
+    raw_text = _call_vision(image, DESCRIBE_PROMPT)
+    logger.info("Description raw response: %s", raw_text[:120])
+
+    description = _strip_markdown_fences(raw_text).strip()
+    # If the response is wrapped in quotes, strip them
+    if description.startswith('"') and description.endswith('"'):
+        description = description[1:-1]
+
+    logger.info("Package description: %s", description[:100])
+    return description
+
+
+def describe_image(image_bytes: bytes) -> tuple[str, bool]:
+    """Classify and describe in one call. Kept for backward compatibility.
+
+    Returns (description, is_package).
+    """
+    is_package, summary = classify_image(image_bytes)
+    if not is_package:
+        return summary, False
+
+    description = describe_package(image_bytes)
+    return description, True
 
 
 def generate_embedding(text: str) -> list[float]:
@@ -188,21 +214,61 @@ def generate_embedding(text: str) -> list[float]:
     return result.embeddings[0].values
 
 
-def process_image(image_bytes: bytes) -> tuple[str, list[float] | None, bool]:
-    """Full pipeline: image → vision description → text embedding.
+def assess_description_quality(description: str) -> str:
+    """Assess the quality of a description for embedding purposes.
 
-    Returns (description, embedding, is_wine).
-    If the image is not wine, embedding is None (skipped to save cost).
+    Returns "high", "medium", or "low".
+    """
+    words = description.split()
+    word_count = len(words)
+
+    # Count words that look like transcribed text (capitalized, numbers, brand-like)
+    transcribed = sum(1 for w in words if re.search(r'[A-Z]{2,}', w) or re.search(r'\d{4}', w))
+
+    if word_count < 10:
+        return "low"
+    if transcribed >= 3 and word_count >= 20:
+        return "high"
+    if transcribed >= 1 and word_count >= 15:
+        return "medium"
+    return "low"
+
+
+def describe_and_embed(image_bytes: bytes) -> tuple[str, list[float], str]:
+    """Skip classification, go straight to describe + embed.
+
+    Used when the user has overridden classification (skip_wine_check=True).
+    Returns (description, embedding, quality).
+    """
+    t_start = time.perf_counter()
+    logger.info("Processing overridden image (%d bytes) — skipping classification", len(image_bytes))
+
+    description = describe_package(image_bytes)
+    quality = assess_description_quality(description)
+    embedding = generate_embedding(description)
+
+    total_ms = (time.perf_counter() - t_start) * 1000
+    logger.info("[TIMING] describe_and_embed_total=%.0fms quality=%s", total_ms, quality)
+    return description, embedding, quality
+
+
+def process_image(image_bytes: bytes) -> tuple[str, list[float] | None, bool]:
+    """Full pipeline: classify → describe → embed.
+
+    Returns (description, embedding, is_package).
+    If the image is not a package, embedding is None (skipped to save cost).
     """
     t_start = time.perf_counter()
     logger.info("Processing image (%d bytes)", len(image_bytes))
-    description, is_wine = describe_image(image_bytes)
 
-    if not is_wine:
+    is_package, summary = classify_image(image_bytes)
+
+    if not is_package:
         total_ms = (time.perf_counter() - t_start) * 1000
-        logger.info("[TIMING] process_image_total=%.0fms (rejected: not wine)", total_ms)
-        return description, None, False
+        logger.info("[TIMING] process_image_total=%.0fms (rejected: not a package — %s)", total_ms, summary)
+        return summary, None, False
 
+    description = describe_package(image_bytes)
     embedding = generate_embedding(description)
     total_ms = (time.perf_counter() - t_start) * 1000
     logger.info("[TIMING] process_image_total=%.0fms", total_ms)

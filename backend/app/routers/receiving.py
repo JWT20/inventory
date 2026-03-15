@@ -60,26 +60,15 @@ async def identify_box(
     t_save = time.perf_counter()
 
     try:
-        description, embedding, is_wine = await asyncio.to_thread(process_image, image_bytes)
+        description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
     except Exception:
         logger.exception("Vision processing failed during identify")
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
     t_process = time.perf_counter()
 
-    # For non-wine images: only generate embedding if overridden references exist
-    if not is_wine and embedding is None:
-        has_overridden = db.query(ReferenceImage).filter(
-            ReferenceImage.wine_check_overridden.is_(True),
-            ReferenceImage.embedding.isnot(None),
-        ).first() is not None
-        if has_overridden:
-            from app.services.embedding import generate_embedding
-            logger.info("Non-wine image — generating embedding to match against overridden references")
-            embedding = await asyncio.to_thread(generate_embedding, description)
-
-    if not is_wine and embedding is None:
+    if not is_package:
         logger.info(
-            "[TIMING] identify total=%.0fms (rejected: not wine) | read=%.0fms save=%.0fms process_image=%.0fms",
+            "[TIMING] identify total=%.0fms (rejected: not a package) | read=%.0fms save=%.0fms process_image=%.0fms",
             (t_process - t_start) * 1000,
             (t_read - t_start) * 1000,
             (t_save - t_read) * 1000,
@@ -94,7 +83,7 @@ async def identify_box(
                 "candidates": [],
                 "threshold": settings.match_threshold,
                 "rejected": True,
-                "rejection_reason": "not_wine",
+                "rejection_reason": "not_a_package",
             },
             user=user,
             resource_type="receiving",
@@ -107,38 +96,6 @@ async def identify_box(
     matched_sku, confidence = None, 0.0
     if candidates and candidates[0][1] >= settings.match_threshold:
         matched_sku, confidence = candidates[0]
-
-    # Non-wine with no match: reject
-    if not is_wine and matched_sku is None:
-        logger.info(
-            "[TIMING] identify total=%.0fms (not wine, no match) | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms",
-            (t_match - t_start) * 1000,
-            (t_read - t_start) * 1000,
-            (t_save - t_read) * 1000,
-            (t_process - t_save) * 1000,
-            (t_match - t_process) * 1000,
-        )
-        publish_event(
-            "box_identified",
-            details={
-                "matched_sku_code": None,
-                "confidence": None,
-                "vision_description": description,
-                "candidates": [],
-                "threshold": settings.match_threshold,
-                "rejected": True,
-                "rejection_reason": "not_wine",
-            },
-            user=user,
-            resource_type="receiving",
-        )
-        return None
-
-    if not is_wine and matched_sku:
-        logger.info(
-            "Non-wine image matched overridden reference: SKU %s (confidence=%.4f)",
-            matched_sku.sku_code, confidence,
-        )
 
     logger.info(
         "[TIMING] identify total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms",
@@ -208,32 +165,21 @@ async def book_box(
         f.write(image_bytes)
     t_save = time.perf_counter()
 
-    # Vision match
+    # Vision: classify + describe + embed
     try:
-        description, embedding, is_wine = await asyncio.to_thread(process_image, image_bytes)
+        description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
     except Exception:
         logger.exception("Vision processing failed during booking")
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
     t_process = time.perf_counter()
 
-    # For non-wine images: only generate embedding if overridden references exist
-    if not is_wine and embedding is None:
-        has_overridden = db.query(ReferenceImage).filter(
-            ReferenceImage.wine_check_overridden.is_(True),
-            ReferenceImage.embedding.isnot(None),
-        ).first() is not None
-        if has_overridden:
-            from app.services.embedding import generate_embedding
-            logger.info("Non-wine image — generating embedding to match against overridden references")
-            embedding = await asyncio.to_thread(generate_embedding, description)
-
-    if not is_wine and embedding is None:
+    if not is_package:
         publish_event(
             "box_booked",
             details={
                 "order_reference": order.reference,
                 "rejected": True,
-                "rejection_reason": "not_wine",
+                "rejection_reason": "not_a_package",
                 "vision_description": description,
             },
             user=user,
@@ -241,7 +187,7 @@ async def book_box(
         )
         raise HTTPException(
             422,
-            "Dit is geen wijnproduct — scan een wijndoos",
+            "Dit is geen doos of verpakking — scan een productdoos",
         )
 
     candidates = find_best_matches(db, embedding, top_n=5)
@@ -250,30 +196,6 @@ async def book_box(
     matched_sku, confidence = None, 0.0
     if candidates and candidates[0][1] >= settings.match_threshold:
         matched_sku, confidence = candidates[0]
-
-    # Non-wine with no match: reject
-    if not is_wine and matched_sku is None:
-        publish_event(
-            "box_booked",
-            details={
-                "order_reference": order.reference,
-                "rejected": True,
-                "rejection_reason": "not_wine",
-                "vision_description": description,
-            },
-            user=user,
-            resource_type="booking",
-        )
-        raise HTTPException(
-            422,
-            "Dit is geen wijnproduct — scan een wijndoos",
-        )
-
-    if not is_wine and matched_sku:
-        logger.info(
-            "Non-wine image matched overridden reference during booking: SKU %s (confidence=%.4f)",
-            matched_sku.sku_code, confidence,
-        )
 
     if matched_sku is None:
         raise HTTPException(
@@ -391,21 +313,25 @@ async def create_product_inline(
     # Process with Vision API
     logger.info("Processing reference image for new SKU %s", sku_code)
     try:
-        vision_description, embedding, is_wine = await asyncio.to_thread(process_image, image_bytes)
+        vision_description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
     except Exception:
         logger.exception("Failed to process image for new SKU %s", sku_code)
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
 
-    if not is_wine:
+    if not is_package:
         # Roll back the SKU creation
         db.rollback()
-        raise HTTPException(400, "Dit is geen wijndoos — upload alleen foto's van wijndozen")
+        raise HTTPException(400, "Dit is geen doos of verpakking — upload alleen foto's van dozen")
+
+    from app.services.embedding import assess_description_quality
+    quality = assess_description_quality(vision_description)
 
     ref_image = ReferenceImage(
         sku_id=sku.id,
         image_path=image_path,
         vision_description=vision_description,
         embedding=embedding,
+        description_quality=quality,
     )
     db.add(ref_image)
     db.commit()
