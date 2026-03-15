@@ -20,7 +20,7 @@ MAX_VISION_DIMENSION = 1024  # px – downscale before sending to Gemini
 _client: genai.Client | None = None
 
 # ---------------------------------------------------------------------------
-# Step 1: Classification — is this a box/package?
+# Classification-only prompt (used when caller only needs is_package check)
 # ---------------------------------------------------------------------------
 
 CLASSIFY_PROMPT = """Analyze this image and respond in EXACTLY this JSON format — no markdown fencing, no extra text:
@@ -34,7 +34,33 @@ Examples of true: wine box, shoe box, cardboard carton, wooden crate, sealed pac
 Examples of false: a clock, candles on a table, a laptop, a pair of shoes, a glass of wine."""
 
 # ---------------------------------------------------------------------------
-# Step 2: Description — describe everything on the packaging
+# Combined prompt — classify AND describe in a single call
+# ---------------------------------------------------------------------------
+
+CLASSIFY_AND_DESCRIBE_PROMPT = """Analyze this image and respond in EXACTLY this JSON format — no markdown fencing, no extra text:
+
+{"is_package": true, "description": "detailed description here"}
+
+CLASSIFICATION:
+Set "is_package" to true if the image shows any kind of box, case, crate, carton, or product packaging.
+Set it to false for loose objects, scenes, furniture, electronics without packaging, food without packaging, etc.
+If is_package is false, set "description" to a brief 5-word summary of what you see.
+
+DESCRIPTION (only when is_package is true):
+Your description will be embedded and compared against a reference database using cosine similarity.
+Accuracy and specificity are critical — a wrong match means the wrong product gets shipped.
+
+Transcribe ALL visible text exactly as printed (brand names, product names, years, volumes, certifications, codes).
+Describe visual elements: dominant colors, logos, crests, illustrations, label placement, box material.
+If this appears to be wine, pay special attention to: producer/domaine, wine name/cuvée, vintage year, appellation/region, classification.
+For logos or symbols without readable text: describe the geometric structure (shapes, symmetry, line weight), position on the box, relative size, and color contrast. Be precise about what the shapes depict.
+
+ONLY describe what you can actually see. Do NOT mention things that are "not visible" or "not present" — simply omit them.
+
+Format the description as a compact paragraph starting with the most distinctive identifiers, optimized for text-similarity search."""
+
+# ---------------------------------------------------------------------------
+# Description-only prompt (used when classification is skipped)
 # ---------------------------------------------------------------------------
 
 DESCRIBE_PROMPT = """Describe this product packaging for identification matching.
@@ -44,6 +70,7 @@ Accuracy and specificity are critical — a wrong match means the wrong product 
 Transcribe ALL visible text exactly as printed (brand names, product names, years, volumes, certifications, codes).
 Describe visual elements: dominant colors, logos, crests, illustrations, label placement, box material.
 If this appears to be wine, pay special attention to: producer/domaine, wine name/cuvée, vintage year, appellation/region, classification.
+For logos or symbols without readable text: describe the geometric structure (shapes, symmetry, line weight), position on the box, relative size, and color contrast. Be precise about what the shapes depict.
 
 ONLY describe what you can actually see. Do NOT mention things that are "not visible" or "not present" — simply omit them.
 
@@ -80,6 +107,34 @@ def parse_classify_response(raw: str) -> tuple[bool, str]:
 
     # Fallback: look for keywords suggesting packaging
     logger.warning("Classification response not valid JSON, using heuristic: %s", text[:100])
+    lower = text.lower()
+    package_words = {"box", "case", "crate", "carton", "package", "packaging", "parcel"}
+    has_package_word = any(w in lower for w in package_words)
+    return has_package_word, text[:50]
+
+
+def parse_classify_and_describe_response(raw: str) -> tuple[bool, str]:
+    """Parse the combined classify+describe response.
+
+    Returns (is_package, description_or_summary).
+    """
+    import json as _json
+
+    text = _strip_markdown_fences(raw)
+
+    try:
+        data = _json.loads(text)
+        if isinstance(data, dict) and "is_package" in data:
+            is_package = bool(data["is_package"])
+            description = str(data.get("description", "")).strip()
+            if description.startswith('"') and description.endswith('"'):
+                description = description[1:-1]
+            return is_package, description
+    except (_json.JSONDecodeError, TypeError, ValueError):
+        pass
+
+    # Fallback: look for keywords suggesting packaging
+    logger.warning("Combined response not valid JSON, using heuristic: %s", text[:100])
     lower = text.lower()
     package_words = {"box", "case", "crate", "carton", "package", "packaging", "parcel"}
     has_package_word = any(w in lower for w in package_words)
@@ -178,12 +233,8 @@ def describe_image(image_bytes: bytes) -> tuple[str, bool]:
 
     Returns (description, is_package).
     """
-    is_package, summary = classify_image(image_bytes)
-    if not is_package:
-        return summary, False
-
-    description = describe_package(image_bytes)
-    return description, True
+    is_package, description = classify_and_describe(image_bytes)
+    return description, is_package
 
 
 def generate_embedding(text: str) -> list[float]:
@@ -252,8 +303,26 @@ def describe_and_embed(image_bytes: bytes) -> tuple[str, list[float], str]:
     return description, embedding, quality
 
 
+def classify_and_describe(image_bytes: bytes) -> tuple[bool, str]:
+    """Classify and describe in a single Gemini call.
+
+    Returns (is_package, description_or_summary).
+    """
+    t0 = time.perf_counter()
+    image = optimize_for_vision(image_bytes)
+    resize_ms = (time.perf_counter() - t0) * 1000
+    logger.info("[TIMING] image_resize=%.0fms", resize_ms)
+
+    raw_text = _call_vision(image, CLASSIFY_AND_DESCRIBE_PROMPT)
+    logger.info("Classify+describe raw response: %s", raw_text[:200])
+
+    is_package, description = parse_classify_and_describe_response(raw_text)
+    logger.info("Result: is_package=%s, description: %s", is_package, description[:100])
+    return is_package, description
+
+
 def process_image(image_bytes: bytes) -> tuple[str, list[float] | None, bool]:
-    """Full pipeline: classify → describe → embed.
+    """Full pipeline: classify + describe (single call) → embed.
 
     Returns (description, embedding, is_package).
     If the image is not a package, embedding is None (skipped to save cost).
@@ -261,14 +330,13 @@ def process_image(image_bytes: bytes) -> tuple[str, list[float] | None, bool]:
     t_start = time.perf_counter()
     logger.info("Processing image (%d bytes)", len(image_bytes))
 
-    is_package, summary = classify_image(image_bytes)
+    is_package, description = classify_and_describe(image_bytes)
 
     if not is_package:
         total_ms = (time.perf_counter() - t_start) * 1000
-        logger.info("[TIMING] process_image_total=%.0fms (rejected: not a package — %s)", total_ms, summary)
-        return summary, None, False
+        logger.info("[TIMING] process_image_total=%.0fms (rejected: not a package — %s)", total_ms, description)
+        return description, None, False
 
-    description = describe_package(image_bytes)
     embedding = generate_embedding(description)
     total_ms = (time.perf_counter() - t_start) * 1000
     logger.info("[TIMING] process_image_total=%.0fms", total_ms)
