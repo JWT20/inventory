@@ -200,6 +200,15 @@ async def book_box(
         matched_sku, confidence = candidates[0]
 
     if matched_sku is None:
+        # Check if the box matches a SKU outside this order
+        all_candidates = find_best_matches(db, embedding, top_n=1)
+        if all_candidates and all_candidates[0][1] >= settings.match_threshold:
+            wrong_sku, wrong_conf = all_candidates[0]
+            raise HTTPException(
+                409,
+                f"Deze doos lijkt op SKU {wrong_sku.sku_code} ({wrong_sku.name}), "
+                f"maar die zit niet in deze order",
+            )
         raise HTTPException(
             404,
             "Doos niet herkend — geen match gevonden met SKUs in deze order",
