@@ -23,6 +23,17 @@ interface BookingResult {
   sku_name: string;
   klant: string;
   rolcontainer: string;
+  needs_confirmation?: boolean;
+}
+
+interface ConfirmationData {
+  needs_confirmation: true;
+  confirmation_token: string;
+  sku_code: string;
+  sku_name: string;
+  confidence: number;
+  scan_image_url: string;
+  reference_image_url: string;
 }
 
 interface IdentifyResult {
@@ -32,22 +43,28 @@ interface IdentifyResult {
   confidence: number;
 }
 
-type Step = "select-order" | "scan" | "result" | "identify-scan" | "identify-result";
+type Step = "select-order" | "scan" | "result" | "confirm" | "identify-scan" | "identify-result";
 
 export function ReceivePage() {
   const [step, setStep] = useState<Step>("select-order");
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [lastBooking, setLastBooking] = useState<BookingResult | null>(null);
   const [lastIdentify, setLastIdentify] = useState<IdentifyResult | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<ConfirmationData | null>(null);
 
   function handleOrderSelected(order: Order) {
     setSelectedOrder(order);
     setStep("scan");
   }
 
-  function handleBooked(booking: BookingResult) {
-    setLastBooking(booking);
-    setStep("result");
+  function handleBooked(booking: BookingResult | ConfirmationData) {
+    if ("needs_confirmation" in booking && booking.needs_confirmation && "confirmation_token" in booking) {
+      setPendingConfirmation(booking as ConfirmationData);
+      setStep("confirm");
+    } else {
+      setLastBooking(booking as BookingResult);
+      setStep("result");
+    }
   }
 
   function handleIdentified(result: IdentifyResult) {
@@ -55,8 +72,15 @@ export function ReceivePage() {
     setStep("identify-result");
   }
 
+  function handleConfirmed(booking: BookingResult) {
+    setPendingConfirmation(null);
+    setLastBooking(booking);
+    setStep("result");
+  }
+
   function scanNext() {
     setLastBooking(null);
+    setPendingConfirmation(null);
     setStep("scan");
   }
 
@@ -65,6 +89,7 @@ export function ReceivePage() {
     setSelectedOrder(null);
     setLastBooking(null);
     setLastIdentify(null);
+    setPendingConfirmation(null);
   }
 
   return (
@@ -83,6 +108,14 @@ export function ReceivePage() {
           order={selectedOrder}
           onBooked={handleBooked}
           onBack={reset}
+        />
+      )}
+
+      {step === "confirm" && pendingConfirmation && selectedOrder && (
+        <ConfirmStep
+          confirmation={pendingConfirmation}
+          onConfirmed={handleConfirmed}
+          onReject={scanNext}
         />
       )}
 
@@ -350,6 +383,116 @@ function ResultStep({
         </Button>
         <Button variant="secondary" className="w-full" onClick={onDone}>
           Terug naar orders
+        </Button>
+      </div>
+    </>
+  );
+}
+
+/* ---------- Step 2b: Human Confirmation (low-quality match) ---------- */
+
+function ConfirmStep({
+  confirmation,
+  onConfirmed,
+  onReject,
+}: {
+  confirmation: ConfirmationData;
+  onConfirmed: (booking: BookingResult) => void;
+  onReject: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+
+  async function handleConfirm() {
+    setConfirming(true);
+    try {
+      const booking: BookingResult = await api.confirmBooking(
+        confirmation.confirmation_token,
+      );
+      onConfirmed(booking);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Bevestiging mislukt");
+    } finally {
+      setConfirming(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="p-4 rounded-lg bg-yellow-600/20 border-2 border-yellow-600 text-center mb-4">
+        <p className="text-yellow-400 text-xl font-bold mb-1">
+          Controleer match
+        </p>
+        <p className="text-yellow-300 text-sm">
+          Lage beschrijvingskwaliteit — bevestig handmatig
+        </p>
+      </div>
+
+      <Card className="p-4 mb-4">
+        <div className="space-y-1 mb-3">
+          <p className="text-sm">
+            <span className="text-muted-foreground">Product:</span>{" "}
+            <span className="font-semibold">{confirmation.sku_name}</span>
+          </p>
+          <p className="text-sm">
+            <span className="text-muted-foreground">SKU:</span>{" "}
+            <span className="font-mono">{confirmation.sku_code}</span>
+          </p>
+          <p className="text-sm">
+            <span className="text-muted-foreground">Zekerheid:</span>{" "}
+            {Math.round(confirmation.confidence * 100)}%
+          </p>
+        </div>
+
+        <p className="text-xs text-muted-foreground mb-2 font-semibold">
+          Is dit dezelfde doos?
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <p className="text-xs text-muted-foreground mb-1 text-center">Uw scan</p>
+            <div className="aspect-square rounded-lg overflow-hidden bg-black">
+              <img
+                src={confirmation.scan_image_url}
+                alt="Scan"
+                className="w-full h-full object-cover"
+              />
+            </div>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground mb-1 text-center">Referentie</p>
+            <div className="aspect-square rounded-lg overflow-hidden bg-black">
+              {confirmation.reference_image_url ? (
+                <img
+                  src={confirmation.reference_image_url}
+                  alt="Referentie"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-muted-foreground text-xs">
+                  Geen referentie
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <div className="flex flex-col gap-3">
+        <Button
+          size="lg"
+          className="w-full h-14 text-lg bg-green-600 hover:bg-green-700"
+          onClick={handleConfirm}
+          disabled={confirming}
+        >
+          {confirming ? "Boeken..." : "Ja, dit klopt"}
+        </Button>
+        <Button
+          variant="destructive"
+          size="lg"
+          className="w-full h-14 text-lg"
+          onClick={onReject}
+          disabled={confirming}
+        >
+          Nee, opnieuw scannen
         </Button>
       </div>
     </>

@@ -202,5 +202,21 @@ class BookingResponse(BaseModel):
     klant: str
     rolcontainer: str
     created_at: datetime
+    needs_confirmation: bool = False
 
     model_config = {"from_attributes": True}
+
+
+class BookingConfirmation(BaseModel):
+    """Returned when a low-quality description requires human approval."""
+    needs_confirmation: bool = True
+    confirmation_token: str
+    sku_code: str
+    sku_name: str
+    confidence: float
+    scan_image_url: str
+    reference_image_url: str
+
+
+class ConfirmBookingRequest(BaseModel):
+    confirmation_token: str

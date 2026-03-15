@@ -221,6 +221,13 @@ export const api = {
     return request("/receiving/book", { method: "POST", body: form });
   },
 
+  confirmBooking: (token: string) =>
+    request("/receiving/book/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation_token: token }),
+    }),
+
   // Vision (ad-hoc)
   identify: (blob: Blob) => upload("/vision/identify", blob, "scan.jpg"),
 };

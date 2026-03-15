@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from sqlalchemy import inspect, text
 
@@ -333,6 +334,10 @@ app.include_router(skus.router, prefix="/api")
 app.include_router(orders.router, prefix="/api")
 app.include_router(receiving.router, prefix="/api")
 app.include_router(vision.router, prefix="/api")
+
+# Serve uploaded images (scans, reference images)
+os.makedirs(settings.upload_dir, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")
 
 
 @app.get("/api/health")
