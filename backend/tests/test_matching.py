@@ -34,14 +34,15 @@ class TestFindBestMatch:
         mock_sku.id = 1
         mock_sku.sku_code = "WINE-001"
 
-        mock_db = _mock_db_with_rows([(1, 0.95)], {1: mock_sku})
+        mock_db = _mock_db_with_rows([(1, 0.95, "/app/uploads/ref/1/img.jpg")], {1: mock_sku})
 
         with patch("app.services.matching.settings") as mock_settings:
             mock_settings.match_threshold = 0.92
-            sku, confidence = find_best_match(mock_db, [0.1] * 1536)
+            sku, confidence, image_path = find_best_match(mock_db, [0.1] * 1536)
 
         assert sku is mock_sku
         assert confidence == 0.95
+        assert image_path == "/app/uploads/ref/1/img.jpg"
 
     def test_match_below_threshold(self):
         from app.services.matching import find_best_match
@@ -49,24 +50,26 @@ class TestFindBestMatch:
         mock_sku = MagicMock()
         mock_sku.id = 1
 
-        mock_db = _mock_db_with_rows([(1, 0.80)], {1: mock_sku})
+        mock_db = _mock_db_with_rows([(1, 0.80, "/app/uploads/ref/1/img.jpg")], {1: mock_sku})
 
         with patch("app.services.matching.settings") as mock_settings:
             mock_settings.match_threshold = 0.92
-            sku, confidence = find_best_match(mock_db, [0.1] * 1536)
+            sku, confidence, image_path = find_best_match(mock_db, [0.1] * 1536)
 
         assert sku is None
         assert confidence == 0.80
+        assert image_path is None
 
     def test_no_reference_images(self):
         from app.services.matching import find_best_match
 
         mock_db = _mock_db_with_rows([], {})
 
-        sku, confidence = find_best_match(mock_db, [0.1] * 1536)
+        sku, confidence, image_path = find_best_match(mock_db, [0.1] * 1536)
 
         assert sku is None
         assert confidence == 0.0
+        assert image_path is None
 
     def test_threshold_boundary_exact_matches(self):
         """Similarity exactly equal to threshold should match (uses strict < for rejection)."""
@@ -76,15 +79,16 @@ class TestFindBestMatch:
         mock_sku.id = 1
         mock_sku.sku_code = "WINE-001"
 
-        mock_db = _mock_db_with_rows([(1, 0.92)], {1: mock_sku})
+        mock_db = _mock_db_with_rows([(1, 0.92, "/app/uploads/ref/1/img.jpg")], {1: mock_sku})
 
         with patch("app.services.matching.settings") as mock_settings:
             mock_settings.match_threshold = 0.92
-            sku, confidence = find_best_match(mock_db, [0.1] * 1536)
+            sku, confidence, image_path = find_best_match(mock_db, [0.1] * 1536)
 
         # 0.92 < 0.92 is False, so the match is NOT rejected
         assert sku is mock_sku
         assert confidence == 0.92
+        assert image_path == "/app/uploads/ref/1/img.jpg"
 
 
 # ---------------------------------------------------------------------------
@@ -101,14 +105,15 @@ class TestFindBestMatches:
         mock_sku2.id = 2
 
         mock_db = _mock_db_with_rows(
-            [(1, 0.95), (2, 0.85)], {1: mock_sku1, 2: mock_sku2}
+            [(1, 0.95, "/app/uploads/ref/1/a.jpg"), (2, 0.85, "/app/uploads/ref/2/b.jpg")],
+            {1: mock_sku1, 2: mock_sku2},
         )
 
         results = find_best_matches(mock_db, [0.1] * 1536, top_n=2)
 
         assert len(results) == 2
-        assert results[0] == (mock_sku1, 0.95)
-        assert results[1] == (mock_sku2, 0.85)
+        assert results[0] == (mock_sku1, 0.95, "/app/uploads/ref/1/a.jpg")
+        assert results[1] == (mock_sku2, 0.85, "/app/uploads/ref/2/b.jpg")
 
     def test_empty_database(self):
         from app.services.matching import find_best_matches
