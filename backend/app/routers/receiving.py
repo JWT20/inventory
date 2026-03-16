@@ -32,11 +32,10 @@ def _scan_url(scan_path: str) -> str:
     return f"/api/uploads/{rel}"
 
 
-def _best_reference_image_url(db: Session, sku_id: int) -> str:
-    """Return the URL of the first reference image for a SKU."""
-    ref = db.query(ReferenceImage).filter(ReferenceImage.sku_id == sku_id).first()
-    if ref and ref.image_path:
-        return _scan_url(ref.image_path)
+def _reference_image_url(image_path: str | None) -> str:
+    """Convert a reference image file path to a URL served via /api/uploads/."""
+    if image_path:
+        return _scan_url(image_path)
     return ""
 
 
@@ -113,7 +112,7 @@ async def identify_box(
 
     matched_sku, confidence = None, 0.0
     if candidates and candidates[0][1] >= settings.match_threshold:
-        matched_sku, confidence = candidates[0]
+        matched_sku, confidence = candidates[0][0], candidates[0][1]
 
     logger.info(
         "[TIMING] identify total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms",
@@ -132,7 +131,7 @@ async def identify_box(
             "vision_description": description,
             "candidates": [
                 {"sku_code": s.sku_code, "sku_name": s.name, "similarity": round(sim, 4)}
-                for s, sim in candidates
+                for s, sim, _img_path in candidates
             ],
             "threshold": settings.match_threshold,
         },
@@ -213,15 +212,15 @@ async def book_box(
     candidates = find_best_matches(db, embedding, top_n=5, sku_ids=order_sku_ids)
     t_match = time.perf_counter()
 
-    matched_sku, confidence = None, 0.0
+    matched_sku, confidence, matched_image_path = None, 0.0, None
     if candidates and candidates[0][1] >= settings.match_threshold:
-        matched_sku, confidence = candidates[0]
+        matched_sku, confidence, matched_image_path = candidates[0]
 
     if matched_sku is None:
         # Check if the box matches a SKU outside this order
         all_candidates = find_best_matches(db, embedding, top_n=1)
         if all_candidates and all_candidates[0][1] >= settings.match_threshold:
-            wrong_sku, wrong_conf = all_candidates[0]
+            wrong_sku = all_candidates[0][0]
             raise HTTPException(
                 409,
                 f"Deze doos lijkt op SKU {wrong_sku.sku_code} ({wrong_sku.name}), "
@@ -260,7 +259,7 @@ async def book_box(
             sku_name=matched_sku.name,
             confidence=confidence,
             scan_image_url=_scan_url(scan_path),
-            reference_image_url=_best_reference_image_url(db, matched_sku.id),
+            reference_image_url=_reference_image_url(matched_image_path),
         )
 
     # Find matching order line with remaining quantity
