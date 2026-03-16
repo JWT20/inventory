@@ -8,6 +8,7 @@ work transparently with the sync SQLite test engine.
 import os
 
 # Set required env vars before importing app code
+os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
 os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
 
