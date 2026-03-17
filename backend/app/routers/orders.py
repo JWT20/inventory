@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user, require_admin, require_product_manager
 from app.database import get_db
 from app.events import publish_event
-from app.models import Booking, Order, OrderLine, SKU, User
+from app.models import Booking, Customer, CustomerSKU, Order, OrderLine, SKU, User
 from app.schemas import (
     BookingResponse,
     CSVRow,
@@ -39,6 +39,8 @@ def _order_line_to_response(line: OrderLine) -> OrderLineResponse:
         sku_code=line.sku.sku_code,
         sku_name=line.sku.name,
         klant=line.klant,
+        customer_id=line.customer_id,
+        customer_name=line.customer_name,
         quantity=line.quantity,
         booked_count=line.booked_count,
         has_image=len(line.sku.reference_images) > 0,
@@ -154,17 +156,42 @@ def upload_csv(
     db.add(order)
     db.flush()
 
-    # Group rows by (SKU code, klant) and sum quantities
+    # Resolve customers by name (find-or-create, case-insensitive)
+    customer_cache: dict[str, Customer] = {}
+    for row in rows:
+        name = row.klant.strip().lower()
+        if name in customer_cache:
+            continue
+        customer = db.query(Customer).filter(Customer.name == name).first()
+        if not customer:
+            customer = Customer(name=name)
+            db.add(customer)
+            db.flush()
+        customer_cache[name] = customer
+
+    # Group rows by (SKU code, customer_name) and sum quantities
     line_quantities: dict[tuple[str, str], int] = {}
     for row in rows:
-        key = (row.sku_code, row.klant)
+        key = (row.sku_code, row.klant.strip().lower())
         line_quantities[key] = line_quantities.get(key, 0) + row.aantal
 
     all_skus = {s.sku_code: s for s in matched_skus + new_skus}
-    for (sku_code, klant), qty in line_quantities.items():
+    customer_sku_pairs: set[tuple[int, int]] = set()
+    for (sku_code, cust_name), qty in line_quantities.items():
         sku = all_skus[sku_code]
-        line = OrderLine(order_id=order.id, sku_id=sku.id, klant=klant, quantity=qty)
+        customer = customer_cache[cust_name]
+        line = OrderLine(
+            order_id=order.id,
+            sku_id=sku.id,
+            customer_id=customer.id,
+            klant=customer.name,
+            quantity=qty,
+        )
         db.add(line)
+        customer_sku_pairs.add((customer.id, sku.id))
+
+    # Auto-populate customer_skus catalog
+    _upsert_customer_skus(db, customer_sku_pairs)
 
     # Determine status: if any new SKU has no image → pending_images
     if new_skus:
@@ -195,13 +222,25 @@ def upload_csv(
     )
 
 
+def _upsert_customer_skus(db: Session, pairs: set[tuple[int, int]]):
+    """Ensure customer_skus rows exist for the given (customer_id, sku_id) pairs."""
+    for customer_id, sku_id in pairs:
+        exists = (
+            db.query(CustomerSKU)
+            .filter(CustomerSKU.customer_id == customer_id, CustomerSKU.sku_id == sku_id)
+            .first()
+        )
+        if not exists:
+            db.add(CustomerSKU(customer_id=customer_id, sku_id=sku_id))
+
+
 @router.post("", response_model=OrderResponse)
 def create_order(
     body: ManualOrderCreate,
     db: Session = Depends(get_db),
     user: User = Depends(require_product_manager),
 ):
-    """Create an order from wine details. SKUs are auto-created or matched."""
+    """Create an order by picking existing customers and SKUs."""
     merchant = db.get(User, body.merchant_id)
     if not merchant:
         raise HTTPException(404, "Handelaar niet gevonden")
@@ -211,44 +250,41 @@ def create_order(
     db.add(order)
     db.flush()
 
-    # Group by (sku_code, klant), sum quantities, resolve SKUs
-    line_key = tuple[str, str]  # (sku_code, klant)
-    line_quantities: dict[line_key, int] = {}
-    line_data: dict[str, object] = {}  # sku_code → first line (for SKU creation)
+    # Group by (customer_id, sku_id), sum quantities
+    line_quantities: dict[tuple[int, int], int] = {}
     for line in body.lines:
-        code = generate_sku_code(line.producent, line.wijnaam, line.wijntype, line.jaargang, line.volume)
-        key = (code, line.klant)
+        key = (line.customer_id, line.sku_id)
         line_quantities[key] = line_quantities.get(key, 0) + line.quantity
-        if code not in line_data:
-            line_data[code] = line
 
-    has_new = False
-    for (code, klant), qty in line_quantities.items():
-        line = line_data[code]
-        sku = db.query(SKU).filter(SKU.sku_code == code).first()
+    sku_cache: dict[int, SKU] = {}
+    customer_sku_pairs: set[tuple[int, int]] = set()
+
+    for (customer_id, sku_id), qty in line_quantities.items():
+        customer = db.get(Customer, customer_id)
+        if not customer:
+            raise HTTPException(404, f"Klant met id {customer_id} niet gevonden")
+        sku = sku_cache.get(sku_id) or db.get(SKU, sku_id)
         if not sku:
-            sku = SKU(
-                sku_code=code,
-                name=generate_display_name(line.producent, line.wijnaam, line.wijntype, line.jaargang),
-                description=f"{line.producent} {line.wijnaam} {line.wijntype} {line.jaargang} {line.volume}",
-                producent=line.producent,
-                wijnaam=line.wijnaam,
-                wijntype=line.wijntype,
-                jaargang=line.jaargang,
-                volume=line.volume,
-            )
-            db.add(sku)
-            db.flush()
-            has_new = True
-        db.add(OrderLine(order_id=order.id, sku_id=sku.id, klant=klant, quantity=qty))
+            raise HTTPException(404, f"SKU met id {sku_id} niet gevonden")
+        sku_cache[sku_id] = sku
+
+        db.add(OrderLine(
+            order_id=order.id,
+            sku_id=sku_id,
+            customer_id=customer_id,
+            klant=customer.name,
+            quantity=qty,
+        ))
+        customer_sku_pairs.add((customer_id, sku_id))
+
+    # Auto-populate customer_skus catalog
+    _upsert_customer_skus(db, customer_sku_pairs)
 
     # Determine status
-    if has_new:
-        order.status = "pending_images"
-    else:
-        all_skus = [db.query(SKU).filter(SKU.sku_code == c).first() for c in line_data]
-        all_have_images = all(len(s.reference_images) > 0 for s in all_skus)
-        order.status = "active" if all_have_images else "pending_images"
+    all_have_images = all(
+        len(s.reference_images) > 0 for s in sku_cache.values()
+    )
+    order.status = "active" if all_have_images else "pending_images"
 
     db.commit()
     db.refresh(order)
@@ -376,8 +412,8 @@ def list_bookings(
             order_reference=order.reference,
             sku_code=b.sku.sku_code,
             sku_name=b.sku.name,
-            klant=b.order_line.klant,
-            rolcontainer=f"KLANT {b.order_line.klant.upper()}",
+            klant=b.order_line.customer_name,
+            rolcontainer=f"KLANT {b.order_line.customer_name.upper()}",
             created_at=b.created_at,
         )
         for b in bookings

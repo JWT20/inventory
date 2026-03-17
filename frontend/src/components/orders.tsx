@@ -25,14 +25,10 @@ interface SKUOption {
   volume?: string;
 }
 
-interface WineLine {
-  klant: string;
-  producent: string;
-  wijnaam: string;
-  wijntype: string;
-  jaargang: string;
-  volume: string;
-  quantity: number;
+interface CustomerOption {
+  id: number;
+  name: string;
+  sku_ids: number[];
 }
 
 interface UserOption {
@@ -47,6 +43,8 @@ interface OrderLine {
   sku_code: string;
   sku_name: string;
   klant: string;
+  customer_id: number | null;
+  customer_name: string;
   quantity: number;
   booked_count: number;
   has_image: boolean;
@@ -67,6 +65,12 @@ interface CSVResult {
   matched_skus: { id: number; sku_code: string; name: string; image_count: number }[];
   new_skus: { id: number; sku_code: string; name: string; image_count: number }[];
   errors: string[];
+}
+
+interface CustomerSkuLine {
+  sku_id: number;
+  checked: boolean;
+  quantity: number;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -180,10 +184,6 @@ export function OrdersPage() {
   );
 }
 
-const EMPTY_LINE: WineLine = {
-  klant: "", producent: "", wijnaam: "", wijntype: "", jaargang: "", volume: "", quantity: 1,
-};
-
 function ManualOrderDialog({
   open,
   onClose,
@@ -195,51 +195,99 @@ function ManualOrderDialog({
 }) {
   const { user } = useAuth();
   const [merchants, setMerchants] = useState<UserOption[]>([]);
-  const [skus, setSkus] = useState<SKUOption[]>([]);
+  const [allSkus, setAllSkus] = useState<SKUOption[]>([]);
+  const [allCustomers, setAllCustomers] = useState<CustomerOption[]>([]);
   const [merchantId, setMerchantId] = useState<number | "">("");
-  const [lines, setLines] = useState<WineLine[]>([{ ...EMPTY_LINE }]);
+  const [selectedCustomerIds, setSelectedCustomerIds] = useState<number[]>([]);
+  // Per-customer SKU lines: customerId → { skuId → { checked, quantity } }
+  const [customerLines, setCustomerLines] = useState<Record<number, CustomerSkuLine[]>>({});
+  // Per-customer extra SKUs added via search
+  const [extraSkus, setExtraSkus] = useState<Record<number, number[]>>({});
   const [submitting, setSubmitting] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [newCustomerName, setNewCustomerName] = useState("");
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    // Auto-set merchant to current user if they're a merchant
     if (user?.role === "merchant") {
       setMerchantId(user.id);
     }
     api.listUsers().then((users: UserOption[]) =>
       setMerchants(users.filter((u) => u.role === "merchant" || u.role === "admin")),
     );
-    api.listSKUs().then((s: SKUOption[]) => setSkus(s));
+    api.listSKUs().then((s: SKUOption[]) => setAllSkus(s));
+    api.listCustomers().then((c: CustomerOption[]) => setAllCustomers(c));
   }, [open, user]);
 
-  function addLine() {
-    setLines([...lines, { ...EMPTY_LINE }]);
+  function toggleCustomer(customerId: number) {
+    if (selectedCustomerIds.includes(customerId)) {
+      setSelectedCustomerIds(selectedCustomerIds.filter((id) => id !== customerId));
+      return;
+    }
+    setSelectedCustomerIds([...selectedCustomerIds, customerId]);
+    // Initialize lines from customer's known SKUs if not already set
+    if (!customerLines[customerId]) {
+      const customer = allCustomers.find((c) => c.id === customerId);
+      const lines: CustomerSkuLine[] = (customer?.sku_ids || []).map((skuId) => ({
+        sku_id: skuId,
+        checked: false,
+        quantity: 1,
+      }));
+      setCustomerLines((prev) => ({ ...prev, [customerId]: lines }));
+    }
   }
 
-  function removeLine(idx: number) {
-    setLines(lines.filter((_, i) => i !== idx));
+  function toggleSkuLine(customerId: number, skuId: number) {
+    setCustomerLines((prev) => {
+      const lines = [...(prev[customerId] || [])];
+      const idx = lines.findIndex((l) => l.sku_id === skuId);
+      if (idx >= 0) {
+        lines[idx] = { ...lines[idx], checked: !lines[idx].checked };
+      }
+      return { ...prev, [customerId]: lines };
+    });
   }
 
-  function updateLine(idx: number, field: keyof WineLine, value: string | number) {
-    const updated = [...lines];
-    updated[idx] = { ...updated[idx], [field]: value };
-    setLines(updated);
+  function updateSkuQuantity(customerId: number, skuId: number, qty: number) {
+    setCustomerLines((prev) => {
+      const lines = [...(prev[customerId] || [])];
+      const idx = lines.findIndex((l) => l.sku_id === skuId);
+      if (idx >= 0) {
+        lines[idx] = { ...lines[idx], quantity: qty, checked: true };
+      }
+      return { ...prev, [customerId]: lines };
+    });
   }
 
-  function selectSku(idx: number, skuId: string) {
-    if (!skuId) return;
-    const sku = skus.find((s) => s.id === Number(skuId));
-    if (!sku) return;
-    const updated = [...lines];
-    updated[idx] = {
-      ...updated[idx],
-      producent: sku.producent || "",
-      wijnaam: sku.wijnaam || "",
-      wijntype: sku.wijntype || "",
-      jaargang: sku.jaargang || "",
-      volume: sku.volume || "",
-    };
-    setLines(updated);
+  function addExtraSku(customerId: number, skuId: number) {
+    // Add to the customer's lines if not already there
+    setCustomerLines((prev) => {
+      const lines = [...(prev[customerId] || [])];
+      if (lines.some((l) => l.sku_id === skuId)) return prev;
+      lines.push({ sku_id: skuId, checked: true, quantity: 1 });
+      return { ...prev, [customerId]: lines };
+    });
+    setExtraSkus((prev) => ({
+      ...prev,
+      [customerId]: [...(prev[customerId] || []), skuId],
+    }));
+  }
+
+  async function handleCreateCustomer() {
+    if (!newCustomerName.trim()) return;
+    setCreatingCustomer(true);
+    try {
+      const created = await api.createCustomer(newCustomerName.trim());
+      setAllCustomers((prev) => [...prev, created]);
+      setNewCustomerName("");
+      // Auto-select the new customer
+      toggleCustomer(created.id);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Klant aanmaken mislukt");
+    } finally {
+      setCreatingCustomer(false);
+    }
   }
 
   async function submit() {
@@ -247,24 +295,39 @@ function ManualOrderDialog({
       toast.error("Selecteer een handelaar");
       return;
     }
-    const valid = lines.filter(
-      (l) => l.klant && l.producent && l.wijnaam && l.wijntype && l.jaargang && l.volume && l.quantity > 0,
-    );
-    if (valid.length === 0) {
-      toast.error("Vul minimaal één complete regel in");
+    // Build lines from all selected customers
+    const orderLines: { customer_id: number; sku_id: number; quantity: number }[] = [];
+    for (const customerId of selectedCustomerIds) {
+      const lines = customerLines[customerId] || [];
+      for (const line of lines) {
+        if (line.checked && line.quantity > 0) {
+          orderLines.push({
+            customer_id: customerId,
+            sku_id: line.sku_id,
+            quantity: line.quantity,
+          });
+        }
+      }
+    }
+    if (orderLines.length === 0) {
+      toast.error("Selecteer minimaal één product met aantal");
       return;
     }
     setSubmitting(true);
     try {
       await api.createOrder({
         merchant_id: merchantId as number,
-        lines: valid,
+        lines: orderLines,
       });
       toast.success("Order aangemaakt");
       onCreated();
       onClose();
+      // Reset state
       setMerchantId(user?.role === "merchant" ? user.id : "");
-      setLines([{ ...EMPTY_LINE }]);
+      setSelectedCustomerIds([]);
+      setCustomerLines({});
+      setExtraSkus({});
+      setCustomerSearch("");
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Aanmaken mislukt");
     } finally {
@@ -274,9 +337,13 @@ function ManualOrderDialog({
 
   const inp = "rounded-md border border-border bg-background px-2 py-1.5 text-sm w-full";
 
+  const filteredCustomers = allCustomers.filter((c) =>
+    c.name.toLowerCase().includes(customerSearch.toLowerCase()),
+  );
+
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Order aanmaken</DialogTitle>
         </DialogHeader>
@@ -302,107 +369,133 @@ function ManualOrderDialog({
             </div>
           )}
 
+          {/* Customer selection */}
           <div>
-            <Label className="mb-1 block text-sm">Producten</Label>
-            <div className="space-y-3">
-              {lines.map((line, idx) => (
-                <div
-                  key={idx}
-                  className="p-3 rounded-lg border border-border space-y-2"
-                >
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-muted-foreground">
-                      Regel {idx + 1}
-                    </span>
-                    {lines.length > 1 && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 px-2 text-xs"
-                        onClick={() => removeLine(idx)}
-                      >
-                        ×
-                      </Button>
-                    )}
-                  </div>
-                  <input
-                    className={inp}
-                    placeholder="Klant"
-                    value={line.klant}
-                    onChange={(e) => updateLine(idx, "klant", e.target.value)}
-                  />
-                  <select
-                    className={inp}
-                    value=""
-                    onChange={(e) => selectSku(idx, e.target.value)}
+            <Label className="mb-1 block text-sm">Klanten</Label>
+            <div className="flex gap-2 mb-2">
+              <input
+                className={inp}
+                placeholder="Zoek klant..."
+                value={customerSearch}
+                onChange={(e) => setCustomerSearch(e.target.value)}
+              />
+            </div>
+            <div className="max-h-32 overflow-y-auto border border-border rounded-md">
+              {filteredCustomers.length === 0 ? (
+                <p className="text-xs text-muted-foreground p-2">Geen klanten gevonden</p>
+              ) : (
+                filteredCustomers.map((c) => (
+                  <label
+                    key={c.id}
+                    className="flex items-center gap-2 px-2 py-1.5 hover:bg-muted cursor-pointer text-sm"
                   >
-                    <option value="">Bestaand product kiezen...</option>
-                    {skus.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} ({s.sku_code})
-                      </option>
-                    ))}
-                  </select>
-                  <div className="grid grid-cols-2 gap-2">
                     <input
+                      type="checkbox"
+                      checked={selectedCustomerIds.includes(c.id)}
+                      onChange={() => toggleCustomer(c.id)}
+                    />
+                    <span>{c.name}</span>
+                    <span className="text-xs text-muted-foreground ml-auto">
+                      {c.sku_ids.length} product{c.sku_ids.length !== 1 ? "en" : ""}
+                    </span>
+                  </label>
+                ))
+              )}
+            </div>
+            {/* Add new customer inline */}
+            <div className="flex gap-2 mt-2">
+              <input
+                className={inp}
+                placeholder="Nieuwe klant..."
+                value={newCustomerName}
+                onChange={(e) => setNewCustomerName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleCreateCustomer()}
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleCreateCustomer}
+                disabled={creatingCustomer || !newCustomerName.trim()}
+              >
+                +
+              </Button>
+            </div>
+          </div>
+
+          {/* Per-customer SKU selection */}
+          {selectedCustomerIds.map((customerId) => {
+            const customer = allCustomers.find((c) => c.id === customerId);
+            if (!customer) return null;
+            const lines = customerLines[customerId] || [];
+
+            return (
+              <div key={customerId} className="border border-border rounded-lg">
+                <div className="px-3 py-2 bg-muted rounded-t-lg">
+                  <span className="font-medium text-sm">{customer.name}</span>
+                </div>
+                <div className="p-3 space-y-1">
+                  {lines.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      Geen bekende producten — voeg hieronder toe
+                    </p>
+                  ) : (
+                    lines.map((line) => {
+                      const sku = allSkus.find((s) => s.id === line.sku_id);
+                      if (!sku) return null;
+                      return (
+                        <div key={line.sku_id} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={line.checked}
+                            onChange={() => toggleSkuLine(customerId, line.sku_id)}
+                          />
+                          <span className="text-sm flex-1 truncate" title={`${sku.name} (${sku.sku_code})`}>
+                            {sku.name}
+                          </span>
+                          <Input
+                            type="number"
+                            min={1}
+                            className="w-20 h-7 text-sm"
+                            placeholder="Aantal"
+                            value={line.checked ? line.quantity : ""}
+                            disabled={!line.checked}
+                            onChange={(e) =>
+                              updateSkuQuantity(customerId, line.sku_id, Number(e.target.value) || 1)
+                            }
+                          />
+                        </div>
+                      );
+                    })
+                  )}
+                  {/* Add other SKU */}
+                  <div className="pt-2">
+                    <select
                       className={inp}
-                      placeholder="Producent"
-                      value={line.producent}
-                      onChange={(e) => updateLine(idx, "producent", e.target.value)}
-                    />
-                    <input
-                      className={inp}
-                      placeholder="Wijnaam"
-                      value={line.wijnaam}
-                      onChange={(e) => updateLine(idx, "wijnaam", e.target.value)}
-                    />
-                  </div>
-                  <div className="grid grid-cols-4 gap-2">
-                    <input
-                      className={inp}
-                      placeholder="Type"
-                      value={line.wijntype}
-                      onChange={(e) => updateLine(idx, "wijntype", e.target.value)}
-                    />
-                    <input
-                      className={inp}
-                      placeholder="Jaargang"
-                      value={line.jaargang}
-                      onChange={(e) => updateLine(idx, "jaargang", e.target.value)}
-                    />
-                    <input
-                      className={inp}
-                      placeholder="Volume"
-                      value={line.volume}
-                      onChange={(e) => updateLine(idx, "volume", e.target.value)}
-                    />
-                    <Input
-                      type="number"
-                      min={1}
-                      placeholder="Aantal"
-                      value={line.quantity}
-                      onChange={(e) =>
-                        updateLine(idx, "quantity", Number(e.target.value) || 1)
-                      }
-                    />
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) addExtraSku(customerId, Number(e.target.value));
+                        e.target.value = "";
+                      }}
+                    >
+                      <option value="">+ Ander product toevoegen...</option>
+                      {allSkus
+                        .filter((s) => !lines.some((l) => l.sku_id === s.id))
+                        .map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name} ({s.sku_code})
+                          </option>
+                        ))}
+                    </select>
                   </div>
                 </div>
-              ))}
-            </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              className="mt-2"
-              onClick={addLine}
-            >
-              + Regel
-            </Button>
-          </div>
+              </div>
+            );
+          })}
 
           <Button
             className="w-full"
             onClick={submit}
-            disabled={submitting}
+            disabled={submitting || selectedCustomerIds.length === 0}
           >
             {submitting ? "Aanmaken..." : "Order aanmaken"}
           </Button>
@@ -644,7 +737,7 @@ function OrderDetailDialog({
                   <div>
                     <p className="font-medium">{line.sku_name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {line.sku_code} &middot; Klant: {line.klant}
+                      {line.sku_code} &middot; Klant: {line.customer_name || line.klant}
                     </p>
                   </div>
                   <div className="text-right flex items-center gap-2">

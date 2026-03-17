@@ -150,6 +150,20 @@ class CSVValidationResult(BaseModel):
     errors: list[str]
 
 
+# --- Customer ---
+class CustomerCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=150)
+
+
+class CustomerResponse(BaseModel):
+    id: int
+    name: str
+    sku_ids: list[int] = []
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # --- Order ---
 class OrderLineResponse(BaseModel):
     id: int
@@ -157,6 +171,8 @@ class OrderLineResponse(BaseModel):
     sku_code: str
     sku_name: str
     klant: str
+    customer_id: int | None = None
+    customer_name: str = ""
     quantity: int
     booked_count: int
     has_image: bool
@@ -179,12 +195,8 @@ class OrderResponse(BaseModel):
 
 
 class ManualOrderLineCreate(BaseModel):
-    klant: str = Field(..., min_length=1)
-    producent: str = Field(..., min_length=1)
-    wijnaam: str = Field(..., min_length=1)
-    wijntype: str = Field(..., min_length=1)
-    jaargang: str = Field(..., min_length=1)
-    volume: str = Field(..., min_length=1)
+    customer_id: int = Field(..., gt=0)
+    sku_id: int = Field(..., gt=0)
     quantity: int = Field(..., gt=0)
 
 

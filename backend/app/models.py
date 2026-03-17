@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -100,6 +101,32 @@ class ReferenceImage(Base):
     sku: Mapped["SKU"] = relationship(back_populates="reference_images")
 
 
+class Customer(Base):
+    __tablename__ = "customers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(150), unique=True, index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    sku_links: Mapped[list["CustomerSKU"]] = relationship(
+        back_populates="customer", cascade="all, delete-orphan"
+    )
+
+
+class CustomerSKU(Base):
+    __tablename__ = "customer_skus"
+    __table_args__ = (UniqueConstraint("customer_id", "sku_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"))
+    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="CASCADE"))
+
+    customer: Mapped["Customer"] = relationship(back_populates="sku_links")
+    sku: Mapped["SKU"] = relationship()
+
+
 VALID_ORDER_STATUSES = ("draft", "pending_images", "active", "completed", "cancelled")
 
 
@@ -133,11 +160,21 @@ class OrderLine(Base):
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"))
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
     klant: Mapped[str] = mapped_column(String(150), default="")
+    customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id"), nullable=True
+    )
     quantity: Mapped[int] = mapped_column(Integer)
     booked_count: Mapped[int] = mapped_column(Integer, default=0)
 
     order: Mapped["Order"] = relationship(back_populates="lines")
     sku: Mapped["SKU"] = relationship()
+    customer: Mapped["Customer | None"] = relationship()
+
+    @property
+    def customer_name(self) -> str:
+        if self.customer:
+            return self.customer.name
+        return self.klant
 
 
 class Booking(Base):

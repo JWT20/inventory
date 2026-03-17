@@ -14,7 +14,7 @@ from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.models import User
 from app.events import init_producer, shutdown_producer
-from app.routers import auth, orders, receiving, skus, vision
+from app.routers import auth, customers, orders, receiving, skus, vision
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -136,6 +136,21 @@ def _migrate_order_line_klant():
     logger.info("Adding klant column to order_lines table")
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE order_lines ADD COLUMN klant VARCHAR(150) NOT NULL DEFAULT ''"))
+
+
+def _migrate_customer_tables():
+    """Add customer_id column to order_lines if missing."""
+    inspector = inspect(engine)
+    if "order_lines" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("order_lines")}
+    if "customer_id" in columns:
+        return
+    logger.info("Adding customer_id column to order_lines table")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE order_lines ADD COLUMN customer_id INTEGER REFERENCES customers(id)"
+        ))
 
 
 def _migrate_reference_image_processing_status():
@@ -283,6 +298,8 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables ready")
 
+    _migrate_customer_tables()
+
     # Seed admin account if no users exist yet
     db = SessionLocal()
     try:
@@ -335,6 +352,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(skus.router, prefix="/api")
+app.include_router(customers.router, prefix="/api")
 app.include_router(orders.router, prefix="/api")
 app.include_router(receiving.router, prefix="/api")
 app.include_router(vision.router, prefix="/api")

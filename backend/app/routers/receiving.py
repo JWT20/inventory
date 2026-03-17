@@ -299,7 +299,7 @@ async def book_box(
     db.commit()
     t_booking = time.perf_counter()
 
-    rolcontainer = f"KLANT {order_line.klant.upper()}"
+    rolcontainer = f"KLANT {order_line.customer_name.upper()}"
 
     logger.info(
         "[TIMING] book total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms booking=%.0fms",
@@ -318,7 +318,7 @@ async def book_box(
             "sku_code": matched_sku.sku_code,
             "confidence": round(confidence, 4),
             "rolcontainer": rolcontainer,
-            "klant": order_line.klant,
+            "klant": order_line.customer_name,
             "order_completed": all_booked,
         },
         user=user,
@@ -332,7 +332,7 @@ async def book_box(
         order_reference=order.reference,
         sku_code=matched_sku.sku_code,
         sku_name=matched_sku.name,
-        klant=order_line.klant,
+        klant=order_line.customer_name,
         rolcontainer=rolcontainer,
         created_at=booking.created_at,
     )
@@ -395,7 +395,7 @@ def confirm_booking(
 
     db.commit()
 
-    rolcontainer = f"KLANT {order_line.klant.upper()}"
+    rolcontainer = f"KLANT {order_line.customer_name.upper()}"
 
     publish_event(
         "box_booked",
@@ -404,7 +404,7 @@ def confirm_booking(
             "sku_code": sku.sku_code,
             "confidence": data.get("confidence"),
             "rolcontainer": rolcontainer,
-            "klant": order_line.klant,
+            "klant": order_line.customer_name,
             "order_completed": all_booked,
             "confirmed_by_human": True,
         },
@@ -419,7 +419,7 @@ def confirm_booking(
         order_reference=order.reference,
         sku_code=sku.sku_code,
         sku_name=sku.name,
-        klant=order_line.klant,
+        klant=order_line.customer_name,
         rolcontainer=rolcontainer,
         created_at=booking.created_at,
     )
