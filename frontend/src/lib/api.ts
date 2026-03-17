@@ -188,6 +188,11 @@ export const api = {
     );
   },
 
+  // Customers
+  listCustomers: () => request("/customers"),
+  createCustomer: (name: string) => json("/customers", "POST", { name }),
+  deleteCustomer: (id: number) => request(`/customers/${id}`, { method: "DELETE" }),
+
   // Orders
   uploadCSV: (file: File) => {
     const form = new FormData();
@@ -197,12 +202,8 @@ export const api = {
   createOrder: (data: {
     merchant_id: number;
     lines: {
-      klant: string;
-      producent: string;
-      wijnaam: string;
-      wijntype: string;
-      jaargang: string;
-      volume: string;
+      customer_id: number;
+      sku_id: number;
       quantity: number;
     }[];
   }) => json("/orders", "POST", data),
