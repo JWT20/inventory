@@ -9,7 +9,7 @@ from app.config import settings
 from app.database import get_db
 from app.events import publish_event
 from app.models import User
-from langfuse import observe, propagate_attributes
+from langfuse import observe, propagate_attributes, get_client as get_langfuse_client
 
 from app.schemas import MatchResult
 from app.services.embedding import process_image
@@ -60,6 +60,22 @@ async def identify_box(
                 user=user,
                 resource_type="vision",
             )
+            # Enrich Langfuse trace for LLM-as-a-judge evaluation
+            try:
+                langfuse = get_langfuse_client()
+                langfuse.update_current_observation(
+                    metadata={
+                        "vision_description": description,
+                        "is_package": False,
+                        "matched_sku_code": None,
+                        "matched_sku_name": None,
+                        "confidence": None,
+                        "candidates": [],
+                        "outcome": "rejected_not_a_package",
+                    },
+                )
+            except Exception:
+                pass
             return None
 
         candidates = find_best_matches(db, embedding, top_n=5)
@@ -68,21 +84,40 @@ async def identify_box(
         if candidates and candidates[0][1] >= settings.match_threshold:
             matched_sku, confidence = candidates[0]
 
+        candidate_details = [
+            {"sku_code": s.sku_code, "sku_name": s.name, "similarity": round(sim, 4)}
+            for s, sim in candidates
+        ]
+
         publish_event(
             "vision_identify",
             details={
                 "matched_sku_code": matched_sku.sku_code if matched_sku else None,
                 "confidence": round(confidence, 4) if matched_sku else None,
                 "vision_description": description,
-                "candidates": [
-                    {"sku_code": s.sku_code, "sku_name": s.name, "similarity": round(sim, 4)}
-                    for s, sim in candidates
-                ],
+                "candidates": candidate_details,
                 "threshold": settings.match_threshold,
             },
             user=user,
             resource_type="vision",
         )
+
+        # Enrich Langfuse trace for LLM-as-a-judge evaluation
+        try:
+            langfuse = get_langfuse_client()
+            langfuse.update_current_observation(
+                metadata={
+                    "vision_description": description,
+                    "is_package": True,
+                    "matched_sku_code": matched_sku.sku_code if matched_sku else None,
+                    "matched_sku_name": matched_sku.name if matched_sku else None,
+                    "confidence": round(confidence, 4) if matched_sku else None,
+                    "candidates": candidate_details,
+                    "outcome": "matched" if matched_sku else "no_match",
+                },
+            )
+        except Exception:
+            pass
 
         if matched_sku is None:
             return None

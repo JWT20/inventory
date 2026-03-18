@@ -113,6 +113,22 @@ async def identify_box(
                 user=user,
                 resource_type="receiving",
             )
+            # Enrich Langfuse trace for LLM-as-a-judge evaluation
+            try:
+                langfuse = get_langfuse_client()
+                langfuse.update_current_observation(
+                    metadata={
+                        "vision_description": description,
+                        "is_package": False,
+                        "matched_sku_code": None,
+                        "matched_sku_name": None,
+                        "confidence": None,
+                        "candidates": [],
+                        "outcome": "rejected_not_a_package",
+                    },
+                )
+            except Exception:
+                pass
             return None
 
         candidates = find_best_matches(db, embedding, top_n=5)
@@ -131,21 +147,40 @@ async def identify_box(
             (t_match - t_process) * 1000,
         )
 
+        candidate_details = [
+            {"sku_code": s.sku_code, "sku_name": s.name, "similarity": round(sim, 4)}
+            for s, sim, _img_path in candidates
+        ]
+
         publish_event(
             "box_identified",
             details={
                 "matched_sku_code": matched_sku.sku_code if matched_sku else None,
                 "confidence": round(confidence, 4) if matched_sku else None,
                 "vision_description": description,
-                "candidates": [
-                    {"sku_code": s.sku_code, "sku_name": s.name, "similarity": round(sim, 4)}
-                    for s, sim, _img_path in candidates
-                ],
+                "candidates": candidate_details,
                 "threshold": settings.match_threshold,
             },
             user=user,
             resource_type="receiving",
         )
+
+        # Enrich Langfuse trace for LLM-as-a-judge evaluation
+        try:
+            langfuse = get_langfuse_client()
+            langfuse.update_current_observation(
+                metadata={
+                    "vision_description": description,
+                    "is_package": True,
+                    "matched_sku_code": matched_sku.sku_code if matched_sku else None,
+                    "matched_sku_name": matched_sku.name if matched_sku else None,
+                    "confidence": round(confidence, 4) if matched_sku else None,
+                    "candidates": candidate_details,
+                    "outcome": "matched" if matched_sku else "no_match",
+                },
+            )
+        except Exception:
+            pass
 
         if matched_sku is None:
             return None
