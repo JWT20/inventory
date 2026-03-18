@@ -1,213 +1,218 @@
-# Plan: Business Event Logging with Apache Pinot via Kafka
+# Account Management Improvements — Implementation Plan
 
-## Goal
-Add operational monitoring for all business events in the warehouse app by publishing structured events to Kafka and ingesting them into Apache Pinot for real-time analytics.
+## 1. Password Change (Admin reset + Self-service)
 
----
+### Backend
 
-## Oracle Cloud Free Tier Constraints
+**Schema** (`schemas.py`):
+- Add `AdminResetPassword(BaseModel)`: `new_password: str` (min 8, max 128) — validated with password policy (see point 7)
+- Add `ChangeOwnPassword(BaseModel)`: `current_password: str`, `new_password: str` — validated with password policy
 
-**Current instance**: VM.Standard.A1.Flex — 1 OCPU (ARM), 6GB RAM
+**Endpoints** (`routers/auth.py`):
+- `PUT /auth/users/{user_id}/password` — admin-only, resets any user's password
+  - Dependency: `require_admin`
+  - Validate new password with `validate_password_strength()` (point 7)
+  - Hash and save, publish `password_reset` audit event
+  - Return 204
+- `PUT /auth/me/password` — any authenticated user changes their own password
+  - Dependency: `get_current_user`
+  - Verify `current_password` against stored hash using `verify_password()`
+  - Validate `new_password` with `validate_password_strength()`
+  - Hash and save, publish `password_changed` audit event
+  - Return 204
 
-| Service | Estimated RAM |
-|---------|--------------|
-| PostgreSQL (pgvector) | ~300MB |
-| FastAPI + Nginx | ~200MB |
-| Kafka (KRaft, no ZooKeeper) | ~500MB |
-| Pinot (standalone mode) | ~1.5-2GB |
-| OS + Docker overhead | ~500MB |
-| **Total** | **~3-3.5GB** |
+### Frontend
 
-Fits within 6GB with ~2.5GB headroom. To ensure stability:
-- **Set `mem_limit`** on every container in docker-compose to prevent OOM kills
-- **Kafka must use KRaft mode** (no ZooKeeper) — saves ~500MB
-- **Pinot must run standalone** (controller+broker+server in one JVM) — saves ~1-2GB vs separate processes
-- **Set JVM heap limits** for Kafka (`KAFKA_HEAP_OPTS: -Xmx256m`) and Pinot (`JAVA_OPTS: -Xms512m -Xmx1g`)
-- All Docker images must support **linux/arm64** (both `apache/kafka` and `apachepinot/pinot` do since v0.12+)
+**API** (`api.ts`):
+- Add `resetUserPassword(userId: number, newPassword: string)`
+- Add `changeMyPassword(currentPassword: string, newPassword: string)`
 
-**Optional upgrade**: Oracle Free Tier allows up to 4 OCPUs + 24GB across all A1 instances. If 6GB becomes tight, bump to 2 OCPUs / 12GB in Terraform (`deploy/main.tf`) at no cost.
+**Accounts page** (`accounts.tsx`):
+- Add a "Reset password" button per user row (key icon) → opens dialog with single password input
+- Show password requirements hint below the input field
 
----
+**Profile/settings area** — "Change my password":
+- Form: current password, new password, confirm new password
+- Client-side validation: match check + strength hint
 
-## Step 1: Add Kafka + Pinot to Docker Compose
+### Tests (`test_auth.py`)
 
-**File**: `docker-compose.yml`
-
-Add three services:
-- **kafka** — Single-node Kafka in KRaft mode (no ZooKeeper). Image: `apache/kafka:3.7.0`. Exposes port 9092 internally. `mem_limit: 512m`, `KAFKA_HEAP_OPTS: -Xmx256m`.
-- **pinot** — Apache Pinot in standalone mode (controller + broker + server in one). Image: `apachepinot/pinot:1.1.0`. Exposes port 9000 (UI/API). `mem_limit: 1536m`, `JAVA_OPTS: -Xms512m -Xmx1g`.
-- **pinot-init** — One-shot container that waits for Pinot to be ready, then creates the table schema via Pinot's REST API.
-
-Add `mem_limit` to existing services too: `db: 512m`, `backend: 512m`, `frontend: 128m`.
-
-Add environment variable `KAFKA_BOOTSTRAP_SERVERS=kafka:9092` to the backend service.
-
-## Step 2: Define Pinot Table Schema
-
-**New file**: `pinot/schema.json`
-
-Create a single Pinot schema `warehouse_events` with these columns:
-- `event_id` (STRING, dimension) — UUID
-- `event_type` (STRING, dimension) — e.g., `pick_validated`, `order_created`
-- `timestamp_ms` (LONG, dateTime) — epoch millis, used as time index
-- `user_id` (INT, dimension)
-- `username` (STRING, dimension)
-- `resource_type` (STRING, dimension) — e.g., `order`, `sku`, `pick`
-- `resource_id` (INT, dimension)
-- `details` (JSON, dimension) — flexible JSON payload with event-specific data
-
-**New file**: `pinot/table.json`
-
-REALTIME table config pointing to Kafka topic `warehouse_events`, consuming from the earliest offset.
-
-**New file**: `pinot/init.sh`
-
-Script that waits for Pinot to be healthy, then POSTs the schema and table config.
-
-## Step 2b: Enhance Matching Service to Return Top-N Candidates
-
-**File**: `backend/app/services/matching.py`
-
-Currently `find_best_match()` returns only the single best SKU. Enhance it to also return the top-N candidates so events can capture *why* a match was chosen:
-
-1. Add a new function `find_best_matches(db, embedding, top_n=5)` that:
-   - Changes `LIMIT 1` → `LIMIT :top_n` in the pgvector query
-   - Returns a list of `(SKU, similarity)` tuples for the top-N candidates
-   - Still applies the active SKU filter
-2. Refactor `find_best_match()` to call `find_best_matches(top_n=1)` internally (no behavior change)
-3. Update callers (picks, receiving, vision routers) to use `find_best_matches()` so they have the full candidate list available for event publishing
-
-The top-N candidates will be included in the event `details` payload:
-```json
-{
-  "vision_description": "Red wine box, Château Margaux 2018...",
-  "candidates": [
-    {"sku_code": "WIN-003", "sku_name": "Margaux 2018", "similarity": 0.92},
-    {"sku_code": "WIN-001", "sku_name": "Margaux 2016", "similarity": 0.85},
-    {"sku_code": "WIN-012", "sku_name": "Pauillac 2019", "similarity": 0.64}
-  ],
-  "matched_sku": "WIN-003",
-  "threshold": 0.75
-}
-```
-
-This enables queries in Pinot like:
-- "Show picks where the correct SKU was in top 3 but not ranked #1"
-- "Average confidence gap between #1 and #2 candidates"
-- "Which SKUs are most often confused with each other"
-
-## Step 3: Create Event Publisher Module
-
-**New file**: `backend/app/events.py`
-
-A lightweight module that:
-1. Initializes a `confluent_kafka.Producer` connected to `KAFKA_BOOTSTRAP_SERVERS`
-2. Exposes a `publish_event(event_type: str, details: dict, user: User | None, resource_type: str, resource_id: int | None)` function
-3. Serializes events as JSON with `event_id` (uuid4), `timestamp_ms`, user info, and the details dict
-4. Calls `producer.produce()` which is non-blocking (buffered internally)
-5. Has a background flush (producer auto-flushes, plus a flush on app shutdown)
-6. Gracefully degrades — if Kafka is unavailable, logs a warning and continues (monitoring should never break the app)
-
-**Config change**: `backend/app/config.py` — add `kafka_bootstrap_servers: str = ""` setting.
-
-**Dependency**: Add `confluent-kafka` to `backend/requirements.txt`.
-
-## Step 4: Instrument All Business Operations
-
-Add `publish_event()` calls at the end of each business operation (after DB commit succeeds):
-
-### Orders (`routers/orders.py`)
-- `order_created` — order_number, customer_name, line_count
-- `order_status_changed` — order_id, old_status, new_status
-- `order_deleted` — order_id, order_number
-
-### Picks (`routers/picks.py`)
-- `pick_validated` — order_line_id, expected_sku_code, matched_sku_code, confidence, correct, message, vision_description, top-N candidates with similarity scores
-
-### Receiving (`routers/receiving.py`)
-- `box_identified` — matched_sku_code, confidence (or null if no match), vision_description, top-N candidates with similarity scores
-- `product_created_inline` — sku_code, name
-
-### SKUs (`routers/skus.py`)
-- `sku_created` — sku_code, name
-- `sku_updated` — sku_code, changed_fields
-- `sku_deleted` — sku_code
-- `reference_image_uploaded` — sku_code, image_id
-- `reference_image_deleted` — sku_code, image_id
-
-### Auth (`routers/auth.py`)
-- `user_login` — username, success (true/false)
-- `user_created` — username, role
-- `user_deleted` — username
-
-### Vision (`routers/vision.py`)
-- `vision_identify` — matched_sku_code, confidence (or null), vision_description, top-N candidates with similarity scores
-
-## Step 5: Add Startup/Shutdown Hooks
-
-**File**: `backend/app/main.py`
-
-- On startup: initialize the Kafka producer (call `events.init_producer()`)
-- On shutdown: flush and close the producer (call `events.shutdown_producer()`)
-
-## Step 6: Add `KAFKA_BOOTSTRAP_SERVERS` to Deployment Config
-
-**Files**: `docker-compose.yml` (backend env), `.env.example`, `deploy/cloud-init.yaml`
+New class `TestPasswordChange`:
+- `test_admin_resets_user_password` — reset works, user can login with new password
+- `test_admin_resets_own_password` — admin can reset their own
+- `test_non_admin_cannot_reset_others` — merchant/courier get 403
+- `test_user_changes_own_password` — correct current password → success
+- `test_wrong_current_password_rejected` — returns 400
+- `test_weak_password_rejected` — returns 422 (ties into point 7)
 
 ---
 
-## Event Schema Example
+## 4. Refresh Token Rotation
 
-```json
-{
-  "event_id": "a1b2c3d4-...",
-  "event_type": "pick_validated",
-  "timestamp_ms": 1709568000000,
-  "user_id": 3,
-  "username": "courier1",
-  "resource_type": "pick",
-  "resource_id": 42,
-  "details": {
-    "order_line_id": 42,
-    "expected_sku_code": "WIN-001",
-    "matched_sku_code": "WIN-003",
-    "confidence": 0.87,
-    "correct": false
-  }
-}
-```
+### Backend
 
-## Accessing Logs
+**Auth** (`auth.py`):
+- Add in-memory token blocklist: `_revoked_refresh_tokens: dict[str, float]` mapping `jti → expiry`
+  - Prune expired entries periodically (on each check) to prevent memory growth
+- Modify `create_refresh_token()`: add `jti` (UUID4) claim to JWT payload
+- Modify `decode_refresh_token()`: check `jti` not in revoked set; return `(user_id, jti, exp)` tuple
+- Add `revoke_refresh_token(jti: str, exp: float)`: add to revoked dict
 
-Pinot's query console (port 9000) is **not exposed publicly**. Access it via SSH tunnel:
+**Router** (`routers/auth.py`):
+- Modify `POST /auth/refresh`:
+  1. Decode old refresh token → get `user_id`, `jti`, `exp`
+  2. Revoke the old token's `jti`
+  3. Issue new access token AND new refresh token
+  4. Return both in response
 
-```bash
-ssh -L 9000:localhost:9000 opc@<your-server-ip>
-```
+**Schema** (`schemas.py`):
+- Update `RefreshResponse` to include `refresh_token: str` field
 
-Then open `http://localhost:9000` in your browser to run SQL queries against `warehouse_events`.
+### Frontend
 
-No in-app dashboard — Pinot's built-in console is sufficient for now.
+**API** (`api.ts`):
+- Update `tryRefresh()`: read `refresh_token` from response and call `setRefreshToken()` to store the rotated token
+
+### Tests
+
+New class `TestTokenRotation`:
+- `test_refresh_returns_new_refresh_token` — response includes a new `refresh_token`
+- `test_old_refresh_token_rejected_after_use` — reusing old token returns 401
+- `test_new_refresh_token_works` — the rotated refresh token produces a valid access token
 
 ---
 
-## Files Changed (Summary)
+## 5. Server-side Logout (Token Revocation)
 
-| File | Change |
-|------|--------|
-| `docker-compose.yml` | Add kafka, pinot, pinot-init services |
-| `backend/requirements.txt` | Add `confluent-kafka` |
-| `backend/app/config.py` | Add `kafka_bootstrap_servers` setting |
-| `backend/app/services/matching.py` | Add `find_best_matches()` returning top-N candidates |
-| `backend/app/events.py` | **New** — Kafka producer + `publish_event()` |
-| `backend/app/main.py` | Init/shutdown Kafka producer |
-| `backend/app/routers/orders.py` | Add event publishing (3 events) |
-| `backend/app/routers/picks.py` | Add event publishing (1 event) |
-| `backend/app/routers/receiving.py` | Add event publishing (2 events) |
-| `backend/app/routers/skus.py` | Add event publishing (4 events) |
-| `backend/app/routers/auth.py` | Add event publishing (3 events) |
-| `backend/app/routers/vision.py` | Add event publishing (1 event) |
-| `pinot/schema.json` | **New** — Pinot table schema |
-| `pinot/table.json` | **New** — Pinot realtime table config |
-| `pinot/init.sh` | **New** — One-shot Pinot table creation |
-| `.env.example` | Add `KAFKA_BOOTSTRAP_SERVERS` |
+### Backend
+
+**Schema** (`schemas.py`):
+- Add `LogoutRequest(BaseModel)`: `refresh_token: str`
+
+**Router** (`routers/auth.py`):
+- Add `POST /auth/logout`:
+  - Dependency: `get_current_user`
+  - Accept `refresh_token` in request body
+  - Decode and revoke the refresh token's `jti` (reuses blocklist from point 4)
+  - Publish `user_logout` audit event
+  - Return 204
+
+### Frontend
+
+**Auth** (`auth.tsx`):
+- Update `logout()`: call `api.logout(refreshToken)` before clearing localStorage
+- Gracefully handle failure (still clear local state regardless)
+
+**API** (`api.ts`):
+- Add `logout(refreshToken: string)` method
+
+### Tests
+
+New class `TestLogout`:
+- `test_logout_revokes_refresh_token` — after logout, the refresh token is rejected
+- `test_logout_requires_auth` — unauthenticated request returns 401
+
+---
+
+## 6. Redis-backed Rate Limiting
+
+### Backend
+
+**Config** (`config.py`):
+- Add `redis_url: str = ""` setting (empty = fall back to in-memory)
+
+**Auth** (`auth.py`):
+- Define `RateLimiter` ABC with methods: `check(key)`, `record_failure(key)`, `clear(key)`
+- `InMemoryRateLimiter` — refactor current `_failed_attempts` dict into this class
+- `RedisRateLimiter` — uses Redis INCR + EXPIRE:
+  - Key pattern: `rate_limit:{key}`
+  - INCR key, set EXPIRE to lockout window on first increment
+  - If count > MAX_LOGIN_ATTEMPTS → raise 429
+  - On success → DEL key
+- Factory: `get_rate_limiter()` → returns Redis if `redis_url` configured, else in-memory
+- Module-level singleton so the limiter is created once
+
+**Dependencies**: Add `redis` to `requirements.txt` (optional — only imported if `redis_url` is set)
+
+### Tests
+
+- Existing rate-limit tests continue working (in-memory limiter)
+- Add `TestRedisRateLimiter` with `@pytest.mark.skipif(not redis_available)` guard
+
+---
+
+## 7. Password Strength Validation
+
+### Backend
+
+**New function in `auth.py`**: `validate_password_strength(password: str) -> list[str]`
+- Rules:
+  - Minimum 8 characters
+  - At least 1 uppercase letter
+  - At least 1 lowercase letter
+  - At least 1 digit
+- Returns list of violation messages (empty = valid)
+
+**Schema** (`schemas.py`):
+- Add Pydantic `field_validator` on `password` / `new_password` fields in `UserCreate`, `AdminResetPassword`, `ChangeOwnPassword`
+- Call `validate_password_strength()` and raise `ValueError` if violations
+- Update `min_length` from 6 to 8
+
+### Frontend
+
+- Show password requirements below input fields: "Min. 8 tekens, 1 hoofdletter, 1 kleine letter, 1 cijfer"
+
+### Tests
+
+New class `TestPasswordPolicy`:
+- `test_short_password_rejected` — <8 chars → 422
+- `test_no_uppercase_rejected` — "abcdefg1" → 422
+- `test_no_lowercase_rejected` — "ABCDEFG1" → 422
+- `test_no_digit_rejected` — "Abcdefgh" → 422
+- `test_valid_password_accepted` — "Secret1x" → 201
+- Update existing `test_short_password_rejected` fixture to use 7-char password
+
+---
+
+## 10. Last-Admin Protection (Self-demotion Prevention Foundation)
+
+### Backend
+
+**Router** (`routers/auth.py`):
+- In `DELETE /auth/users/{user_id}`, before deleting, check:
+  - If target user is admin → count active admins in DB
+  - If count == 1 → return 400 "Cannot delete the last admin account"
+- This prevents accidentally locking out the entire system
+
+### Tests
+
+Add to `TestDeleteUser`:
+- `test_cannot_delete_last_admin` — single admin exists, another admin tries to delete via a second admin (or self-delete check already exists). Create scenario: admin1 tries to delete admin2 who is the only *other* admin — succeeds. But if admin2 is the last admin — blocked.
+- `test_can_delete_non_last_admin` — 2 admins exist, deleting one succeeds
+
+---
+
+## File Change Summary
+
+| File | Changes |
+|------|---------|
+| `backend/app/schemas.py` | Add `AdminResetPassword`, `ChangeOwnPassword`, `LogoutRequest`; update `RefreshResponse`; add password validators; bump min_length to 8 |
+| `backend/app/auth.py` | Add `validate_password_strength()`, `RateLimiter` ABC + implementations, refresh token `jti` + blocklist, `revoke_refresh_token()` |
+| `backend/app/config.py` | Add `redis_url` setting |
+| `backend/app/routers/auth.py` | Add `PUT /users/{id}/password`, `PUT /me/password`, `POST /logout`; modify `POST /refresh` for rotation; add last-admin guard on delete |
+| `backend/requirements.txt` | Add `redis` (optional dependency) |
+| `backend/tests/test_auth.py` | Add `TestPasswordChange`, `TestTokenRotation`, `TestLogout`, `TestPasswordPolicy`, last-admin tests |
+| `frontend/src/lib/api.ts` | Add `resetUserPassword`, `changeMyPassword`, `logout`; update `tryRefresh` |
+| `frontend/src/components/accounts.tsx` | Add reset-password dialog; show password requirements |
+| `frontend/src/lib/auth.tsx` | Update `logout()` to call server-side endpoint |
+
+## Implementation Order
+
+1. **Password strength validation** (point 7) — foundation used by all password endpoints
+2. **Password change endpoints** (point 1) — depends on point 7
+3. **Refresh token rotation** (point 4) — adds `jti` + blocklist infrastructure
+4. **Server-side logout** (point 5) — reuses blocklist from point 4
+5. **Last-admin guard** (point 10) — small, independent change
+6. **Redis rate limiting** (point 6) — independent, can be done last
+7. **Frontend updates** — after all backend endpoints are stable
+8. **Tests** — written alongside each backend change
