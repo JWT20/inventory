@@ -55,6 +55,19 @@ def shutdown_langfuse():
     logger.info("Langfuse client shut down")
 
 
+def get_prompt(name: str, *, fallback: str) -> str:
+    """Fetch a managed prompt from Langfuse, falling back to hardcoded default."""
+    client = get_langfuse()
+    if client is None:
+        return fallback
+    try:
+        prompt = client.get_prompt(name)
+        return prompt.compile()
+    except Exception:
+        logger.warning("Failed to fetch Langfuse prompt '%s', using fallback", name)
+        return fallback
+
+
 def score_trace(trace_id: str, name: str, value: float, comment: str | None = None):
     """Record a score on a Langfuse trace. No-op if Langfuse is disabled."""
     client = get_langfuse()
