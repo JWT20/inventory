@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Trash2 } from "lucide-react";
+import { Trash2, KeyRound } from "lucide-react";
 
 interface User {
   id: number;
@@ -33,6 +33,7 @@ export function AccountsPage() {
   const { user: me } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [showNew, setShowNew] = useState(false);
+  const [resetUser, setResetUser] = useState<User | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -82,15 +83,25 @@ export function AccountsPage() {
                   </Badge>
                 </div>
               </div>
-              {u.id !== me?.id && (
+              <div className="flex gap-1">
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => handleDelete(u)}
+                  onClick={() => setResetUser(u)}
+                  title="Wachtwoord resetten"
                 >
-                  <Trash2 className="h-4 w-4 text-destructive" />
+                  <KeyRound className="h-4 w-4" />
                 </Button>
-              )}
+                {u.id !== me?.id && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleDelete(u)}
+                  >
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                )}
+              </div>
             </div>
           </Card>
         ))}
@@ -100,6 +111,11 @@ export function AccountsPage() {
         open={showNew}
         onClose={() => setShowNew(false)}
         onCreated={load}
+      />
+
+      <ResetPasswordDialog
+        user={resetUser}
+        onClose={() => setResetUser(null)}
       />
     </>
   );
@@ -161,9 +177,12 @@ function NewUserDialog({
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              minLength={6}
+              minLength={8}
               required
             />
+            <p className="text-xs text-muted-foreground">
+              Min. 8 tekens, 1 hoofdletter, 1 kleine letter, 1 cijfer
+            </p>
           </div>
           <div className="space-y-2">
             <Label>Rol</Label>
@@ -179,6 +198,61 @@ function NewUserDialog({
           </div>
           <Button type="submit" className="w-full">
             Aanmaken
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ResetPasswordDialog({
+  user,
+  onClose,
+}: {
+  user: User | null;
+  onClose: () => void;
+}) {
+  const [password, setPassword] = useState("");
+
+  useEffect(() => {
+    if (user) setPassword("");
+  }, [user]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!user) return;
+    try {
+      await api.resetUserPassword(user.id, password);
+      toast.success(`Wachtwoord voor '${user.username}' gewijzigd`);
+      onClose();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Fout");
+    }
+  }
+
+  return (
+    <Dialog open={!!user} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Wachtwoord resetten: {user?.username}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-4">
+          <div className="space-y-2">
+            <Label>Nieuw wachtwoord</Label>
+            <Input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              minLength={8}
+              required
+              autoFocus
+            />
+            <p className="text-xs text-muted-foreground">
+              Min. 8 tekens, 1 hoofdletter, 1 kleine letter, 1 cijfer
+            </p>
+          </div>
+          <Button type="submit" className="w-full">
+            Wachtwoord opslaan
           </Button>
         </form>
       </DialogContent>

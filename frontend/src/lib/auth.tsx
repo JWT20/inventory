@@ -46,6 +46,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   function logout() {
+    const rt = localStorage.getItem("refresh_token");
+    if (rt) {
+      api.logout(rt).catch(() => {}); // best-effort server-side revocation
+    }
     clearToken();
     setUser(null);
   }

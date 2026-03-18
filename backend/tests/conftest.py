@@ -30,7 +30,7 @@ def _compile_vector_sqlite(type_, compiler, **kw):
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.auth import create_token, hash_password, _failed_attempts  # noqa: E402
+from app.auth import create_token, hash_password, _failed_attempts, _revoked_tokens  # noqa: E402
 from app.database import Base, get_db, get_async_session  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import SKU, User  # noqa: E402
@@ -90,6 +90,7 @@ def _setup_db():
     yield
     Base.metadata.drop_all(bind=engine)
     _failed_attempts.clear()
+    _revoked_tokens.clear()
 
 
 @pytest.fixture
