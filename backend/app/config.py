@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     langfuse_secret_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"
 
+    # Redis (optional — used for rate limiting; empty = in-memory fallback)
+    redis_url: str = ""
+
     # Auth
     admin_password: str = _INSECURE_DEFAULT
     access_token_expire_minutes: int = 30

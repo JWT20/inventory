@@ -4,7 +4,7 @@ from typing import Literal
 
 import unicodedata
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # --- Auth ---
@@ -27,13 +27,50 @@ class RefreshRequest(BaseModel):
 
 class RefreshResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: str
+
+
+def _validate_password(password: str) -> str:
+    from app.auth import validate_password_strength
+    errors = validate_password_strength(password)
+    if errors:
+        raise ValueError("; ".join(errors))
+    return password
 
 
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=100)
-    password: str = Field(..., min_length=6, max_length=128)
+    password: str = Field(..., min_length=8, max_length=128)
     role: Literal["admin", "merchant", "courier"] = "courier"
+
+    @field_validator("password")
+    @classmethod
+    def check_password_strength(cls, v: str) -> str:
+        return _validate_password(v)
+
+
+class AdminResetPassword(BaseModel):
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def check_password_strength(cls, v: str) -> str:
+        return _validate_password(v)
+
+
+class ChangeOwnPassword(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def check_password_strength(cls, v: str) -> str:
+        return _validate_password(v)
 
 
 class UserResponse(BaseModel):

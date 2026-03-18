@@ -43,6 +43,9 @@ async function tryRefresh(): Promise<string | null> {
       }
       const data = await resp.json();
       setToken(data.access_token);
+      if (data.refresh_token) {
+        setRefreshToken(data.refresh_token);
+      }
       return data.access_token as string;
     } catch {
       clearToken();
@@ -142,6 +145,12 @@ export const api = {
   createUser: (data: { username: string; password: string; role: string }) =>
     json("/auth/users", "POST", data),
   deleteUser: (id: number) => request(`/auth/users/${id}`, { method: "DELETE" }),
+  resetUserPassword: (userId: number, newPassword: string) =>
+    json(`/auth/users/${userId}/password`, "PUT", { new_password: newPassword }),
+  changeMyPassword: (currentPassword: string, newPassword: string) =>
+    json("/auth/me/password", "PUT", { current_password: currentPassword, new_password: newPassword }),
+  logout: (refreshToken: string) =>
+    json("/auth/logout", "POST", { refresh_token: refreshToken }),
 
   // SKUs
   listSKUs: (activeOnly = false) =>

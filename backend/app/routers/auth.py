@@ -21,12 +21,17 @@ from app.auth import (
     get_current_user,
     hash_password,
     require_admin,
+    revoke_refresh_token,
+    verify_password,
 )
 from app.database import get_db
 from app.events import publish_event
 from app.models import User
 from app.schemas import (
+    AdminResetPassword,
+    ChangeOwnPassword,
     LoginRequest,
+    LogoutRequest,
     RefreshRequest,
     RefreshResponse,
     TokenResponse,
@@ -94,13 +99,16 @@ async def login(
 
 @router.post("/refresh", response_model=RefreshResponse)
 async def refresh_token(body: RefreshRequest, db: Session = Depends(get_db)):
-    """Exchange a valid refresh token for a new access token."""
-    user_id = decode_refresh_token(body.refresh_token)
+    """Exchange a valid refresh token for new access + refresh tokens (rotation)."""
+    user_id, jti, exp = decode_refresh_token(body.refresh_token)
     user = db.get(User, user_id)
     if not user or not user.is_active:
         raise HTTPException(401, "User not found or inactive")
+    # Revoke the old refresh token
+    revoke_refresh_token(jti, exp)
     access_token = await create_access_token_for_user(user)
-    return RefreshResponse(access_token=access_token)
+    new_refresh_token = create_refresh_token(user.id)
+    return RefreshResponse(access_token=access_token, refresh_token=new_refresh_token)
 
 
 @router.get("/me", response_model=UserResponse)
@@ -155,6 +163,13 @@ def delete_user(
         raise HTTPException(404, "User not found")
     if user.id == admin.id:
         raise HTTPException(400, "Cannot delete yourself")
+    # Prevent deleting the last admin
+    if user.role == "admin":
+        admin_count = db.query(User).filter(
+            User.role == "admin", User.is_active == True  # noqa: E712
+        ).count()
+        if admin_count <= 1:
+            raise HTTPException(400, "Cannot delete the last admin account")
     username = user.username
     db.delete(user)
     db.commit()
@@ -165,4 +180,72 @@ def delete_user(
         user=admin,
         resource_type="user",
         resource_id=user_id,
+    )
+
+
+# --- Password management ---
+
+@router.put("/users/{user_id}/password", status_code=204)
+def admin_reset_password(
+    user_id: int,
+    data: AdminResetPassword,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Admin resets any user's password."""
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    user.hashed_password = hash_password(data.new_password)
+    db.commit()
+    logger.info("Admin '%s' reset password for '%s'", admin.username, user.username)
+    publish_event(
+        "password_reset",
+        details={"target_username": user.username},
+        user=admin,
+        resource_type="user",
+        resource_id=user.id,
+    )
+
+
+@router.put("/me/password", status_code=204)
+def change_own_password(
+    data: ChangeOwnPassword,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Authenticated user changes their own password."""
+    if not verify_password(data.current_password, user.hashed_password):
+        raise HTTPException(400, "Current password is incorrect")
+    user.hashed_password = hash_password(data.new_password)
+    db.commit()
+    logger.info("User '%s' changed their password", user.username)
+    publish_event(
+        "password_changed",
+        details={"username": user.username},
+        user=user,
+        resource_type="user",
+        resource_id=user.id,
+    )
+
+
+# --- Logout ---
+
+@router.post("/logout", status_code=204)
+def logout(
+    data: LogoutRequest,
+    user: User = Depends(get_current_user),
+):
+    """Revoke the refresh token server-side."""
+    try:
+        _user_id, jti, exp = decode_refresh_token(data.refresh_token)
+        revoke_refresh_token(jti, exp)
+    except HTTPException:
+        pass  # Token already invalid/expired — still clear client-side
+    logger.info("User '%s' logged out", user.username)
+    publish_event(
+        "user_logout",
+        details={"username": user.username},
+        user=user,
+        resource_type="auth",
     )
