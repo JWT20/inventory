@@ -63,7 +63,7 @@ async def identify_box(
             # Enrich Langfuse trace for LLM-as-a-judge evaluation
             try:
                 langfuse = get_langfuse_client()
-                langfuse.update_current_observation(
+                langfuse.update_current_trace(
                     metadata={
                         "vision_description": description,
                         "is_package": False,
@@ -112,7 +112,7 @@ async def identify_box(
         # Enrich Langfuse trace for LLM-as-a-judge evaluation
         try:
             langfuse = get_langfuse_client()
-            langfuse.update_current_observation(
+            langfuse.update_current_trace(
                 metadata={
                     "vision_description": description,
                     "is_package": True,

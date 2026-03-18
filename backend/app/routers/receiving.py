@@ -116,7 +116,7 @@ async def identify_box(
             # Enrich Langfuse trace for LLM-as-a-judge evaluation
             try:
                 langfuse = get_langfuse_client()
-                langfuse.update_current_observation(
+                langfuse.update_current_trace(
                     metadata={
                         "vision_description": description,
                         "is_package": False,
@@ -174,7 +174,7 @@ async def identify_box(
         # Enrich Langfuse trace for LLM-as-a-judge evaluation
         try:
             langfuse = get_langfuse_client()
-            langfuse.update_current_observation(
+            langfuse.update_current_trace(
                 metadata={
                     "vision_description": description,
                     "is_package": True,
@@ -257,7 +257,7 @@ async def book_box(
             # Enrich Langfuse trace for LLM-as-a-judge evaluation
             try:
                 langfuse = get_langfuse_client()
-                langfuse.update_current_observation(
+                langfuse.update_current_trace(
                     metadata={
                         "vision_description": description,
                         "is_package": False,
@@ -309,7 +309,7 @@ async def book_box(
         # Enrich Langfuse trace for LLM-as-a-judge evaluation
         try:
             langfuse = get_langfuse_client()
-            langfuse.update_current_observation(
+            langfuse.update_current_trace(
                 metadata={
                     "vision_description": description,
                     "is_package": True,
@@ -539,7 +539,7 @@ def confirm_booking(
     # Enrich Langfuse trace for LLM-as-a-judge evaluation
     langfuse = get_langfuse_client()
     try:
-        langfuse.update_current_observation(
+        langfuse.update_current_trace(
             metadata={
                 "is_package": True,
                 "matched_sku_code": sku.sku_code,
