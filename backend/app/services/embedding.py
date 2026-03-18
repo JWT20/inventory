@@ -227,8 +227,7 @@ def classify_image(image_bytes: bytes) -> tuple[bool, str]:
     resize_ms = (time.perf_counter() - t0) * 1000
     logger.info("[TIMING] image_resize=%.0fms", resize_ms)
 
-    prompt = get_prompt("classify", fallback=CLASSIFY_PROMPT)
-    raw_text = _call_vision(image, prompt)
+    raw_text = _call_vision(image, CLASSIFY_PROMPT)
     logger.info("Classification raw response: %s", raw_text[:120])
 
     is_package, summary = parse_classify_response(raw_text)

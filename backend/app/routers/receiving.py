@@ -216,11 +216,6 @@ async def book_box(
                 user=user,
                 resource_type="booking",
             )
-            # Record rejection in Langfuse for evaluation
-            langfuse = get_langfuse_client()
-            trace_id = langfuse.get_current_trace_id()
-            if trace_id:
-                score_trace(trace_id, "outcome", 0.0, comment="rejected: not_a_package")
             raise HTTPException(
                 422,
                 "Dit is geen doos of verpakking — scan een productdoos",
@@ -238,24 +233,13 @@ async def book_box(
         if matched_sku is None:
             # Check if the box matches a SKU outside this order
             all_candidates = find_best_matches(db, embedding, top_n=1)
-            langfuse = get_langfuse_client()
-            trace_id = langfuse.get_current_trace_id()
             if all_candidates and all_candidates[0][1] >= settings.match_threshold:
                 wrong_sku = all_candidates[0][0]
-                if trace_id:
-                    score_trace(trace_id, "match_confidence", all_candidates[0][1])
-                    score_trace(trace_id, "outcome", 0.0, comment=f"wrong_order: matched SKU {wrong_sku.sku_code} not in order")
-                    score_trace(trace_id, "description_quality", {"high": 1.0, "medium": 0.5, "low": 0.0}[assess_description_quality(description)])
                 raise HTTPException(
                     409,
                     f"Deze doos lijkt op SKU {wrong_sku.sku_code} ({wrong_sku.name}), "
                     f"maar die zit niet in deze order",
                 )
-            if trace_id:
-                best_sim = all_candidates[0][1] if all_candidates else 0.0
-                score_trace(trace_id, "match_confidence", best_sim)
-                score_trace(trace_id, "outcome", 0.0, comment="no_match")
-                score_trace(trace_id, "description_quality", {"high": 1.0, "medium": 0.5, "low": 0.0}[assess_description_quality(description)])
             raise HTTPException(
                 404,
                 "Doos niet herkend — geen match gevonden met SKUs in deze order",
@@ -283,13 +267,6 @@ async def book_box(
                 "user_id": user.id,
             }
             token = _signer.dumps(token_data)
-            # Record that this needed human confirmation
-            langfuse = get_langfuse_client()
-            trace_id = langfuse.get_current_trace_id()
-            if trace_id:
-                score_trace(trace_id, "match_confidence", confidence)
-                score_trace(trace_id, "outcome", 0.5, comment=f"needs_confirmation: {', '.join(reason)}")
-                score_trace(trace_id, "description_quality", {"high": 1.0, "medium": 0.5, "low": 0.0}[quality])
             return BookingConfirmation(
                 confirmation_token=token,
                 sku_code=matched_sku.sku_code,
@@ -369,8 +346,6 @@ async def book_box(
         if trace_id:
             score_trace(trace_id, "match_confidence", confidence)
             score_trace(trace_id, "match_accepted", 1.0, comment="auto-accepted (high confidence)")
-            score_trace(trace_id, "outcome", 1.0, comment="auto-accepted")
-            score_trace(trace_id, "description_quality", {"high": 1.0, "medium": 0.5, "low": 0.0}[quality])
 
         return BookingResponse(
             id=booking.id,
@@ -466,7 +441,6 @@ def confirm_booking(
     if trace_id:
         score_trace(trace_id, "match_confidence", data.get("confidence", 0.0))
         score_trace(trace_id, "match_accepted", 1.0, comment="human-confirmed")
-        score_trace(trace_id, "outcome", 1.0, comment="human-confirmed")
 
     return BookingResponse(
         id=booking.id,
