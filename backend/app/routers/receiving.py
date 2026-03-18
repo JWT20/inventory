@@ -15,7 +15,10 @@ from app.events import publish_event
 from app.models import SKU, Booking, Order, OrderLine, ReferenceImage, User
 from app.routers.skus import _sku_to_response
 from app.schemas import BookingConfirmation, BookingResponse, ConfirmBookingRequest, MatchResult, SKUResponse
+from langfuse import observe, propagate_attributes, get_client as get_langfuse_client
+
 from app.services.embedding import assess_description_quality, process_image
+from app.services.langfuse_client import score_trace
 from app.services.matching import find_best_matches
 
 logger = logging.getLogger(__name__)
@@ -53,6 +56,7 @@ router = APIRouter(
 
 
 @router.post("/identify", response_model=MatchResult | None)
+@observe()
 async def identify_box(
     file: UploadFile,
     db: Session = Depends(get_db),
@@ -62,95 +66,100 @@ async def identify_box(
 
     Returns the matched SKU, or null if no match found.
     """
-    t_start = time.perf_counter()
+    with propagate_attributes(
+        user_id=str(user.id),
+        metadata={"endpoint": "/api/receiving/identify", "username": user.username},
+    ):
+        t_start = time.perf_counter()
 
-    image_bytes = _read_image(file)
-    t_read = time.perf_counter()
+        image_bytes = _read_image(file)
+        t_read = time.perf_counter()
 
-    # Save scan image for later reference
-    scan_dir = os.path.join(settings.upload_dir, "scans")
-    os.makedirs(scan_dir, exist_ok=True)
-    filename = f"{uuid.uuid4().hex}.jpg"
-    scan_path = os.path.join(scan_dir, filename)
-    with open(scan_path, "wb") as f:
-        f.write(image_bytes)
-    t_save = time.perf_counter()
+        # Save scan image for later reference
+        scan_dir = os.path.join(settings.upload_dir, "scans")
+        os.makedirs(scan_dir, exist_ok=True)
+        filename = f"{uuid.uuid4().hex}.jpg"
+        scan_path = os.path.join(scan_dir, filename)
+        with open(scan_path, "wb") as f:
+            f.write(image_bytes)
+        t_save = time.perf_counter()
 
-    try:
-        description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
-    except Exception:
-        logger.exception("Vision processing failed during identify")
-        raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
-    t_process = time.perf_counter()
+        try:
+            description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
+        except Exception:
+            logger.exception("Vision processing failed during identify")
+            raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
+        t_process = time.perf_counter()
 
-    if not is_package:
+        if not is_package:
+            logger.info(
+                "[TIMING] identify total=%.0fms (rejected: not a package) | read=%.0fms save=%.0fms process_image=%.0fms",
+                (t_process - t_start) * 1000,
+                (t_read - t_start) * 1000,
+                (t_save - t_read) * 1000,
+                (t_process - t_save) * 1000,
+            )
+            publish_event(
+                "box_identified",
+                details={
+                    "matched_sku_code": None,
+                    "confidence": None,
+                    "vision_description": description,
+                    "candidates": [],
+                    "threshold": settings.match_threshold,
+                    "rejected": True,
+                    "rejection_reason": "not_a_package",
+                },
+                user=user,
+                resource_type="receiving",
+            )
+            return None
+
+        candidates = find_best_matches(db, embedding, top_n=5)
+        t_match = time.perf_counter()
+
+        matched_sku, confidence = None, 0.0
+        if candidates and candidates[0][1] >= settings.match_threshold:
+            matched_sku, confidence = candidates[0][0], candidates[0][1]
+
         logger.info(
-            "[TIMING] identify total=%.0fms (rejected: not a package) | read=%.0fms save=%.0fms process_image=%.0fms",
-            (t_process - t_start) * 1000,
+            "[TIMING] identify total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms",
+            (t_match - t_start) * 1000,
             (t_read - t_start) * 1000,
             (t_save - t_read) * 1000,
             (t_process - t_save) * 1000,
+            (t_match - t_process) * 1000,
         )
+
         publish_event(
             "box_identified",
             details={
-                "matched_sku_code": None,
-                "confidence": None,
+                "matched_sku_code": matched_sku.sku_code if matched_sku else None,
+                "confidence": round(confidence, 4) if matched_sku else None,
                 "vision_description": description,
-                "candidates": [],
+                "candidates": [
+                    {"sku_code": s.sku_code, "sku_name": s.name, "similarity": round(sim, 4)}
+                    for s, sim, _img_path in candidates
+                ],
                 "threshold": settings.match_threshold,
-                "rejected": True,
-                "rejection_reason": "not_a_package",
             },
             user=user,
             resource_type="receiving",
         )
-        return None
 
-    candidates = find_best_matches(db, embedding, top_n=5)
-    t_match = time.perf_counter()
+        if matched_sku is None:
+            return None
 
-    matched_sku, confidence = None, 0.0
-    if candidates and candidates[0][1] >= settings.match_threshold:
-        matched_sku, confidence = candidates[0][0], candidates[0][1]
-
-    logger.info(
-        "[TIMING] identify total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms",
-        (t_match - t_start) * 1000,
-        (t_read - t_start) * 1000,
-        (t_save - t_read) * 1000,
-        (t_process - t_save) * 1000,
-        (t_match - t_process) * 1000,
-    )
-
-    publish_event(
-        "box_identified",
-        details={
-            "matched_sku_code": matched_sku.sku_code if matched_sku else None,
-            "confidence": round(confidence, 4) if matched_sku else None,
-            "vision_description": description,
-            "candidates": [
-                {"sku_code": s.sku_code, "sku_name": s.name, "similarity": round(sim, 4)}
-                for s, sim, _img_path in candidates
-            ],
-            "threshold": settings.match_threshold,
-        },
-        user=user,
-        resource_type="receiving",
-    )
-
-    if matched_sku is None:
-        return None
-
-    return MatchResult(
-        sku_id=matched_sku.id,
-        sku_code=matched_sku.sku_code,
-        sku_name=matched_sku.name,
-        confidence=confidence,
-    )
+        return MatchResult(
+            sku_id=matched_sku.id,
+            sku_code=matched_sku.sku_code,
+            sku_name=matched_sku.name,
+            confidence=confidence,
+        )
 
 
 @router.post("/book", response_model=BookingResponse | BookingConfirmation)
+@observe()
 async def book_box(
     file: UploadFile,
     order_id: int = Form(...),
@@ -162,183 +171,196 @@ async def book_box(
     Scans the box, identifies the SKU, finds the matching order line,
     and creates a booking. Returns the rolcontainer assignment.
     """
-    t_start = time.perf_counter()
+    with propagate_attributes(
+        user_id=str(user.id),
+        session_id=str(order_id),
+        metadata={"endpoint": "/api/receiving/book", "username": user.username},
+    ):
+        t_start = time.perf_counter()
 
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(404, "Order niet gevonden")
-    if order.status != "active":
-        raise HTTPException(400, f"Order is niet actief (status: {order.status})")
+        order = db.get(Order, order_id)
+        if not order:
+            raise HTTPException(404, "Order niet gevonden")
+        if order.status != "active":
+            raise HTTPException(400, f"Order is niet actief (status: {order.status})")
 
-    image_bytes = _read_image(file)
-    t_read = time.perf_counter()
+        image_bytes = _read_image(file)
+        t_read = time.perf_counter()
 
-    # Save scan image
-    scan_dir = os.path.join(settings.upload_dir, "scans")
-    os.makedirs(scan_dir, exist_ok=True)
-    filename = f"{uuid.uuid4().hex}.jpg"
-    scan_path = os.path.join(scan_dir, filename)
-    with open(scan_path, "wb") as f:
-        f.write(image_bytes)
-    t_save = time.perf_counter()
+        # Save scan image
+        scan_dir = os.path.join(settings.upload_dir, "scans")
+        os.makedirs(scan_dir, exist_ok=True)
+        filename = f"{uuid.uuid4().hex}.jpg"
+        scan_path = os.path.join(scan_dir, filename)
+        with open(scan_path, "wb") as f:
+            f.write(image_bytes)
+        t_save = time.perf_counter()
 
-    # Vision: classify + describe + embed
-    try:
-        description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
-    except Exception:
-        logger.exception("Vision processing failed during booking")
-        raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
-    t_process = time.perf_counter()
+        # Vision: classify + describe + embed
+        try:
+            description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
+        except Exception:
+            logger.exception("Vision processing failed during booking")
+            raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
+        t_process = time.perf_counter()
 
-    if not is_package:
+        if not is_package:
+            publish_event(
+                "box_booked",
+                details={
+                    "order_reference": order.reference,
+                    "rejected": True,
+                    "rejection_reason": "not_a_package",
+                    "vision_description": description,
+                },
+                user=user,
+                resource_type="booking",
+            )
+            raise HTTPException(
+                422,
+                "Dit is geen doos of verpakking — scan een productdoos",
+            )
+
+        # Only match against SKUs in this order
+        order_sku_ids = [line.sku_id for line in order.lines]
+        candidates = find_best_matches(db, embedding, top_n=5, sku_ids=order_sku_ids)
+        t_match = time.perf_counter()
+
+        matched_sku, confidence, matched_image_path = None, 0.0, None
+        if candidates and candidates[0][1] >= settings.match_threshold:
+            matched_sku, confidence, matched_image_path = candidates[0]
+
+        if matched_sku is None:
+            # Check if the box matches a SKU outside this order
+            all_candidates = find_best_matches(db, embedding, top_n=1)
+            if all_candidates and all_candidates[0][1] >= settings.match_threshold:
+                wrong_sku = all_candidates[0][0]
+                raise HTTPException(
+                    409,
+                    f"Deze doos lijkt op SKU {wrong_sku.sku_code} ({wrong_sku.name}), "
+                    f"maar die zit niet in deze order",
+                )
+            raise HTTPException(
+                404,
+                "Doos niet herkend — geen match gevonden met SKUs in deze order",
+            )
+
+        # Gate: require human confirmation if description quality is low OR confidence is low
+        CONFIRM_THRESHOLD = 0.84
+        quality = assess_description_quality(description)
+        needs_confirmation = quality == "low" or confidence < CONFIRM_THRESHOLD
+        if needs_confirmation:
+            reason = []
+            if quality == "low":
+                reason.append("low-quality description")
+            if confidence < CONFIRM_THRESHOLD:
+                reason.append(f"low confidence ({confidence:.2f} < {CONFIRM_THRESHOLD})")
+            logger.info(
+                "SKU %s flagged for confirmation: %s",
+                matched_sku.sku_code, ", ".join(reason),
+            )
+            token_data = {
+                "order_id": order_id,
+                "sku_id": matched_sku.id,
+                "confidence": round(confidence, 4),
+                "scan_image_path": scan_path,
+                "user_id": user.id,
+            }
+            token = _signer.dumps(token_data)
+            return BookingConfirmation(
+                confirmation_token=token,
+                sku_code=matched_sku.sku_code,
+                sku_name=matched_sku.name,
+                confidence=confidence,
+                scan_image_url=_scan_url(scan_path),
+                reference_image_url=_reference_image_url(matched_image_path),
+            )
+
+        # Find matching order line with remaining quantity
+        order_line = (
+            db.query(OrderLine)
+            .filter(
+                OrderLine.order_id == order_id,
+                OrderLine.sku_id == matched_sku.id,
+                OrderLine.booked_count < OrderLine.quantity,
+            )
+            .first()
+        )
+        if not order_line:
+            raise HTTPException(
+                400,
+                f"SKU {matched_sku.sku_code} is al volledig geboekt in deze order",
+            )
+
+        # Create booking
+        booking = Booking(
+            order_id=order_id,
+            order_line_id=order_line.id,
+            sku_id=matched_sku.id,
+            scanned_by=user.id,
+            scan_image_path=scan_path,
+            confidence=confidence,
+        )
+        db.add(booking)
+        order_line.booked_count += 1
+        db.flush()
+
+        # Check if order is fully booked
+        all_booked = all(l.booked_count >= l.quantity for l in order.lines)
+        if all_booked:
+            order.status = "completed"
+
+        db.commit()
+        t_booking = time.perf_counter()
+
+        rolcontainer = f"KLANT {order_line.customer_name.upper()}"
+
+        logger.info(
+            "[TIMING] book total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms booking=%.0fms",
+            (t_booking - t_start) * 1000,
+            (t_read - t_start) * 1000,
+            (t_save - t_read) * 1000,
+            (t_process - t_save) * 1000,
+            (t_match - t_process) * 1000,
+            (t_booking - t_match) * 1000,
+        )
+
         publish_event(
             "box_booked",
             details={
                 "order_reference": order.reference,
-                "rejected": True,
-                "rejection_reason": "not_a_package",
-                "vision_description": description,
+                "sku_code": matched_sku.sku_code,
+                "confidence": round(confidence, 4),
+                "rolcontainer": rolcontainer,
+                "klant": order_line.customer_name,
+                "order_completed": all_booked,
             },
             user=user,
             resource_type="booking",
-        )
-        raise HTTPException(
-            422,
-            "Dit is geen doos of verpakking — scan een productdoos",
+            resource_id=booking.id,
         )
 
-    # Only match against SKUs in this order
-    order_sku_ids = [line.sku_id for line in order.lines]
-    candidates = find_best_matches(db, embedding, top_n=5, sku_ids=order_sku_ids)
-    t_match = time.perf_counter()
+        # Record quality scores in Langfuse
+        langfuse = get_langfuse_client()
+        trace_id = langfuse.get_current_trace_id()
+        if trace_id:
+            score_trace(trace_id, "match_confidence", confidence)
+            score_trace(trace_id, "match_accepted", 1.0, comment="auto-accepted (high confidence)")
 
-    matched_sku, confidence, matched_image_path = None, 0.0, None
-    if candidates and candidates[0][1] >= settings.match_threshold:
-        matched_sku, confidence, matched_image_path = candidates[0]
-
-    if matched_sku is None:
-        # Check if the box matches a SKU outside this order
-        all_candidates = find_best_matches(db, embedding, top_n=1)
-        if all_candidates and all_candidates[0][1] >= settings.match_threshold:
-            wrong_sku = all_candidates[0][0]
-            raise HTTPException(
-                409,
-                f"Deze doos lijkt op SKU {wrong_sku.sku_code} ({wrong_sku.name}), "
-                f"maar die zit niet in deze order",
-            )
-        raise HTTPException(
-            404,
-            "Doos niet herkend — geen match gevonden met SKUs in deze order",
-        )
-
-    # Gate: require human confirmation if description quality is low OR confidence is low
-    CONFIRM_THRESHOLD = 0.84
-    quality = assess_description_quality(description)
-    needs_confirmation = quality == "low" or confidence < CONFIRM_THRESHOLD
-    if needs_confirmation:
-        reason = []
-        if quality == "low":
-            reason.append("low-quality description")
-        if confidence < CONFIRM_THRESHOLD:
-            reason.append(f"low confidence ({confidence:.2f} < {CONFIRM_THRESHOLD})")
-        logger.info(
-            "SKU %s flagged for confirmation: %s",
-            matched_sku.sku_code, ", ".join(reason),
-        )
-        token_data = {
-            "order_id": order_id,
-            "sku_id": matched_sku.id,
-            "confidence": round(confidence, 4),
-            "scan_image_path": scan_path,
-            "user_id": user.id,
-        }
-        token = _signer.dumps(token_data)
-        return BookingConfirmation(
-            confirmation_token=token,
+        return BookingResponse(
+            id=booking.id,
+            order_id=order.id,
+            order_reference=order.reference,
             sku_code=matched_sku.sku_code,
             sku_name=matched_sku.name,
-            confidence=confidence,
-            scan_image_url=_scan_url(scan_path),
-            reference_image_url=_reference_image_url(matched_image_path),
+            klant=order_line.customer_name,
+            rolcontainer=rolcontainer,
+            created_at=booking.created_at,
         )
-
-    # Find matching order line with remaining quantity
-    order_line = (
-        db.query(OrderLine)
-        .filter(
-            OrderLine.order_id == order_id,
-            OrderLine.sku_id == matched_sku.id,
-            OrderLine.booked_count < OrderLine.quantity,
-        )
-        .first()
-    )
-    if not order_line:
-        raise HTTPException(
-            400,
-            f"SKU {matched_sku.sku_code} is al volledig geboekt in deze order",
-        )
-
-    # Create booking
-    booking = Booking(
-        order_id=order_id,
-        order_line_id=order_line.id,
-        sku_id=matched_sku.id,
-        scanned_by=user.id,
-        scan_image_path=scan_path,
-        confidence=confidence,
-    )
-    db.add(booking)
-    order_line.booked_count += 1
-    db.flush()
-
-    # Check if order is fully booked
-    all_booked = all(l.booked_count >= l.quantity for l in order.lines)
-    if all_booked:
-        order.status = "completed"
-
-    db.commit()
-    t_booking = time.perf_counter()
-
-    rolcontainer = f"KLANT {order_line.customer_name.upper()}"
-
-    logger.info(
-        "[TIMING] book total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms booking=%.0fms",
-        (t_booking - t_start) * 1000,
-        (t_read - t_start) * 1000,
-        (t_save - t_read) * 1000,
-        (t_process - t_save) * 1000,
-        (t_match - t_process) * 1000,
-        (t_booking - t_match) * 1000,
-    )
-
-    publish_event(
-        "box_booked",
-        details={
-            "order_reference": order.reference,
-            "sku_code": matched_sku.sku_code,
-            "confidence": round(confidence, 4),
-            "rolcontainer": rolcontainer,
-            "klant": order_line.customer_name,
-            "order_completed": all_booked,
-        },
-        user=user,
-        resource_type="booking",
-        resource_id=booking.id,
-    )
-
-    return BookingResponse(
-        id=booking.id,
-        order_id=order.id,
-        order_reference=order.reference,
-        sku_code=matched_sku.sku_code,
-        sku_name=matched_sku.name,
-        klant=order_line.customer_name,
-        rolcontainer=rolcontainer,
-        created_at=booking.created_at,
-    )
 
 
 @router.post("/book/confirm", response_model=BookingResponse)
+@observe()
 def confirm_booking(
     body: ConfirmBookingRequest,
     db: Session = Depends(get_db),
@@ -413,6 +435,13 @@ def confirm_booking(
         resource_id=booking.id,
     )
 
+    # Record quality scores in Langfuse
+    langfuse = get_langfuse_client()
+    trace_id = langfuse.get_current_trace_id()
+    if trace_id:
+        score_trace(trace_id, "match_confidence", data.get("confidence", 0.0))
+        score_trace(trace_id, "match_accepted", 1.0, comment="human-confirmed")
+
     return BookingResponse(
         id=booking.id,
         order_id=order.id,
@@ -426,6 +455,7 @@ def confirm_booking(
 
 
 @router.post("/new-product", response_model=SKUResponse)
+@observe()
 async def create_product_inline(
     file: UploadFile,
     sku_code: str = Form(...),

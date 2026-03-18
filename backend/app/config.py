@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     # Kafka
     kafka_bootstrap_servers: str = ""
 
+    # Langfuse (LLM observability) — leave empty to disable
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
+
     # Auth
     admin_password: str = _INSECURE_DEFAULT
     access_token_expire_minutes: int = 30

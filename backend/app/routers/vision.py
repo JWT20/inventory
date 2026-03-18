@@ -9,6 +9,8 @@ from app.config import settings
 from app.database import get_db
 from app.events import publish_event
 from app.models import User
+from langfuse import observe, propagate_attributes
+
 from app.schemas import MatchResult
 from app.services.embedding import process_image
 from app.services.matching import find_best_matches
@@ -20,6 +22,7 @@ router = APIRouter(
 
 
 @router.post("/identify", response_model=MatchResult | None)
+@observe()
 async def identify_box(
     file: UploadFile,
     db: Session = Depends(get_db),
@@ -29,60 +32,64 @@ async def identify_box(
 
     Useful for ad-hoc identification or testing.
     """
-    image_bytes = file.file.read()
-    if len(image_bytes) > 10 * 1024 * 1024:
-        raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
-    try:
-        description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
-    except Exception:
-        logger.exception("Vision processing failed during ad-hoc identify")
-        raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
+    with propagate_attributes(
+        user_id=str(user.id),
+        metadata={"endpoint": "/api/vision/identify", "username": user.username},
+    ):
+        image_bytes = file.file.read()
+        if len(image_bytes) > 10 * 1024 * 1024:
+            raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
+        try:
+            description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
+        except Exception:
+            logger.exception("Vision processing failed during ad-hoc identify")
+            raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
 
-    if not is_package:
+        if not is_package:
+            publish_event(
+                "vision_identify",
+                details={
+                    "matched_sku_code": None,
+                    "confidence": None,
+                    "vision_description": description,
+                    "candidates": [],
+                    "threshold": settings.match_threshold,
+                    "rejected": True,
+                    "rejection_reason": "not_a_package",
+                },
+                user=user,
+                resource_type="vision",
+            )
+            return None
+
+        candidates = find_best_matches(db, embedding, top_n=5)
+
+        matched_sku, confidence = None, 0.0
+        if candidates and candidates[0][1] >= settings.match_threshold:
+            matched_sku, confidence = candidates[0]
+
         publish_event(
             "vision_identify",
             details={
-                "matched_sku_code": None,
-                "confidence": None,
+                "matched_sku_code": matched_sku.sku_code if matched_sku else None,
+                "confidence": round(confidence, 4) if matched_sku else None,
                 "vision_description": description,
-                "candidates": [],
+                "candidates": [
+                    {"sku_code": s.sku_code, "sku_name": s.name, "similarity": round(sim, 4)}
+                    for s, sim in candidates
+                ],
                 "threshold": settings.match_threshold,
-                "rejected": True,
-                "rejection_reason": "not_a_package",
             },
             user=user,
             resource_type="vision",
         )
-        return None
 
-    candidates = find_best_matches(db, embedding, top_n=5)
+        if matched_sku is None:
+            return None
 
-    matched_sku, confidence = None, 0.0
-    if candidates and candidates[0][1] >= settings.match_threshold:
-        matched_sku, confidence = candidates[0]
-
-    publish_event(
-        "vision_identify",
-        details={
-            "matched_sku_code": matched_sku.sku_code if matched_sku else None,
-            "confidence": round(confidence, 4) if matched_sku else None,
-            "vision_description": description,
-            "candidates": [
-                {"sku_code": s.sku_code, "sku_name": s.name, "similarity": round(sim, 4)}
-                for s, sim in candidates
-            ],
-            "threshold": settings.match_threshold,
-        },
-        user=user,
-        resource_type="vision",
-    )
-
-    if matched_sku is None:
-        return None
-
-    return MatchResult(
-        sku_id=matched_sku.id,
-        sku_code=matched_sku.sku_code,
-        sku_name=matched_sku.name,
-        confidence=confidence,
-    )
+        return MatchResult(
+            sku_id=matched_sku.id,
+            sku_code=matched_sku.sku_code,
+            sku_name=matched_sku.name,
+            confidence=confidence,
+        )

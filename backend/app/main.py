@@ -14,6 +14,7 @@ from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.models import User
 from app.events import init_producer, shutdown_producer
+from app.services.langfuse_client import get_langfuse, shutdown_langfuse
 from app.routers import auth, customers, orders, receiving, skus, vision
 
 logging.basicConfig(level=logging.INFO)
@@ -319,6 +320,7 @@ async def lifespan(app: FastAPI):
         db.close()
 
     init_producer()
+    get_langfuse()  # Initialize Langfuse client (no-op if not configured)
     _cleanup_old_scans()
 
     # Serve uploaded images (scans, reference images)
@@ -329,6 +331,7 @@ async def lifespan(app: FastAPI):
 
     # --- shutdown ---
     shutdown_producer()
+    shutdown_langfuse()
 
 
 app = FastAPI(
