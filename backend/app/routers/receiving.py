@@ -134,9 +134,10 @@ async def identify_box(
         candidates = find_best_matches(db, embedding, top_n=5)
         t_match = time.perf_counter()
 
-        matched_sku, confidence = None, 0.0
+        matched_sku, confidence, matched_ref_desc = None, 0.0, None
         if candidates and candidates[0][1] >= settings.match_threshold:
             matched_sku, confidence = candidates[0][0], candidates[0][1]
+            matched_ref_desc = candidates[0][3]
 
         logger.info(
             "[TIMING] identify total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms",
@@ -148,8 +149,13 @@ async def identify_box(
         )
 
         candidate_details = [
-            {"sku_code": s.sku_code, "sku_name": s.name, "similarity": round(sim, 4)}
-            for s, sim, _img_path in candidates
+            {
+                "sku_code": s.sku_code,
+                "sku_name": s.name,
+                "similarity": round(sim, 4),
+                "reference_description": ref_desc,
+            }
+            for s, sim, _img_path, ref_desc in candidates
         ]
 
         publish_event(
@@ -174,6 +180,14 @@ async def identify_box(
                     "is_package": True,
                     "matched_sku_code": matched_sku.sku_code if matched_sku else None,
                     "matched_sku_name": matched_sku.name if matched_sku else None,
+                    "matched_sku_wine": {
+                        "producent": matched_sku.producent,
+                        "wijnaam": matched_sku.wijnaam,
+                        "wijntype": matched_sku.wijntype,
+                        "jaargang": matched_sku.jaargang,
+                        "volume": matched_sku.volume,
+                    } if matched_sku else None,
+                    "matched_reference_description": matched_ref_desc,
                     "confidence": round(confidence, 4) if matched_sku else None,
                     "candidates": candidate_details,
                     "outcome": "matched" if matched_sku else "no_match",
@@ -263,7 +277,7 @@ async def book_box(
 
         matched_sku, confidence, matched_image_path = None, 0.0, None
         if candidates and candidates[0][1] >= settings.match_threshold:
-            matched_sku, confidence, matched_image_path = candidates[0]
+            matched_sku, confidence, matched_image_path, _ref_desc = candidates[0]
 
         if matched_sku is None:
             # Check if the box matches a SKU outside this order

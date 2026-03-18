@@ -17,14 +17,15 @@ def find_best_matches(
     embedding: list[float],
     top_n: int = 5,
     sku_ids: list[int] | None = None,
-) -> list[tuple[SKU, float, str | None]]:
+) -> list[tuple[SKU, float, str | None, str | None]]:
     """Return the top-N matching SKUs for a given embedding.
 
-    Returns a list of (sku, similarity, reference_image_path) tuples, ordered by
-    similarity descending.  Each SKU appears at most once, with the similarity and
-    image path of its best-matching reference image.  Only includes active SKUs.
-    When *sku_ids* is provided, only matches against reference images belonging to
-    those SKUs (order-aware scanning).
+    Returns a list of (sku, similarity, reference_image_path,
+    reference_description) tuples, ordered by similarity descending.
+    Each SKU appears at most once, with the similarity, image path, and
+    vision description of its best-matching reference image.  Only includes
+    active SKUs.  When *sku_ids* is provided, only matches against reference
+    images belonging to those SKUs (order-aware scanning).
     """
     t0 = time.perf_counter()
     embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
@@ -40,11 +41,12 @@ def find_best_matches(
     # then sort globally by similarity and apply the LIMIT.
     rows = db.execute(
         text(f"""
-            SELECT sku_id, similarity, image_path FROM (
+            SELECT sku_id, similarity, image_path, vision_description FROM (
                 SELECT DISTINCT ON (ri.sku_id)
                     ri.sku_id,
                     1 - (ri.embedding <=> :embedding) AS similarity,
-                    ri.image_path
+                    ri.image_path,
+                    ri.vision_description
                 FROM reference_images ri
                 JOIN skus s ON s.id = ri.sku_id
                 WHERE s.active = true
@@ -69,10 +71,10 @@ def find_best_matches(
     sku_load_ms = (time.perf_counter() - t1) * 1000
 
     results = []
-    for sku_id, similarity, image_path in rows:
+    for sku_id, similarity, image_path, vision_description in rows:
         sku = skus_by_id.get(sku_id)
         if sku:
-            results.append((sku, float(similarity), image_path))
+            results.append((sku, float(similarity), image_path, vision_description))
 
     logger.info("[TIMING] pgvector_search=%.0fms sku_load=%.0fms (%d results)", vector_ms, sku_load_ms, len(results))
     return results
@@ -91,7 +93,7 @@ def find_best_match(
     if not candidates:
         return None, 0.0, None
 
-    sku, similarity, image_path = candidates[0]
+    sku, similarity, image_path, _ref_desc = candidates[0]
 
     if similarity < settings.match_threshold:
         logger.info(

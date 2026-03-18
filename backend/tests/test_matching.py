@@ -34,7 +34,7 @@ class TestFindBestMatch:
         mock_sku.id = 1
         mock_sku.sku_code = "WINE-001"
 
-        mock_db = _mock_db_with_rows([(1, 0.95, "/app/uploads/ref/1/img.jpg")], {1: mock_sku})
+        mock_db = _mock_db_with_rows([(1, 0.95, "/app/uploads/ref/1/img.jpg", "Château Margaux 2015 red box")], {1: mock_sku})
 
         with patch("app.services.matching.settings") as mock_settings:
             mock_settings.match_threshold = 0.92
@@ -50,7 +50,7 @@ class TestFindBestMatch:
         mock_sku = MagicMock()
         mock_sku.id = 1
 
-        mock_db = _mock_db_with_rows([(1, 0.80, "/app/uploads/ref/1/img.jpg")], {1: mock_sku})
+        mock_db = _mock_db_with_rows([(1, 0.80, "/app/uploads/ref/1/img.jpg", "some wine box")], {1: mock_sku})
 
         with patch("app.services.matching.settings") as mock_settings:
             mock_settings.match_threshold = 0.92
@@ -79,7 +79,7 @@ class TestFindBestMatch:
         mock_sku.id = 1
         mock_sku.sku_code = "WINE-001"
 
-        mock_db = _mock_db_with_rows([(1, 0.92, "/app/uploads/ref/1/img.jpg")], {1: mock_sku})
+        mock_db = _mock_db_with_rows([(1, 0.92, "/app/uploads/ref/1/img.jpg", "Bordeaux blend")], {1: mock_sku})
 
         with patch("app.services.matching.settings") as mock_settings:
             mock_settings.match_threshold = 0.92
@@ -105,15 +105,18 @@ class TestFindBestMatches:
         mock_sku2.id = 2
 
         mock_db = _mock_db_with_rows(
-            [(1, 0.95, "/app/uploads/ref/1/a.jpg"), (2, 0.85, "/app/uploads/ref/2/b.jpg")],
+            [
+                (1, 0.95, "/app/uploads/ref/1/a.jpg", "Château Margaux 2015"),
+                (2, 0.85, "/app/uploads/ref/2/b.jpg", "Rioja Reserva 2018"),
+            ],
             {1: mock_sku1, 2: mock_sku2},
         )
 
         results = find_best_matches(mock_db, [0.1] * 1536, top_n=2)
 
         assert len(results) == 2
-        assert results[0] == (mock_sku1, 0.95, "/app/uploads/ref/1/a.jpg")
-        assert results[1] == (mock_sku2, 0.85, "/app/uploads/ref/2/b.jpg")
+        assert results[0] == (mock_sku1, 0.95, "/app/uploads/ref/1/a.jpg", "Château Margaux 2015")
+        assert results[1] == (mock_sku2, 0.85, "/app/uploads/ref/2/b.jpg", "Rioja Reserva 2018")
 
     def test_empty_database(self):
         from app.services.matching import find_best_matches
