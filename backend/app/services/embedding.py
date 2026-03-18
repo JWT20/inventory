@@ -8,6 +8,8 @@ from google.genai.errors import ClientError
 from PIL import Image
 import io
 
+from langfuse import observe, get_client as get_langfuse_client
+
 from app.config import settings
 from app.models import EMBEDDING_DIM
 
@@ -165,6 +167,7 @@ def optimize_for_vision(image_bytes: bytes) -> Image.Image:
     return image
 
 
+@observe(as_type="generation")
 def _call_vision(image: Image.Image, prompt: str) -> str:
     """Call Gemini Vision with retry logic. Returns raw response text."""
     client = _get_client()
@@ -187,9 +190,21 @@ def _call_vision(image: Image.Image, prompt: str) -> str:
                 raise
     vision_ms = (time.perf_counter() - t0) * 1000
     logger.info("[TIMING] gemini_vision=%.0fms", vision_ms)
+
+    try:
+        langfuse = get_langfuse_client()
+        langfuse.update_current_generation(
+            model=settings.gemini_vision_model,
+            input=prompt,
+            output=response.text,
+        )
+    except Exception:
+        pass  # Langfuse not initialized or not in traced context
+
     return response.text
 
 
+@observe()
 def classify_image(image_bytes: bytes) -> tuple[bool, str]:
     """Step 1: Classify whether the image shows a box/package.
 
@@ -208,6 +223,7 @@ def classify_image(image_bytes: bytes) -> tuple[bool, str]:
     return is_package, summary
 
 
+@observe()
 def describe_package(image_bytes: bytes) -> str:
     """Step 2: Describe the packaging for embedding.
 
@@ -237,6 +253,7 @@ def describe_image(image_bytes: bytes) -> tuple[str, bool]:
     return description, is_package
 
 
+@observe(as_type="generation")
 def generate_embedding(text: str) -> list[float]:
     """Generate a text embedding using gemini-embedding-001."""
     client = _get_client()
@@ -262,6 +279,17 @@ def generate_embedding(text: str) -> list[float]:
     embedding_ms = (time.perf_counter() - t0) * 1000
 
     logger.info("[TIMING] gemini_embedding=%.0fms", embedding_ms)
+
+    try:
+        langfuse = get_langfuse_client()
+        langfuse.update_current_generation(
+            model=settings.gemini_embedding_model,
+            input=text,
+            metadata={"output_dimensionality": EMBEDDING_DIM},
+        )
+    except Exception:
+        pass  # Langfuse not initialized or not in traced context
+
     return result.embeddings[0].values
 
 
@@ -285,6 +313,7 @@ def assess_description_quality(description: str) -> str:
     return "low"
 
 
+@observe()
 def describe_and_embed(image_bytes: bytes) -> tuple[str, list[float], str]:
     """Skip classification, go straight to describe + embed.
 
@@ -303,6 +332,7 @@ def describe_and_embed(image_bytes: bytes) -> tuple[str, list[float], str]:
     return description, embedding, quality
 
 
+@observe()
 def classify_and_describe(image_bytes: bytes) -> tuple[bool, str]:
     """Classify and describe in a single Gemini call.
 
@@ -321,6 +351,7 @@ def classify_and_describe(image_bytes: bytes) -> tuple[bool, str]:
     return is_package, description
 
 
+@observe()
 def process_image(image_bytes: bytes) -> tuple[str, list[float] | None, bool]:
     """Full pipeline: classify + describe (single call) → embed.
 

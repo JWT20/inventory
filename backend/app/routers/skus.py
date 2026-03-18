@@ -18,6 +18,8 @@ from app.schemas import (
     generate_display_name,
     generate_sku_code,
 )
+from langfuse import observe
+
 from app.services.embedding import (
     assess_description_quality,
     classify_image,
@@ -219,6 +221,7 @@ def _process_reference_image_background(
 
 
 @router.post("/{sku_id}/images", response_model=ReferenceImageResponse, status_code=201)
+@observe()
 def upload_reference_image(
     sku_id: int,
     file: UploadFile,

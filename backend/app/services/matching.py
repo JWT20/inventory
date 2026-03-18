@@ -1,6 +1,7 @@
 import logging
 import time
 
+from langfuse import observe
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -10,6 +11,7 @@ from app.models import SKU
 logger = logging.getLogger(__name__)
 
 
+@observe()
 def find_best_matches(
     db: Session,
     embedding: list[float],
