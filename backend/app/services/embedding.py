@@ -11,6 +11,7 @@ import io
 from langfuse import observe, get_client as get_langfuse_client
 
 from app.config import settings
+from app.services.langfuse_client import get_prompt
 from app.models import EMBEDDING_DIM
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ Examples of false: a clock, candles on a table, a laptop, a pair of shoes, a gla
 # Combined prompt — classify AND describe in a single call
 # ---------------------------------------------------------------------------
 
-CLASSIFY_AND_DESCRIBE_PROMPT = """Analyze this image and respond in EXACTLY this JSON format — no markdown fencing, no extra text:
+CLASSIFY_AND_DESCRIBE_DEFAULT = """Analyze this image and respond in EXACTLY this JSON format — no markdown fencing, no extra text:
 
 {"is_package": true, "description": "detailed description here"}
 
@@ -65,7 +66,7 @@ Format the description as a compact paragraph starting with the most distinctive
 # Description-only prompt (used when classification is skipped)
 # ---------------------------------------------------------------------------
 
-DESCRIBE_PROMPT = """Describe this product packaging for identification matching.
+DESCRIBE_DEFAULT = """Describe this product packaging for identification matching.
 Your description will be embedded and compared against a reference database using cosine similarity.
 Accuracy and specificity are critical — a wrong match means the wrong product gets shipped.
 
@@ -232,7 +233,8 @@ def describe_package(image_bytes: bytes) -> str:
     or when the user has overridden classification.
     """
     image = optimize_for_vision(image_bytes)
-    raw_text = _call_vision(image, DESCRIBE_PROMPT)
+    prompt = get_prompt("describe-package", fallback=DESCRIBE_DEFAULT)
+    raw_text = _call_vision(image, prompt)
     logger.info("Description raw response: %s", raw_text[:120])
 
     description = _strip_markdown_fences(raw_text).strip()
@@ -343,7 +345,8 @@ def classify_and_describe(image_bytes: bytes) -> tuple[bool, str]:
     resize_ms = (time.perf_counter() - t0) * 1000
     logger.info("[TIMING] image_resize=%.0fms", resize_ms)
 
-    raw_text = _call_vision(image, CLASSIFY_AND_DESCRIBE_PROMPT)
+    prompt = get_prompt("classify-and-describe", fallback=CLASSIFY_AND_DESCRIBE_DEFAULT)
+    raw_text = _call_vision(image, prompt)
     logger.info("Classify+describe raw response: %s", raw_text[:200])
 
     is_package, description = parse_classify_and_describe_response(raw_text)

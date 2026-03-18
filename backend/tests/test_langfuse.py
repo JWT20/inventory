@@ -31,6 +31,18 @@ def test_langfuse_score_noop_when_disabled():
         lf.score_trace("fake-trace-id", "test_score", 0.95)
 
 
+def test_get_prompt_returns_fallback_when_disabled():
+    """get_prompt returns the fallback string when Langfuse is not configured."""
+    import app.services.langfuse_client as lf
+    lf._langfuse = None
+    lf._initialized = False
+
+    with patch.object(lf.settings, "langfuse_public_key", ""), \
+         patch.object(lf.settings, "langfuse_secret_key", ""):
+        result = lf.get_prompt("classify-and-describe", fallback="my fallback prompt")
+        assert result == "my fallback prompt"
+
+
 def test_langfuse_shutdown_when_not_initialized():
     """shutdown_langfuse works even when client was never initialized."""
     import app.services.langfuse_client as lf
