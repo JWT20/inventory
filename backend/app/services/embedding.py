@@ -2,6 +2,8 @@ import logging
 import re
 import time
 
+import base64
+
 from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
@@ -194,9 +196,18 @@ def _call_vision(image: Image.Image, prompt: str) -> str:
 
     try:
         langfuse = get_langfuse_client()
+        # Include the image as base64 so Langfuse LLM-as-a-judge can see it
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
         langfuse.update_current_generation(
             model=settings.gemini_vision_model,
-            input=prompt,
+            input=[
+                {"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                    {"type": "text", "text": prompt},
+                ]},
+            ],
             output=response.text,
         )
     except Exception:
