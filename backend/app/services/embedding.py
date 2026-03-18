@@ -255,7 +255,7 @@ def describe_image(image_bytes: bytes) -> tuple[str, bool]:
     return description, is_package
 
 
-@observe(as_type="generation")
+@observe(as_type="span")
 def generate_embedding(text: str) -> list[float]:
     """Generate a text embedding using gemini-embedding-001."""
     client = _get_client()
