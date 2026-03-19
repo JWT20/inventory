@@ -196,7 +196,7 @@ def _call_vision(image: Image.Image, prompt: str) -> str:
 
     try:
         langfuse = get_langfuse_client()
-        # Include the image as base64 so Langfuse LLM-as-a-judge can see it
+        # Include the image as base64 so Langfuse can display it in the trace
         buf = io.BytesIO()
         image.save(buf, format="JPEG")
         b64 = base64.b64encode(buf.getvalue()).decode()

@@ -19,18 +19,6 @@ def test_langfuse_disabled_when_no_keys():
         assert result is None
 
 
-def test_langfuse_score_noop_when_disabled():
-    """score_trace does nothing when Langfuse is disabled."""
-    import app.services.langfuse_client as lf
-    lf._langfuse = None
-    lf._initialized = False
-
-    with patch.object(lf.settings, "langfuse_public_key", ""), \
-         patch.object(lf.settings, "langfuse_secret_key", ""):
-        # Should not raise
-        lf.score_trace("fake-trace-id", "test_score", 0.95)
-
-
 def test_get_prompt_returns_fallback_when_disabled():
     """get_prompt returns the fallback string when Langfuse is not configured."""
     import app.services.langfuse_client as lf
