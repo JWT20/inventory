@@ -15,10 +15,9 @@ from app.events import publish_event
 from app.models import SKU, Booking, Order, OrderLine, ReferenceImage, User
 from app.routers.skus import _sku_to_response
 from app.schemas import BookingConfirmation, BookingResponse, ConfirmBookingRequest, MatchResult, SKUResponse
-from langfuse import observe, propagate_attributes, get_client as get_langfuse_client
+from langfuse import observe, propagate_attributes
 
 from app.services.embedding import assess_description_quality, process_image
-from app.services.langfuse_client import score_trace
 from app.services.matching import find_best_matches
 
 logger = logging.getLogger(__name__)
@@ -113,22 +112,6 @@ async def identify_box(
                 user=user,
                 resource_type="receiving",
             )
-            # Enrich Langfuse trace for LLM-as-a-judge evaluation
-            try:
-                langfuse = get_langfuse_client()
-                langfuse.update_current_trace(
-                    metadata={
-                        "vision_description": description,
-                        "is_package": False,
-                        "matched_sku_code": None,
-                        "matched_sku_name": None,
-                        "confidence": None,
-                        "candidates": [],
-                        "outcome": "rejected_not_a_package",
-                    },
-                )
-            except Exception:
-                pass
             return None
 
         candidates = find_best_matches(db, embedding, top_n=5)
@@ -170,31 +153,6 @@ async def identify_box(
             user=user,
             resource_type="receiving",
         )
-
-        # Enrich Langfuse trace for LLM-as-a-judge evaluation
-        try:
-            langfuse = get_langfuse_client()
-            langfuse.update_current_trace(
-                metadata={
-                    "vision_description": description,
-                    "is_package": True,
-                    "matched_sku_code": matched_sku.sku_code if matched_sku else None,
-                    "matched_sku_name": matched_sku.name if matched_sku else None,
-                    "matched_sku_wine": {
-                        "producent": matched_sku.producent,
-                        "wijnaam": matched_sku.wijnaam,
-                        "wijntype": matched_sku.wijntype,
-                        "jaargang": matched_sku.jaargang,
-                        "volume": matched_sku.volume,
-                    } if matched_sku else None,
-                    "matched_reference_description": matched_ref_desc,
-                    "confidence": round(confidence, 4) if matched_sku else None,
-                    "candidates": candidate_details,
-                    "outcome": "matched" if matched_sku else "no_match",
-                },
-            )
-        except Exception:
-            pass
 
         if matched_sku is None:
             return None
@@ -254,22 +212,6 @@ async def book_box(
         t_process = time.perf_counter()
 
         if not is_package:
-            # Enrich Langfuse trace for LLM-as-a-judge evaluation
-            try:
-                langfuse = get_langfuse_client()
-                langfuse.update_current_trace(
-                    metadata={
-                        "vision_description": description,
-                        "is_package": False,
-                        "matched_sku_code": None,
-                        "matched_sku_name": None,
-                        "confidence": None,
-                        "candidates": [],
-                        "outcome": "rejected_not_a_package",
-                    },
-                )
-            except Exception:
-                pass
             publish_event(
                 "box_booked",
                 details={
@@ -294,42 +236,6 @@ async def book_box(
         matched_sku, confidence, matched_image_path, matched_ref_desc = None, 0.0, None, None
         if candidates and candidates[0][1] >= settings.match_threshold:
             matched_sku, confidence, matched_image_path, matched_ref_desc = candidates[0]
-
-        # Build candidate details for Langfuse metadata
-        candidate_details = [
-            {
-                "sku_code": s.sku_code,
-                "sku_name": s.name,
-                "similarity": round(sim, 4),
-                "reference_description": ref_desc,
-            }
-            for s, sim, _img_path, ref_desc in candidates
-        ]
-
-        # Enrich Langfuse trace for LLM-as-a-judge evaluation
-        try:
-            langfuse = get_langfuse_client()
-            langfuse.update_current_trace(
-                metadata={
-                    "vision_description": description,
-                    "is_package": True,
-                    "matched_sku_code": matched_sku.sku_code if matched_sku else None,
-                    "matched_sku_name": matched_sku.name if matched_sku else None,
-                    "matched_sku_wine": {
-                        "producent": matched_sku.producent,
-                        "wijnaam": matched_sku.wijnaam,
-                        "wijntype": matched_sku.wijntype,
-                        "jaargang": matched_sku.jaargang,
-                        "volume": matched_sku.volume,
-                    } if matched_sku else None,
-                    "matched_reference_description": matched_ref_desc,
-                    "confidence": round(confidence, 4) if matched_sku else None,
-                    "candidates": candidate_details,
-                    "outcome": "matched" if matched_sku else "no_match",
-                },
-            )
-        except Exception:
-            pass
 
         if matched_sku is None:
             # Check if the box matches a SKU outside this order
@@ -441,13 +347,6 @@ async def book_box(
             resource_id=booking.id,
         )
 
-        # Record quality scores in Langfuse
-        langfuse = get_langfuse_client()
-        trace_id = langfuse.get_current_trace_id()
-        if trace_id:
-            score_trace(trace_id, "match_confidence", confidence)
-            score_trace(trace_id, "match_accepted", 1.0, comment="auto-accepted (high confidence)")
-
         return BookingResponse(
             id=booking.id,
             order_id=order.id,
@@ -535,35 +434,6 @@ def confirm_booking(
         resource_type="booking",
         resource_id=booking.id,
     )
-
-    # Enrich Langfuse trace for LLM-as-a-judge evaluation
-    langfuse = get_langfuse_client()
-    try:
-        langfuse.update_current_trace(
-            metadata={
-                "is_package": True,
-                "matched_sku_code": sku.sku_code,
-                "matched_sku_name": sku.name,
-                "matched_sku_wine": {
-                    "producent": sku.producent,
-                    "wijnaam": sku.wijnaam,
-                    "wijntype": sku.wijntype,
-                    "jaargang": sku.jaargang,
-                    "volume": sku.volume,
-                },
-                "confidence": data.get("confidence"),
-                "outcome": "matched",
-                "confirmed_by_human": True,
-            },
-        )
-    except Exception:
-        pass
-
-    # Record quality scores in Langfuse
-    trace_id = langfuse.get_current_trace_id()
-    if trace_id:
-        score_trace(trace_id, "match_confidence", data.get("confidence", 0.0))
-        score_trace(trace_id, "match_accepted", 1.0, comment="human-confirmed")
 
     return BookingResponse(
         id=booking.id,

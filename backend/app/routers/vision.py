@@ -9,7 +9,7 @@ from app.config import settings
 from app.database import get_db
 from app.events import publish_event
 from app.models import User
-from langfuse import observe, propagate_attributes, get_client as get_langfuse_client
+from langfuse import observe, propagate_attributes
 
 from app.schemas import MatchResult
 from app.services.embedding import process_image
@@ -60,22 +60,6 @@ async def identify_box(
                 user=user,
                 resource_type="vision",
             )
-            # Enrich Langfuse trace for LLM-as-a-judge evaluation
-            try:
-                langfuse = get_langfuse_client()
-                langfuse.update_current_trace(
-                    metadata={
-                        "vision_description": description,
-                        "is_package": False,
-                        "matched_sku_code": None,
-                        "matched_sku_name": None,
-                        "confidence": None,
-                        "candidates": [],
-                        "outcome": "rejected_not_a_package",
-                    },
-                )
-            except Exception:
-                pass
             return None
 
         candidates = find_best_matches(db, embedding, top_n=5)
@@ -108,31 +92,6 @@ async def identify_box(
             user=user,
             resource_type="vision",
         )
-
-        # Enrich Langfuse trace for LLM-as-a-judge evaluation
-        try:
-            langfuse = get_langfuse_client()
-            langfuse.update_current_trace(
-                metadata={
-                    "vision_description": description,
-                    "is_package": True,
-                    "matched_sku_code": matched_sku.sku_code if matched_sku else None,
-                    "matched_sku_name": matched_sku.name if matched_sku else None,
-                    "matched_sku_wine": {
-                        "producent": matched_sku.producent,
-                        "wijnaam": matched_sku.wijnaam,
-                        "wijntype": matched_sku.wijntype,
-                        "jaargang": matched_sku.jaargang,
-                        "volume": matched_sku.volume,
-                    } if matched_sku else None,
-                    "matched_reference_description": matched_ref_desc,
-                    "confidence": round(confidence, 4) if matched_sku else None,
-                    "candidates": candidate_details,
-                    "outcome": "matched" if matched_sku else "no_match",
-                },
-            )
-        except Exception:
-            pass
 
         if matched_sku is None:
             return None

@@ -66,14 +66,3 @@ def get_prompt(name: str, *, fallback: str) -> str:
     except Exception:
         logger.warning("Failed to fetch Langfuse prompt '%s', using fallback", name)
         return fallback
-
-
-def score_trace(trace_id: str, name: str, value: float, comment: str | None = None):
-    """Record a score on a Langfuse trace. No-op if Langfuse is disabled."""
-    client = get_langfuse()
-    if client is None:
-        return
-    try:
-        client.create_score(trace_id=trace_id, name=name, value=value, comment=comment)
-    except Exception:
-        logger.warning("Failed to record Langfuse score %s", name, exc_info=True)
