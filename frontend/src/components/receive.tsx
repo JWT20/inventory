@@ -41,6 +41,8 @@ interface IdentifyResult {
   sku_code: string;
   sku_name: string;
   confidence: number;
+  needs_confirmation: boolean;
+  confirmation_reason: string | null;
 }
 
 type Step = "select-order" | "scan" | "result" | "confirm" | "identify-scan" | "identify-result";
@@ -626,14 +628,28 @@ function IdentifyResultStep({
 
   return (
     <>
-      <div className="p-6 rounded-lg bg-blue-600/20 border-2 border-blue-600 text-center mb-4">
-        <p className="text-blue-400 text-2xl font-bold mb-2">
-          Product herkend
-        </p>
-        <p className="text-blue-300 text-xl font-black">
-          {result.sku_name}
-        </p>
-      </div>
+      {result.needs_confirmation ? (
+        <div className="p-6 rounded-lg bg-yellow-600/20 border-2 border-yellow-600 text-center mb-4">
+          <p className="text-yellow-400 text-2xl font-bold mb-2">
+            Controleer resultaat
+          </p>
+          <p className="text-yellow-300 text-xl font-black">
+            {result.sku_name}
+          </p>
+          <p className="text-yellow-400/80 text-sm mt-2">
+            Lage betrouwbaarheid — controleer of dit klopt
+          </p>
+        </div>
+      ) : (
+        <div className="p-6 rounded-lg bg-blue-600/20 border-2 border-blue-600 text-center mb-4">
+          <p className="text-blue-400 text-2xl font-bold mb-2">
+            Product herkend
+          </p>
+          <p className="text-blue-300 text-xl font-black">
+            {result.sku_name}
+          </p>
+        </div>
+      )}
 
       <Card className="p-4 mb-4">
         <div className="space-y-1">
