@@ -4,6 +4,8 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install
 COPY . .
+ARG VITE_SENTRY_DSN=""
+ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
 RUN npm run build
 
 # Stage 2: Serve with nginx

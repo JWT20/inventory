@@ -36,7 +36,7 @@ jobs:
       - name: Sync files to server
         uses: burnett01/rsync-deployments@7.0.1
         with:
-          switches: -avz --delete --exclude='.git' --exclude='.env' --exclude='deploy' --exclude='__pycache__'
+          switches: -avz --delete --exclude='.git' --exclude='.env' --exclude='deploy' --exclude='__pycache__' --exclude='nginx/nginx-ssl.conf'
           path: ./
           remote_path: /opt/wijnpick/
           remote_host: ${{ secrets.SERVER_IP }}

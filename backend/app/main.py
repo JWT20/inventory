@@ -3,6 +3,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 
+import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +20,13 @@ from app.routers import auth, customers, orders, receiving, skus, vision
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+if settings.sentry_dsn:
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        traces_sample_rate=0.1,
+    )
+    logger.info("Sentry initialized")
 
 
 def _migrate_is_admin_to_role():
@@ -343,7 +351,7 @@ app = FastAPI(
 
 cors_origins = ["http://localhost:5173"]  # Vite dev server
 if settings.domain:
-    cors_origins = [f"https://{settings.domain}"]
+    cors_origins = [f"https://{settings.domain}", "http://localhost:5173"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -363,4 +371,11 @@ app.include_router(vision.router, prefix="/api")
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        db_status = "up"
+    except Exception:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"status": "unhealthy", "db": "down"}, status_code=503)
+    return {"status": "ok", "db": db_status}
