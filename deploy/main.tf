@@ -17,6 +17,10 @@ variable "compartment_ocid" {}
 variable "ssh_public_key_path" {}
 variable "domain" { default = "dockscan.nl" }
 variable "gemini_api_key" {}
+variable "ssh_allowed_cidr" {
+  description = "CIDR block allowed to SSH (e.g. your IP: 1.2.3.4/32). Find yours with: curl ifconfig.me"
+  default     = "0.0.0.0/0"
+}
 
 # --- Provider ---
 provider "oci" {
@@ -82,7 +86,7 @@ resource "oci_core_security_list" "public_sl" {
   # SSH
   ingress_security_rules {
     protocol = "6" # TCP
-    source   = "0.0.0.0/0"
+    source   = var.ssh_allowed_cidr
     tcp_options {
       min = 22
       max = 22

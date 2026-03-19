@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     langfuse_secret_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"
 
+    # Sentry (optional — leave empty to disable)
+    sentry_dsn: str = ""
+
     # Redis (optional — used for rate limiting; empty = in-memory fallback)
     redis_url: str = ""
 
