@@ -51,6 +51,13 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd /opt/wijnpick
+            # Regenerate TLS nginx config from template (rsync overwrites
+            # nginx.conf with the HTTP-only version from the repo, but
+            # production needs the TLS server blocks).
+            set -a; source .env; set +a
+            if [ -n "$DOMAIN" ]; then
+              envsubst '${DOMAIN}' < nginx/nginx.conf.template > nginx/nginx.conf
+            fi
             sudo docker compose build --no-cache
             sudo docker compose up -d
             sudo docker compose ps
