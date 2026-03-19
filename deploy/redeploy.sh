@@ -20,6 +20,8 @@ echo "1/4 App-bestanden kopieren..."
 rsync -avz --delete \
     --exclude '.git' --exclude 'deploy' --exclude '.env' --exclude '__pycache__' \
     "${PROJECT_ROOT}/" "${SSH_USER}@${VM_IP}:${APP_DIR}/"
+# Sync Caddyfile separately (deploy/ is excluded from main rsync)
+rsync -avz "${PROJECT_ROOT}/deploy/Caddyfile" "${SSH_USER}@${VM_IP}:${APP_DIR}/deploy/"
 
 echo "2/4 Caddy config updaten..."
 ssh "${SSH_USER}@${VM_IP}" "set -a; source ${APP_DIR}/.env; set +a; envsubst '\${DOMAIN}' < ${APP_DIR}/deploy/Caddyfile | sudo tee /etc/caddy/Caddyfile > /dev/null && sudo systemctl reload caddy"
