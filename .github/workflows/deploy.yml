@@ -33,12 +33,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Sync files to server
+      - name: Sync app files to server
         uses: burnett01/rsync-deployments@7.0.1
         with:
           switches: -avz --delete --exclude='.git' --exclude='.env' --exclude='deploy' --exclude='__pycache__'
           path: ./
           remote_path: /opt/wijnpick/
+          remote_host: ${{ secrets.SERVER_IP }}
+          remote_user: opc
+          remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Sync Caddyfile to server
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -avz
+          path: deploy/Caddyfile
+          remote_path: /opt/wijnpick/deploy/
           remote_host: ${{ secrets.SERVER_IP }}
           remote_user: opc
           remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -51,7 +61,6 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd /opt/wijnpick
-            # Sync Caddyfile with domain from .env
             set -a; source .env; set +a
             envsubst '${DOMAIN}' < deploy/Caddyfile | sudo tee /etc/caddy/Caddyfile > /dev/null
             sudo systemctl reload caddy
