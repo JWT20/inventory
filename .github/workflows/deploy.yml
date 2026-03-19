@@ -36,14 +36,14 @@ jobs:
       - name: Sync files to server
         uses: burnett01/rsync-deployments@7.0.1
         with:
-          switches: -avz --delete --exclude='.git' --exclude='.env' --exclude='deploy' --exclude='__pycache__' --exclude='nginx/nginx-ssl.conf'
+          switches: -avz --delete --exclude='.git' --exclude='.env' --exclude='deploy' --exclude='__pycache__'
           path: ./
           remote_path: /opt/wijnpick/
           remote_host: ${{ secrets.SERVER_IP }}
           remote_user: opc
           remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Rebuild and restart containers
+      - name: Update Caddy config and rebuild containers
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SERVER_IP }}
@@ -51,13 +51,10 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd /opt/wijnpick
-            # Regenerate TLS nginx config from template (rsync overwrites
-            # nginx.conf with the HTTP-only version from the repo, but
-            # production needs the TLS server blocks).
+            # Sync Caddyfile with domain from .env
             set -a; source .env; set +a
-            if [ -n "$DOMAIN" ]; then
-              envsubst '${DOMAIN}' < nginx/nginx.conf.template > nginx/nginx.conf
-            fi
+            envsubst '${DOMAIN}' < deploy/Caddyfile | sudo tee /etc/caddy/Caddyfile > /dev/null
+            sudo systemctl reload caddy
             sudo docker compose build --no-cache
             sudo docker compose up -d
             sudo docker compose ps

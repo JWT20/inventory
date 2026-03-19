@@ -1,0 +1,11 @@
+{$DOMAIN} {
+    # Backend API
+    handle /api/* {
+        reverse_proxy localhost:8000
+    }
+
+    # Frontend (React SPA)
+    handle {
+        reverse_proxy localhost:3000
+    }
+}
