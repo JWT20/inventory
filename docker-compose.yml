@@ -76,6 +76,8 @@ services:
     build: ./backend
     restart: unless-stopped
     mem_limit: 512m
+    ports:
+      - "127.0.0.1:8000:8000"
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-wijnpick}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-wijnpick}
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
@@ -111,6 +113,8 @@ services:
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
     restart: unless-stopped
     mem_limit: 128m
+    ports:
+      - "127.0.0.1:3000:80"
     depends_on:
       backend:
         condition: service_healthy
@@ -121,36 +125,8 @@ services:
       retries: 5
       start_period: 10s
 
-  nginx:
-    image: nginx:alpine
-    restart: unless-stopped
-    mem_limit: 128m
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - certbot-webroot:/var/www/certbot:ro
-      - certbot-certs:/etc/letsencrypt:ro
-      - uploads:/app/uploads:ro
-    depends_on:
-      frontend:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
-
-  certbot:
-    image: certbot/certbot
-    volumes:
-      - certbot-webroot:/var/www/certbot
-      - certbot-certs:/etc/letsencrypt
-    profiles:
-      - certbot
-
 volumes:
   pgdata:
   uploads:
   kafka-data:
   pinot-data:
-  certbot-webroot:
-  certbot-certs:

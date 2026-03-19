@@ -22,6 +22,9 @@ echo "1/4 App-bestanden kopieren..."
 rsync -avz --exclude '.git' --exclude 'deploy' --exclude '.env' --exclude '__pycache__' \
     "${PROJECT_ROOT}/" "${SSH_USER}@${VM_IP}:${APP_DIR}/"
 
+# Copy deploy files needed on server (Caddyfile)
+rsync -avz "${PROJECT_ROOT}/deploy/Caddyfile" "${SSH_USER}@${VM_IP}:${APP_DIR}/deploy/"
+
 # Setup HTTPS with Caddy
 echo "2/4 Caddy reverse proxy installeren voor HTTPS..."
 ssh "${SSH_USER}@${VM_IP}" << 'REMOTE_SCRIPT'
@@ -42,13 +45,10 @@ sudo dnf install -y caddy || {
     sudo useradd --system --gid caddy --create-home --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy 2>/dev/null || true
 }
 
-# Caddy config
+# Generate Caddyfile from template with domain
 sudo mkdir -p /etc/caddy
-sudo tee /etc/caddy/Caddyfile > /dev/null << CADDYEOF
-${DOMAIN} {
-    reverse_proxy localhost:8080
-}
-CADDYEOF
+export DOMAIN
+envsubst '${DOMAIN}' < /opt/wijnpick/deploy/Caddyfile | sudo tee /etc/caddy/Caddyfile > /dev/null
 
 # Caddy systemd service
 sudo tee /etc/systemd/system/caddy.service > /dev/null << 'SERVICEEOF'

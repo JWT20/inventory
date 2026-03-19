@@ -21,6 +21,18 @@ runcmd:
   - systemctl start docker
   - usermod -aG docker opc
 
+  # Install Caddy for automatic HTTPS
+  - dnf install -y 'dnf-command(copr)' || true
+  - dnf copr enable -y @caddy/caddy || true
+  - |
+    dnf install -y caddy || {
+      curl -sL "https://caddyserver.com/api/download?os=linux&arch=arm64" -o /tmp/caddy
+      mv /tmp/caddy /usr/bin/caddy
+      chmod +x /usr/bin/caddy
+      groupadd --system caddy 2>/dev/null || true
+      useradd --system --gid caddy --create-home --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy 2>/dev/null || true
+    }
+
   # Clone the app repo
   - git clone -b main https://github.com/JWT20/inventory.git /opt/wijnpick
 
@@ -41,6 +53,13 @@ runcmd:
     ENVEOF
   - chown -R opc:opc /opt/wijnpick
 
+  # Configure Caddy with domain
+  - |
+    mkdir -p /etc/caddy
+    export DOMAIN="${domain}"
+    envsubst '${DOMAIN}' < /opt/wijnpick/deploy/Caddyfile > /etc/caddy/Caddyfile
+  - systemctl enable caddy
+
   # Install OCI CLI for backups (as opc user)
   - |
     sudo -u opc bash -c 'bash -c "$(curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh)" -- --accept-all-defaults'
@@ -59,15 +78,6 @@ runcmd:
     CRONEOF
   - chmod 644 /etc/cron.d/wijnpick-backup
 
-  # Deploy the app
+  # Deploy the app and start Caddy
   - cd /opt/wijnpick && docker compose up -d
-
-  # Obtain SSL certificate (app must be running for ACME challenge)
-  - cd /opt/wijnpick && bash scripts/init-ssl.sh
-
-  # Daily cert renewal at 3 AM
-  - |
-    cat > /etc/cron.d/wijnpick-cert-renew << 'CRONEOF'
-    0 3 * * * root cd /opt/wijnpick && bash scripts/renew-certs.sh >> /var/log/wijnpick-cert-renew.log 2>&1
-    CRONEOF
-  - chmod 644 /etc/cron.d/wijnpick-cert-renew
+  - systemctl start caddy
