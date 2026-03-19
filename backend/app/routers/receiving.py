@@ -157,11 +157,30 @@ async def identify_box(
         if matched_sku is None:
             return None
 
+        # Flag for human confirmation if description quality is low or confidence is low
+        CONFIRM_THRESHOLD = 0.84
+        quality = assess_description_quality(description)
+        needs_confirmation = quality == "low" or confidence < CONFIRM_THRESHOLD
+        confirmation_reason = None
+        if needs_confirmation:
+            reasons = []
+            if quality == "low":
+                reasons.append("low-quality description")
+            if confidence < CONFIRM_THRESHOLD:
+                reasons.append(f"low confidence ({confidence:.2f} < {CONFIRM_THRESHOLD})")
+            confirmation_reason = ", ".join(reasons)
+            logger.info(
+                "Identify: SKU %s flagged for confirmation: %s",
+                matched_sku.sku_code, confirmation_reason,
+            )
+
         return MatchResult(
             sku_id=matched_sku.id,
             sku_code=matched_sku.sku_code,
             sku_name=matched_sku.name,
             confidence=confidence,
+            needs_confirmation=needs_confirmation,
+            confirmation_reason=confirmation_reason,
         )
 
 

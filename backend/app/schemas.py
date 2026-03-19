@@ -160,6 +160,8 @@ class MatchResult(BaseModel):
     sku_code: str
     sku_name: str
     confidence: float
+    needs_confirmation: bool = False
+    confirmation_reason: str | None = None
 
 
 # --- CSV Row ---
