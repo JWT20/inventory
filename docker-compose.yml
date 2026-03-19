@@ -114,6 +114,12 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:80/ > /dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   nginx:
     image: nginx:alpine
@@ -128,8 +134,10 @@ services:
       - certbot-certs:/etc/letsencrypt:ro
       - uploads:/app/uploads:ro
     depends_on:
-      - frontend
-      - backend
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
 
   certbot:
     image: certbot/certbot
