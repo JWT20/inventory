@@ -26,6 +26,14 @@ interface BookingResult {
   needs_confirmation?: boolean;
 }
 
+interface AlternativeMatch {
+  sku_id: number;
+  sku_code: string;
+  sku_name: string;
+  confidence: number;
+  reference_image_url: string;
+}
+
 interface ConfirmationData {
   needs_confirmation: true;
   confirmation_token: string;
@@ -34,6 +42,7 @@ interface ConfirmationData {
   confidence: number;
   scan_image_url: string;
   reference_image_url: string;
+  alternatives?: AlternativeMatch[];
 }
 
 interface IdentifyResult {
@@ -43,6 +52,7 @@ interface IdentifyResult {
   confidence: number;
   needs_confirmation: boolean;
   confirmation_reason: string | null;
+  alternatives?: AlternativeMatch[];
 }
 
 type Step = "select-order" | "scan" | "result" | "confirm" | "identify-scan" | "identify-result";
@@ -403,6 +413,7 @@ function ConfirmStep({
   onReject: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const hasAlternatives = confirmation.alternatives && confirmation.alternatives.length > 0;
 
   async function handleConfirm() {
     setConfirming(true);
@@ -420,48 +431,137 @@ function ConfirmStep({
 
   return (
     <>
-      <div className="p-4 rounded-lg bg-yellow-600/20 border-2 border-yellow-600 text-center mb-4">
-        <p className="text-yellow-400 text-xl font-bold mb-1">
-          Controleer match
-        </p>
-        <p className="text-yellow-300 text-sm">
-          Onzekere match — bevestig handmatig
-        </p>
-      </div>
-
-      <Card className="p-4 mb-4">
-        <div className="space-y-1 mb-3">
-          <p className="text-sm">
-            <span className="text-muted-foreground">Product:</span>{" "}
-            <span className="font-semibold">{confirmation.sku_name}</span>
+      {hasAlternatives ? (
+        <div className="p-4 rounded-lg bg-orange-600/20 border-2 border-orange-600 text-center mb-4">
+          <p className="text-orange-400 text-xl font-bold mb-1">
+            Meerdere matches
           </p>
-          <p className="text-sm">
-            <span className="text-muted-foreground">SKU:</span>{" "}
-            <span className="font-mono">{confirmation.sku_code}</span>
-          </p>
-          <p className="text-sm">
-            <span className="text-muted-foreground">Zekerheid:</span>{" "}
-            {Math.round(confirmation.confidence * 100)}%
+          <p className="text-orange-300 text-sm">
+            Vergelijkbare producten gevonden — welke doos is dit?
           </p>
         </div>
+      ) : (
+        <div className="p-4 rounded-lg bg-yellow-600/20 border-2 border-yellow-600 text-center mb-4">
+          <p className="text-yellow-400 text-xl font-bold mb-1">
+            Controleer match
+          </p>
+          <p className="text-yellow-300 text-sm">
+            Onzekere match — bevestig handmatig
+          </p>
+        </div>
+      )}
 
-        <p className="text-xs text-muted-foreground mb-2 font-semibold">
-          Is dit dezelfde doos?
-        </p>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <p className="text-xs text-muted-foreground mb-1 text-center">Uw scan</p>
-            <div className="aspect-square rounded-lg overflow-hidden bg-black">
-              <img
-                src={confirmation.scan_image_url}
-                alt="Scan"
-                className="w-full h-full object-cover"
-              />
+      {/* Scan image */}
+      <Card className="p-4 mb-4">
+        <p className="text-xs text-muted-foreground mb-2 font-semibold">Uw scan</p>
+        <div className="aspect-square rounded-lg overflow-hidden bg-black max-w-[200px] mx-auto">
+          <img
+            src={confirmation.scan_image_url}
+            alt="Scan"
+            className="w-full h-full object-cover"
+          />
+        </div>
+      </Card>
+
+      {hasAlternatives ? (
+        <>
+          {/* Best match */}
+          <Card className="p-4 mb-3 border-2 border-green-600/50">
+            <div className="space-y-1 mb-3">
+              <p className="text-sm font-semibold text-green-400">Beste match</p>
+              <p className="text-sm">
+                <span className="text-muted-foreground">Product:</span>{" "}
+                <span className="font-semibold">{confirmation.sku_name}</span>
+              </p>
+              <p className="text-sm">
+                <span className="text-muted-foreground">SKU:</span>{" "}
+                <span className="font-mono">{confirmation.sku_code}</span>
+              </p>
+              <p className="text-sm">
+                <span className="text-muted-foreground">Zekerheid:</span>{" "}
+                {Math.round(confirmation.confidence * 100)}%
+              </p>
             </div>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground mb-1 text-center">Referentie</p>
-            <div className="aspect-square rounded-lg overflow-hidden bg-black">
+            {confirmation.reference_image_url && (
+              <div className="aspect-square rounded-lg overflow-hidden bg-black max-w-[160px] mx-auto">
+                <img
+                  src={confirmation.reference_image_url}
+                  alt="Referentie"
+                  className="w-full h-full object-cover"
+                />
+              </div>
+            )}
+            <Button
+              size="lg"
+              className="w-full h-12 text-base bg-green-600 hover:bg-green-700 mt-3"
+              onClick={handleConfirm}
+              disabled={confirming}
+            >
+              {confirming ? "Boeken..." : `Dit is ${confirmation.sku_name}`}
+            </Button>
+          </Card>
+
+          {/* Alternatives */}
+          {confirmation.alternatives!.map((alt) => (
+            <Card key={alt.sku_id} className="p-4 mb-3 border border-muted">
+              <div className="space-y-1 mb-3">
+                <p className="text-sm">
+                  <span className="text-muted-foreground">Product:</span>{" "}
+                  <span className="font-semibold">{alt.sku_name}</span>
+                </p>
+                <p className="text-sm">
+                  <span className="text-muted-foreground">SKU:</span>{" "}
+                  <span className="font-mono">{alt.sku_code}</span>
+                </p>
+                <p className="text-sm">
+                  <span className="text-muted-foreground">Zekerheid:</span>{" "}
+                  {Math.round(alt.confidence * 100)}%
+                </p>
+              </div>
+              {alt.reference_image_url && (
+                <div className="aspect-square rounded-lg overflow-hidden bg-black max-w-[160px] mx-auto">
+                  <img
+                    src={alt.reference_image_url}
+                    alt="Referentie"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              )}
+            </Card>
+          ))}
+
+          <Button
+            variant="destructive"
+            size="lg"
+            className="w-full h-14 text-lg mt-2"
+            onClick={onReject}
+            disabled={confirming}
+          >
+            Geen van deze — opnieuw scannen
+          </Button>
+        </>
+      ) : (
+        <>
+          <Card className="p-4 mb-4">
+            <div className="space-y-1 mb-3">
+              <p className="text-sm">
+                <span className="text-muted-foreground">Product:</span>{" "}
+                <span className="font-semibold">{confirmation.sku_name}</span>
+              </p>
+              <p className="text-sm">
+                <span className="text-muted-foreground">SKU:</span>{" "}
+                <span className="font-mono">{confirmation.sku_code}</span>
+              </p>
+              <p className="text-sm">
+                <span className="text-muted-foreground">Zekerheid:</span>{" "}
+                {Math.round(confirmation.confidence * 100)}%
+              </p>
+            </div>
+
+            <p className="text-xs text-muted-foreground mb-2 font-semibold">
+              Is dit dezelfde doos?
+            </p>
+            <div className="aspect-square rounded-lg overflow-hidden bg-black max-w-[200px] mx-auto">
               {confirmation.reference_image_url ? (
                 <img
                   src={confirmation.reference_image_url}
@@ -474,29 +574,29 @@ function ConfirmStep({
                 </div>
               )}
             </div>
-          </div>
-        </div>
-      </Card>
+          </Card>
 
-      <div className="flex flex-col gap-3">
-        <Button
-          size="lg"
-          className="w-full h-14 text-lg bg-green-600 hover:bg-green-700"
-          onClick={handleConfirm}
-          disabled={confirming}
-        >
-          {confirming ? "Boeken..." : "Ja, dit klopt"}
-        </Button>
-        <Button
-          variant="destructive"
-          size="lg"
-          className="w-full h-14 text-lg"
-          onClick={onReject}
-          disabled={confirming}
-        >
-          Nee, opnieuw scannen
-        </Button>
-      </div>
+          <div className="flex flex-col gap-3">
+            <Button
+              size="lg"
+              className="w-full h-14 text-lg bg-green-600 hover:bg-green-700"
+              onClick={handleConfirm}
+              disabled={confirming}
+            >
+              {confirming ? "Boeken..." : "Ja, dit klopt"}
+            </Button>
+            <Button
+              variant="destructive"
+              size="lg"
+              className="w-full h-14 text-lg"
+              onClick={onReject}
+              disabled={confirming}
+            >
+              Nee, opnieuw scannen
+            </Button>
+          </div>
+        </>
+      )}
     </>
   );
 }

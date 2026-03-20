@@ -14,7 +14,7 @@ from app.database import get_db
 from app.events import publish_event
 from app.models import SKU, Booking, Order, OrderLine, ReferenceImage, User
 from app.routers.skus import _sku_to_response
-from app.schemas import BookingConfirmation, BookingResponse, ConfirmBookingRequest, MatchResult, SKUResponse
+from app.schemas import AlternativeMatch, BookingConfirmation, BookingResponse, ConfirmBookingRequest, MatchResult, SKUResponse
 from langfuse import observe, propagate_attributes
 
 from app.services.embedding import assess_description_quality, process_image
@@ -157,18 +157,40 @@ async def identify_box(
         if matched_sku is None:
             return None
 
-        # Flag for human confirmation if description quality is low or confidence is low
+        # Flag for human confirmation if description quality is low, confidence is low,
+        # or there are close rival matches (ambiguity).
         CONFIRM_THRESHOLD = 0.84
         quality = assess_description_quality(description)
-        needs_confirmation = quality == "low" or confidence < CONFIRM_THRESHOLD
-        confirmation_reason = None
+        reasons = []
+        alternatives: list[AlternativeMatch] = []
+
+        if quality == "low":
+            reasons.append("low-quality description")
+        if confidence < CONFIRM_THRESHOLD:
+            reasons.append(f"low confidence ({confidence:.2f} < {CONFIRM_THRESHOLD})")
+
+        # Check for ambiguous matches: if #2 is within ambiguity_margin of #1
+        if len(candidates) >= 2:
+            gap = candidates[0][1] - candidates[1][1]
+            if gap < settings.ambiguity_margin:
+                rival = candidates[1]
+                reasons.append(
+                    f"ambiguous match ({rival[0].sku_code} at {rival[1]:.3f} is only {gap:.3f} away)"
+                )
+                # Include all close rivals as alternatives
+                for s, sim, img_path, _ref_desc in candidates[1:]:
+                    if candidates[0][1] - sim < settings.ambiguity_margin:
+                        alternatives.append(AlternativeMatch(
+                            sku_id=s.id,
+                            sku_code=s.sku_code,
+                            sku_name=s.name,
+                            confidence=sim,
+                            reference_image_url=_reference_image_url(img_path),
+                        ))
+
+        needs_confirmation = len(reasons) > 0
+        confirmation_reason = ", ".join(reasons) if reasons else None
         if needs_confirmation:
-            reasons = []
-            if quality == "low":
-                reasons.append("low-quality description")
-            if confidence < CONFIRM_THRESHOLD:
-                reasons.append(f"low confidence ({confidence:.2f} < {CONFIRM_THRESHOLD})")
-            confirmation_reason = ", ".join(reasons)
             logger.info(
                 "Identify: SKU %s flagged for confirmation: %s",
                 matched_sku.sku_code, confirmation_reason,
@@ -181,6 +203,7 @@ async def identify_box(
             confidence=confidence,
             needs_confirmation=needs_confirmation,
             confirmation_reason=confirmation_reason,
+            alternatives=alternatives,
         )
 
 
@@ -271,16 +294,38 @@ async def book_box(
                 "Doos niet herkend — geen match gevonden met SKUs in deze order",
             )
 
-        # Gate: require human confirmation if description quality is low OR confidence is low
+        # Gate: require human confirmation if description quality is low,
+        # confidence is low, or there are close rival matches (ambiguity).
         CONFIRM_THRESHOLD = 0.84
         quality = assess_description_quality(description)
-        needs_confirmation = quality == "low" or confidence < CONFIRM_THRESHOLD
+        reason: list[str] = []
+        alternatives: list[AlternativeMatch] = []
+
+        if quality == "low":
+            reason.append("low-quality description")
+        if confidence < CONFIRM_THRESHOLD:
+            reason.append(f"low confidence ({confidence:.2f} < {CONFIRM_THRESHOLD})")
+
+        # Check for ambiguous matches: if #2 is within ambiguity_margin of #1
+        if len(candidates) >= 2:
+            gap = candidates[0][1] - candidates[1][1]
+            if gap < settings.ambiguity_margin:
+                rival = candidates[1]
+                reason.append(
+                    f"ambiguous match ({rival[0].sku_code} at {rival[1]:.3f} is only {gap:.3f} away)"
+                )
+                for s, sim, img_path, _ref_desc in candidates[1:]:
+                    if candidates[0][1] - sim < settings.ambiguity_margin:
+                        alternatives.append(AlternativeMatch(
+                            sku_id=s.id,
+                            sku_code=s.sku_code,
+                            sku_name=s.name,
+                            confidence=sim,
+                            reference_image_url=_reference_image_url(img_path),
+                        ))
+
+        needs_confirmation = len(reason) > 0
         if needs_confirmation:
-            reason = []
-            if quality == "low":
-                reason.append("low-quality description")
-            if confidence < CONFIRM_THRESHOLD:
-                reason.append(f"low confidence ({confidence:.2f} < {CONFIRM_THRESHOLD})")
             logger.info(
                 "SKU %s flagged for confirmation: %s",
                 matched_sku.sku_code, ", ".join(reason),
@@ -300,6 +345,7 @@ async def book_box(
                 confidence=confidence,
                 scan_image_url=_scan_url(scan_path),
                 reference_image_url=_reference_image_url(matched_image_path),
+                alternatives=alternatives,
             )
 
         # Find matching order line with remaining quantity

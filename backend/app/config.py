@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     gemini_vision_model: str = "gemini-2.5-flash"
     gemini_embedding_model: str = "gemini-embedding-001"
     match_threshold: float = 0.80
+    ambiguity_margin: float = 0.05
     upload_dir: str = "/app/uploads"
 
     # Kafka

@@ -155,6 +155,14 @@ class ReferenceImageResponse(BaseModel):
 
 
 # --- Vision / Identification ---
+class AlternativeMatch(BaseModel):
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    confidence: float
+    reference_image_url: str = ""
+
+
 class MatchResult(BaseModel):
     sku_id: int
     sku_code: str
@@ -162,6 +170,7 @@ class MatchResult(BaseModel):
     confidence: float
     needs_confirmation: bool = False
     confirmation_reason: str | None = None
+    alternatives: list[AlternativeMatch] = []
 
 
 # --- CSV Row ---
@@ -267,6 +276,7 @@ class BookingConfirmation(BaseModel):
     confidence: float
     scan_image_url: str
     reference_image_url: str
+    alternatives: list[AlternativeMatch] = []
 
 
 class ConfirmBookingRequest(BaseModel):
