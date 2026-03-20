@@ -279,9 +279,11 @@ async def book_box(
         if candidates and candidates[0][1] >= settings.match_threshold:
             matched_sku, confidence, matched_image_path, matched_ref_desc = candidates[0]
 
+        # Always run an unrestricted search to detect cross-order ambiguity
+        all_candidates = find_best_matches(db, embedding, top_n=5)
+
         if matched_sku is None:
             # Check if the box matches a SKU outside this order
-            all_candidates = find_best_matches(db, embedding, top_n=1)
             if all_candidates and all_candidates[0][1] >= settings.match_threshold:
                 wrong_sku = all_candidates[0][0]
                 raise HTTPException(
@@ -306,7 +308,7 @@ async def book_box(
         if confidence < CONFIRM_THRESHOLD:
             reason.append(f"low confidence ({confidence:.2f} < {CONFIRM_THRESHOLD})")
 
-        # Check for ambiguous matches: if #2 is within ambiguity_margin of #1
+        # Check for ambiguous matches within the order candidates
         if len(candidates) >= 2:
             gap = candidates[0][1] - candidates[1][1]
             if gap < settings.ambiguity_margin:
@@ -323,6 +325,24 @@ async def book_box(
                             confidence=sim,
                             reference_image_url=_reference_image_url(img_path),
                         ))
+
+        # Cross-check: if the unrestricted catalog has a better or close match
+        # with a *different* SKU, flag ambiguity even when the order has only one SKU.
+        for s, sim, img_path, _ref_desc in all_candidates:
+            if s.id == matched_sku.id:
+                continue
+            if sim >= confidence - settings.ambiguity_margin:
+                if not any(a.sku_id == s.id for a in alternatives):
+                    reason.append(
+                        f"better match outside order ({s.sku_code} at {sim:.3f} vs order match at {confidence:.3f})"
+                    )
+                    alternatives.append(AlternativeMatch(
+                        sku_id=s.id,
+                        sku_code=s.sku_code,
+                        sku_name=s.name,
+                        confidence=sim,
+                        reference_image_url=_reference_image_url(img_path),
+                    ))
 
         needs_confirmation = len(reason) > 0
         if needs_confirmation:
