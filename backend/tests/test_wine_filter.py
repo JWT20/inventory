@@ -232,6 +232,29 @@ class TestReferenceUploadPackageFilter:
         assert resp.status_code == 409
         assert "OTHER-SKU-001" in resp.json()["detail"]
 
+    def test_duplicate_override_accepted(self, client, merchant_token, sample_sku, tmp_path):
+        """User can override duplicate check with skip_duplicate_check=true."""
+        from app.models import SKU
+        fake_sku = MagicMock(spec=SKU)
+        fake_sku.sku_code = "OTHER-SKU-001"
+
+        with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_package), \
+             patch("app.routers.skus.generate_embedding", side_effect=_mock_generate_embedding), \
+             patch("app.routers.skus._check_duplicate_embedding") as mock_dup, \
+             patch("app.routers.skus.settings") as mock_settings:
+            mock_settings.upload_dir = str(tmp_path)
+
+            resp = client.post(
+                f"/api/skus/{sample_sku.id}/images",
+                files={"file": ("wine.jpg", io.BytesIO(FAKE_IMAGE), "image/jpeg")},
+                data={"skip_duplicate_check": "true"},
+                headers=auth_header(merchant_token),
+            )
+
+        assert resp.status_code == 201
+        # _check_duplicate_embedding should NOT have been called
+        mock_dup.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # POST /api/receiving/identify — scan with package filter

@@ -169,9 +169,12 @@ export const api = {
 
   // Reference images
   listImages: (skuId: number) => request(`/skus/${skuId}/images`),
-  uploadImage: (skuId: number, file: Blob, skipWineCheck = false) => {
-    if (skipWineCheck) {
-      return uploadWithFields(`/skus/${skuId}/images`, file, { skip_wine_check: "true" }, "image.jpg");
+  uploadImage: (skuId: number, file: Blob, skipWineCheck = false, skipDuplicateCheck = false) => {
+    const fields: Record<string, string> = {};
+    if (skipWineCheck) fields.skip_wine_check = "true";
+    if (skipDuplicateCheck) fields.skip_duplicate_check = "true";
+    if (Object.keys(fields).length > 0) {
+      return uploadWithFields(`/skus/${skuId}/images`, file, fields, "image.jpg");
     }
     return upload(`/skus/${skuId}/images`, file, "image.jpg");
   },
