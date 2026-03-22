@@ -207,7 +207,8 @@ function SKUDialog({
       }
 
       if (stagedFiles.length > 0) {
-        await uploadImages(skuId, stagedFiles, false);
+        const hasRejections = await uploadImages(skuId, stagedFiles, false);
+        if (hasRejections) return;
       }
 
       onSaved();
@@ -277,8 +278,9 @@ function SKUDialog({
 
   async function forceUploadRejected() {
     if (!currentId || wineRejected.length === 0) return;
-    await uploadImages(currentId, wineRejected, true);
+    const hasMore = await uploadImages(currentId, wineRejected, true);
     setWineRejected([]);
+    if (!hasMore) onSaved();
   }
 
   function dismissRejected() {
@@ -288,8 +290,9 @@ function SKUDialog({
 
   async function forceUploadDuplicate() {
     if (!currentId || duplicateRejected.length === 0) return;
-    await uploadImages(currentId, duplicateRejected, false, true);
+    const hasMore = await uploadImages(currentId, duplicateRejected, false, true);
     setDuplicateRejected([]);
+    if (!hasMore) onSaved();
   }
 
   function dismissDuplicate() {
