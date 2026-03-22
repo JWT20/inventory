@@ -161,6 +161,7 @@ class AlternativeMatch(BaseModel):
     sku_name: str
     confidence: float
     reference_image_url: str = ""
+    confirmation_token: str = ""
 
 
 class MatchResult(BaseModel):
