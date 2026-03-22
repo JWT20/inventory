@@ -202,6 +202,7 @@ def upload_reference_image(
     sku_id: int,
     file: UploadFile,
     skip_wine_check: bool = Form(False),
+    skip_duplicate_check: bool = Form(False),
     db: Session = Depends(get_db),
     user: User = Depends(require_product_manager),
 ):
@@ -224,12 +225,13 @@ def upload_reference_image(
         embedding = generate_embedding(description)
 
     # Duplicate detection via embedding similarity
-    dup_sku, similarity = _check_duplicate_embedding(db, embedding, exclude_sku_id=sku_id)
-    if dup_sku:
-        raise HTTPException(
-            409,
-            f"Deze foto lijkt te veel op een foto van {dup_sku.sku_code} (gelijkenis: {similarity:.0%})",
-        )
+    if not skip_duplicate_check:
+        dup_sku, similarity = _check_duplicate_embedding(db, embedding, exclude_sku_id=sku_id)
+        if dup_sku:
+            raise HTTPException(
+                409,
+                f"Deze foto lijkt te veel op een foto van {dup_sku.sku_code} (gelijkenis: {similarity:.0%})",
+            )
 
     # Save image to disk
     ref_dir = os.path.join(settings.upload_dir, "reference_images", str(sku_id))

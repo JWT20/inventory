@@ -134,6 +134,7 @@ function SKUDialog({
   const [uploading, setUploading] = useState(false);
   const [stagedFiles, setStagedFiles] = useState<{ file: File; preview: string }[]>([]);
   const [wineRejected, setWineRejected] = useState<{ file: File; preview: string }[]>([]);
+  const [duplicateRejected, setDuplicateRejected] = useState<{ file: File; preview: string; detail: string }[]>([]);
 
   useEffect(() => {
     if (open && sku) {
@@ -159,6 +160,10 @@ function SKUDialog({
         return [];
       });
       setWineRejected((prev) => {
+        prev.forEach((s) => URL.revokeObjectURL(s.preview));
+        return [];
+      });
+      setDuplicateRejected((prev) => {
         prev.forEach((s) => URL.revokeObjectURL(s.preview));
         return [];
       });
@@ -220,15 +225,17 @@ function SKUDialog({
     skuId: number,
     files: { file: File; preview: string }[],
     skipWineCheck: boolean,
+    skipDuplicateCheck: boolean = false,
   ): Promise<boolean> {
     setUploading(true);
     const infoToast = toast("Beelden uploaden en verwerken...");
     const results = await Promise.allSettled(
-      files.map((staged) => api.uploadImage(skuId, staged.file, skipWineCheck)),
+      files.map((staged) => api.uploadImage(skuId, staged.file, skipWineCheck, skipDuplicateCheck)),
     );
     toast.dismiss(infoToast);
 
-    const rejected: { file: File; preview: string }[] = [];
+    const wineRejects: { file: File; preview: string }[] = [];
+    const dupRejects: { file: File; preview: string; detail: string }[] = [];
     const otherErrors: string[] = [];
     let successCount = 0;
 
@@ -239,10 +246,9 @@ function SKUDialog({
       } else {
         const msg = r.reason instanceof Error ? r.reason.message : "";
         if (msg.includes(DUPLICATE_MSG)) {
-          URL.revokeObjectURL(files[i].preview);
-          otherErrors.push(msg);
+          dupRejects.push({ ...files[i], detail: msg });
         } else if (msg.includes(WINE_REJECTION_MSG)) {
-          rejected.push(files[i]);
+          wineRejects.push(files[i]);
         } else {
           URL.revokeObjectURL(files[i].preview);
           otherErrors.push(msg || "Upload mislukt");
@@ -256,14 +262,17 @@ function SKUDialog({
     if (otherErrors.length > 0) {
       toast.error(otherErrors[0]);
     }
-    if (rejected.length > 0) {
-      setWineRejected(rejected);
+    if (wineRejects.length > 0) {
+      setWineRejected(wineRejects);
+    }
+    if (dupRejects.length > 0) {
+      setDuplicateRejected(dupRejects);
     }
 
     setStagedFiles([]);
     setUploading(false);
     loadImages(skuId);
-    return rejected.length > 0;
+    return wineRejects.length > 0 || dupRejects.length > 0;
   }
 
   async function forceUploadRejected() {
@@ -275,6 +284,17 @@ function SKUDialog({
   function dismissRejected() {
     wineRejected.forEach((s) => URL.revokeObjectURL(s.preview));
     setWineRejected([]);
+  }
+
+  async function forceUploadDuplicate() {
+    if (!currentId || duplicateRejected.length === 0) return;
+    await uploadImages(currentId, duplicateRejected, false, true);
+    setDuplicateRejected([]);
+  }
+
+  function dismissDuplicate() {
+    duplicateRejected.forEach((s) => URL.revokeObjectURL(s.preview));
+    setDuplicateRejected([]);
   }
 
   function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -504,6 +524,45 @@ function SKUDialog({
                       variant="ghost"
                       type="button"
                       onClick={dismissRejected}
+                    >
+                      Annuleren
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {duplicateRejected.length > 0 && (
+                <div className="mt-3 p-3 rounded-lg border-2 border-orange-600/50 bg-orange-600/10">
+                  <p className="text-sm font-medium mb-1">
+                    Mogelijk duplicaat gevonden
+                  </p>
+                  <div className="flex gap-2 mb-2">
+                    {duplicateRejected.map((f, i) => (
+                      <img
+                        key={i}
+                        src={f.preview}
+                        alt="duplicate"
+                        className="w-14 h-14 object-cover rounded border border-border"
+                      />
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    {duplicateRejected[0].detail}
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      type="button"
+                      disabled={uploading}
+                      onClick={forceUploadDuplicate}
+                    >
+                      Toch toevoegen
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      type="button"
+                      onClick={dismissDuplicate}
                     >
                       Annuleren
                     </Button>
