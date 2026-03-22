@@ -1,17 +1,14 @@
-import hashlib
-import io
 import logging
 import os
 import uuid
 
-import imagehash
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
-from PIL import Image, UnidentifiedImageError
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth import get_current_user, require_admin, require_product_manager
 from app.config import settings
-from app.database import get_db, SessionLocal
+from app.database import get_db
 from app.events import publish_event
 from app.models import SKU, ReferenceImage, User
 from app.schemas import (
@@ -26,25 +23,41 @@ from langfuse import observe
 
 from app.services.embedding import (
     assess_description_quality,
-    classify_image,
+    classify_and_describe,
     describe_and_embed,
-    process_image,
+    generate_embedding,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/skus", tags=["skus"])
 
+# Threshold for considering two images as duplicates (cosine similarity)
+DUPLICATE_SIMILARITY_THRESHOLD = 0.90
 
-def compute_image_hash(image_bytes: bytes) -> str:
-    """Compute a perceptual hash for duplicate detection.
 
-    Falls back to SHA-256 if the image bytes cannot be decoded by PIL.
+def _check_duplicate_embedding(
+    db: Session, embedding: list[float], exclude_sku_id: int,
+) -> tuple[SKU | None, float]:
+    """Check if a similar image already exists on a different SKU.
+
+    Returns (matching_sku, similarity) or (None, 0.0).
     """
-    try:
-        img = Image.open(io.BytesIO(image_bytes))
-        return str(imagehash.phash(img))
-    except (UnidentifiedImageError, Exception):
-        return hashlib.sha256(image_bytes).hexdigest()[:16]
+    embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+    row = db.execute(
+        text("""
+            SELECT ri.sku_id, 1 - (ri.embedding <=> :embedding) AS similarity
+            FROM reference_images ri
+            WHERE ri.embedding IS NOT NULL
+              AND ri.sku_id != :exclude_sku_id
+            ORDER BY ri.embedding <=> :embedding
+            LIMIT 1
+        """),
+        {"embedding": embedding_str, "exclude_sku_id": exclude_sku_id},
+    ).first()
+    if row and row[1] >= DUPLICATE_SIMILARITY_THRESHOLD:
+        sku = db.get(SKU, row[0])
+        return sku, float(row[1])
+    return None, 0.0
 
 
 def _sku_to_response(sku: SKU) -> SKUResponse:
@@ -183,65 +196,11 @@ def delete_sku(
     )
 
 
-def _process_reference_image_background(
-    image_id: int, image_path: str, sku_code: str, force: bool = False,
-) -> None:
-    """Background task: run vision + embedding and update the DB record."""
-    db = SessionLocal()
-    try:
-        ref_image = db.get(ReferenceImage, image_id)
-        if not ref_image:
-            logger.error("Reference image %d not found for background processing", image_id)
-            return
-        ref_image.processing_status = "processing"
-        db.commit()
-
-        with open(image_path, "rb") as f:
-            image_bytes = f.read()
-
-        if force:
-            # User overrode classification — skip classify, go straight to describe + embed
-            description, embedding, quality = describe_and_embed(image_bytes)
-            ref_image.vision_description = description
-            ref_image.embedding = embedding
-            ref_image.description_quality = quality
-            ref_image.processing_status = "done"
-            db.commit()
-            logger.info("Background processing complete (overridden) for reference image %d (SKU %s, quality=%s)", image_id, sku_code, quality)
-            return
-
-        description, embedding, is_package = process_image(image_bytes)
-        ref_image.vision_description = description
-        if not is_package:
-            ref_image.processing_status = "failed"
-            db.commit()
-            logger.warning("Background processing rejected non-package image %d (SKU %s)", image_id, sku_code)
-            return
-        quality = assess_description_quality(description)
-        ref_image.embedding = embedding
-        ref_image.description_quality = quality
-        ref_image.processing_status = "done"
-        db.commit()
-        logger.info("Background processing complete for reference image %d (SKU %s, quality=%s)", image_id, sku_code, quality)
-    except Exception:
-        logger.exception("Background processing failed for reference image %d (SKU %s)", image_id, sku_code)
-        try:
-            ref_image = db.get(ReferenceImage, image_id)
-            if ref_image:
-                ref_image.processing_status = "failed"
-                db.commit()
-        except Exception:
-            logger.exception("Failed to mark reference image %d as failed", image_id)
-    finally:
-        db.close()
-
-
 @router.post("/{sku_id}/images", response_model=ReferenceImageResponse, status_code=201)
 @observe()
 def upload_reference_image(
     sku_id: int,
     file: UploadFile,
-    background_tasks: BackgroundTasks,
     skip_wine_check: bool = Form(False),
     db: Session = Depends(get_db),
     user: User = Depends(require_product_manager),
@@ -254,27 +213,23 @@ def upload_reference_image(
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
 
-    # Duplicate image detection via perceptual hash
-    img_hash = compute_image_hash(image_bytes)
-    duplicate = (
-        db.query(ReferenceImage)
-        .join(SKU)
-        .filter(ReferenceImage.image_hash == img_hash, ReferenceImage.sku_id != sku_id)
-        .first()
-    )
-    if duplicate:
-        dup_sku = db.get(SKU, duplicate.sku_id)
-        dup_label = dup_sku.sku_code if dup_sku else f"SKU #{duplicate.sku_id}"
+    # Classify + describe + embed synchronously, then check for duplicates
+    if skip_wine_check:
+        description, embedding, quality = describe_and_embed(image_bytes)
+    else:
+        is_package, description = classify_and_describe(image_bytes)
+        if not is_package:
+            raise HTTPException(400, f"Dit is geen doos of verpakking ({description}) — upload alleen foto's van dozen")
+        quality = assess_description_quality(description)
+        embedding = generate_embedding(description)
+
+    # Duplicate detection via embedding similarity
+    dup_sku, similarity = _check_duplicate_embedding(db, embedding, exclude_sku_id=sku_id)
+    if dup_sku:
         raise HTTPException(
             409,
-            f"Deze foto is al gekoppeld aan {dup_label}",
+            f"Deze foto lijkt te veel op een foto van {dup_sku.sku_code} (gelijkenis: {similarity:.0%})",
         )
-
-    # Synchronous package classification check before saving (can be overridden)
-    if not skip_wine_check:
-        is_package, summary = classify_image(image_bytes)
-        if not is_package:
-            raise HTTPException(400, f"Dit is geen doos of verpakking ({summary}) — upload alleen foto's van dozen")
 
     # Save image to disk
     ref_dir = os.path.join(settings.upload_dir, "reference_images", str(sku_id))
@@ -284,12 +239,14 @@ def upload_reference_image(
     with open(image_path, "wb") as f:
         f.write(image_bytes)
 
-    # Create DB record immediately with pending status
+    # Create DB record with description + embedding already filled
     ref_image = ReferenceImage(
         sku_id=sku_id,
         image_path=image_path,
-        image_hash=img_hash,
-        processing_status="pending",
+        vision_description=description,
+        embedding=embedding,
+        description_quality=quality,
+        processing_status="done",
         wine_check_overridden=skip_wine_check,
     )
     db.add(ref_image)
@@ -302,12 +259,6 @@ def upload_reference_image(
         user=user,
         resource_type="sku",
         resource_id=sku_id,
-    )
-
-    # Process vision + embedding in background
-    background_tasks.add_task(
-        _process_reference_image_background, ref_image.id, image_path, sku.sku_code,
-        force=skip_wine_check,
     )
 
     return ref_image
