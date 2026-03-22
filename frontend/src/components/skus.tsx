@@ -214,7 +214,7 @@ function SKUDialog({
   }
 
   const WINE_REJECTION_MSG = "Dit is geen wijndoos";
-  const DUPLICATE_MSG = "Deze foto is al gekoppeld aan";
+  const DUPLICATE_MSG = "Deze foto lijkt te veel op";
 
   async function uploadImages(
     skuId: number,

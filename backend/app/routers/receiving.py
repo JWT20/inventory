@@ -13,7 +13,7 @@ from app.config import settings
 from app.database import get_db
 from app.events import publish_event
 from app.models import SKU, Booking, Order, OrderLine, ReferenceImage, User
-from app.routers.skus import _sku_to_response, compute_image_hash
+from app.routers.skus import _check_duplicate_embedding, _sku_to_response
 from app.schemas import AlternativeMatch, BookingConfirmation, BookingResponse, ConfirmBookingRequest, MatchResult, SKUResponse
 from langfuse import observe, propagate_attributes
 
@@ -556,20 +556,25 @@ async def create_product_inline(
 
     image_bytes = _read_image(file)
 
-    # Duplicate image detection via perceptual hash
-    img_hash = compute_image_hash(image_bytes)
-    duplicate = (
-        db.query(ReferenceImage)
-        .join(SKU)
-        .filter(ReferenceImage.image_hash == img_hash)
-        .first()
-    )
-    if duplicate:
-        dup_sku = db.get(SKU, duplicate.sku_id)
-        dup_label = dup_sku.sku_code if dup_sku else f"SKU #{duplicate.sku_id}"
+    # Process with Vision API
+    logger.info("Processing reference image for new SKU %s", sku_code)
+    try:
+        vision_description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
+    except Exception:
+        logger.exception("Failed to process image for new SKU %s", sku_code)
+        raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
+
+    if not is_package:
+        db.rollback()
+        raise HTTPException(400, "Dit is geen doos of verpakking — upload alleen foto's van dozen")
+
+    # Duplicate detection via embedding similarity (check against all existing SKUs)
+    dup_sku, similarity = _check_duplicate_embedding(db, embedding, exclude_sku_id=sku.id)
+    if dup_sku:
+        db.rollback()
         raise HTTPException(
             409,
-            f"Deze foto is al gekoppeld aan {dup_label}",
+            f"Deze foto lijkt te veel op een foto van {dup_sku.sku_code} (gelijkenis: {similarity:.0%})",
         )
 
     # Save reference image
@@ -580,26 +585,12 @@ async def create_product_inline(
     with open(image_path, "wb") as f:
         f.write(image_bytes)
 
-    # Process with Vision API
-    logger.info("Processing reference image for new SKU %s", sku_code)
-    try:
-        vision_description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
-    except Exception:
-        logger.exception("Failed to process image for new SKU %s", sku_code)
-        raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
-
-    if not is_package:
-        # Roll back the SKU creation
-        db.rollback()
-        raise HTTPException(400, "Dit is geen doos of verpakking — upload alleen foto's van dozen")
-
     from app.services.embedding import assess_description_quality
     quality = assess_description_quality(vision_description)
 
     ref_image = ReferenceImage(
         sku_id=sku.id,
         image_path=image_path,
-        image_hash=img_hash,
         vision_description=vision_description,
         embedding=embedding,
         description_quality=quality,

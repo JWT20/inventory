@@ -8,6 +8,7 @@ Verifies that:
 - parse_classify_response correctly extracts the is_package flag
 - describe_image backward compat works (classify + describe)
 - assess_description_quality returns correct quality levels
+- Duplicate images across SKUs are rejected
 """
 
 import io
@@ -92,25 +93,42 @@ class TestAssessDescriptionQuality:
 
 FAKE_IMAGE = b"\xff\xd8\xff\xe0" + b"\x00" * 100  # minimal JPEG-like bytes
 
-
-def _mock_classify_package(image_bytes):
-    """Simulate Gemini classifying an image as a package."""
-    return (True, "wine box cardboard")
+FAKE_EMBEDDING = [0.1] * 3072
 
 
-def _mock_classify_not_package(image_bytes):
+def _mock_classify_and_describe_package(image_bytes):
+    """Simulate Gemini classifying + describing an image as a package."""
+    return (True, "White wine box with bull logo, Rioja CVNE 2019")
+
+
+def _mock_classify_and_describe_not_package(image_bytes):
     """Simulate Gemini classifying an image as NOT a package."""
     return (False, "digital clock")
 
 
+def _mock_generate_embedding(text):
+    """Return a fake embedding vector."""
+    return FAKE_EMBEDDING
+
+
+def _mock_describe_and_embed(image_bytes):
+    """Mock for skip_wine_check path."""
+    return ("White wine box with bull logo", FAKE_EMBEDDING, "high")
+
+
 def _mock_process_package(image_bytes):
     """Full pipeline mock for package image."""
-    return ("White box with bull logo, Rioja", [0.1] * 3072, True)
+    return ("White box with bull logo, Rioja", FAKE_EMBEDDING, True)
 
 
 def _mock_process_not_package(image_bytes):
     """Full pipeline mock for non-package image."""
     return ("digital clock", None, False)
+
+
+def _mock_no_duplicate(db, embedding, exclude_sku_id):
+    """Simulate no duplicate found."""
+    return (None, 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -120,9 +138,10 @@ def _mock_process_not_package(image_bytes):
 class TestReferenceUploadPackageFilter:
     def test_package_image_accepted(self, client, merchant_token, sample_sku, tmp_path):
         """A box image should be accepted and saved."""
-        with patch("app.routers.skus.classify_image", side_effect=_mock_classify_package), \
-             patch("app.routers.skus.settings") as mock_settings, \
-             patch("app.routers.skus._process_reference_image_background"):
+        with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_package), \
+             patch("app.routers.skus.generate_embedding", side_effect=_mock_generate_embedding), \
+             patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_no_duplicate), \
+             patch("app.routers.skus.settings") as mock_settings:
             mock_settings.upload_dir = str(tmp_path)
 
             resp = client.post(
@@ -133,11 +152,11 @@ class TestReferenceUploadPackageFilter:
 
         assert resp.status_code == 201
         data = resp.json()
-        assert data["processing_status"] == "pending"
+        assert data["processing_status"] == "done"
 
     def test_non_package_image_rejected(self, client, merchant_token, sample_sku):
         """A non-package image (clock, candles) should be rejected with 400."""
-        with patch("app.routers.skus.classify_image", side_effect=_mock_classify_not_package):
+        with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_not_package):
             resp = client.post(
                 f"/api/skus/{sample_sku.id}/images",
                 files={"file": ("clock.jpg", io.BytesIO(FAKE_IMAGE), "image/jpeg")},
@@ -149,9 +168,10 @@ class TestReferenceUploadPackageFilter:
 
     def test_non_package_override_accepted(self, client, merchant_token, sample_sku, tmp_path):
         """User overrides rejection with skip_wine_check=true — should be accepted."""
-        with patch("app.routers.skus.classify_image") as mock_classify, \
-             patch("app.routers.skus.settings") as mock_settings, \
-             patch("app.routers.skus._process_reference_image_background"):
+        with patch("app.routers.skus.describe_and_embed", side_effect=_mock_describe_and_embed), \
+             patch("app.routers.skus.classify_and_describe") as mock_classify, \
+             patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_no_duplicate), \
+             patch("app.routers.skus.settings") as mock_settings:
             mock_settings.upload_dir = str(tmp_path)
 
             resp = client.post(
@@ -162,13 +182,13 @@ class TestReferenceUploadPackageFilter:
             )
 
         assert resp.status_code == 201
-        # classify_image should NOT have been called (wine check skipped)
+        # classify_and_describe should NOT have been called (wine check skipped)
         mock_classify.assert_not_called()
 
     def test_rejection_then_override_flow(self, client, merchant_token, sample_sku, tmp_path):
         """Full flow: upload rejected → user clicks 'Toch uploaden' → accepted."""
         # Step 1: First upload gets rejected
-        with patch("app.routers.skus.classify_image", side_effect=_mock_classify_not_package):
+        with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_not_package):
             resp1 = client.post(
                 f"/api/skus/{sample_sku.id}/images",
                 files={"file": ("box.jpg", io.BytesIO(FAKE_IMAGE), "image/jpeg")},
@@ -178,8 +198,9 @@ class TestReferenceUploadPackageFilter:
         assert "doos" in resp1.json()["detail"].lower()
 
         # Step 2: Same image re-uploaded with override
-        with patch("app.routers.skus.settings") as mock_settings, \
-             patch("app.routers.skus._process_reference_image_background"):
+        with patch("app.routers.skus.describe_and_embed", side_effect=_mock_describe_and_embed), \
+             patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_no_duplicate), \
+             patch("app.routers.skus.settings") as mock_settings:
             mock_settings.upload_dir = str(tmp_path)
 
             resp2 = client.post(
@@ -189,6 +210,27 @@ class TestReferenceUploadPackageFilter:
                 headers=auth_header(merchant_token),
             )
         assert resp2.status_code == 201
+
+    def test_duplicate_image_rejected(self, client, merchant_token, sample_sku):
+        """Uploading an image that matches another SKU should be rejected with 409."""
+        from app.models import SKU
+        fake_sku = MagicMock(spec=SKU)
+        fake_sku.sku_code = "OTHER-SKU-001"
+
+        def _mock_duplicate(db, embedding, exclude_sku_id):
+            return (fake_sku, 0.95)
+
+        with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_package), \
+             patch("app.routers.skus.generate_embedding", side_effect=_mock_generate_embedding), \
+             patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_duplicate):
+            resp = client.post(
+                f"/api/skus/{sample_sku.id}/images",
+                files={"file": ("wine.jpg", io.BytesIO(FAKE_IMAGE), "image/jpeg")},
+                headers=auth_header(merchant_token),
+            )
+
+        assert resp.status_code == 409
+        assert "OTHER-SKU-001" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
