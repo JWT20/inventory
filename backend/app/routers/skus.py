@@ -1,3 +1,4 @@
+import hashlib
 import io
 import logging
 import os
@@ -5,7 +6,7 @@ import uuid
 
 import imagehash
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth import get_current_user, require_admin, require_product_manager
@@ -35,9 +36,15 @@ router = APIRouter(prefix="/skus", tags=["skus"])
 
 
 def compute_image_hash(image_bytes: bytes) -> str:
-    """Compute a perceptual hash for duplicate detection."""
-    img = Image.open(io.BytesIO(image_bytes))
-    return str(imagehash.phash(img))
+    """Compute a perceptual hash for duplicate detection.
+
+    Falls back to SHA-256 if the image bytes cannot be decoded by PIL.
+    """
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        return str(imagehash.phash(img))
+    except (UnidentifiedImageError, Exception):
+        return hashlib.sha256(image_bytes).hexdigest()[:16]
 
 
 def _sku_to_response(sku: SKU) -> SKUResponse:
