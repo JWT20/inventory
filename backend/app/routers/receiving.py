@@ -358,6 +358,18 @@ async def book_box(
                 "user_id": user.id,
             }
             token = _signer.dumps(token_data)
+
+            # Generate a confirmation token for each alternative
+            for alt in alternatives:
+                alt_token_data = {
+                    "order_id": order_id,
+                    "sku_id": alt.sku_id,
+                    "confidence": round(alt.confidence, 4),
+                    "scan_image_path": scan_path,
+                    "user_id": user.id,
+                }
+                alt.confirmation_token = _signer.dumps(alt_token_data)
+
             return BookingConfirmation(
                 confirmation_token=token,
                 sku_code=matched_sku.sku_code,

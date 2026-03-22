@@ -32,6 +32,7 @@ interface AlternativeMatch {
   sku_name: string;
   confidence: number;
   reference_image_url: string;
+  confirmation_token: string;
 }
 
 interface ConfirmationData {
@@ -415,11 +416,11 @@ function ConfirmStep({
   const [confirming, setConfirming] = useState(false);
   const hasAlternatives = confirmation.alternatives && confirmation.alternatives.length > 0;
 
-  async function handleConfirm() {
+  async function handleConfirm(token?: string) {
     setConfirming(true);
     try {
       const booking: BookingResult = await api.confirmBooking(
-        confirmation.confirmation_token,
+        token ?? confirmation.confirmation_token,
       );
       onConfirmed(booking);
     } catch (err: unknown) {
@@ -527,6 +528,15 @@ function ConfirmStep({
                   />
                 </div>
               )}
+              <Button
+                size="lg"
+                className="w-full h-12 text-base mt-3"
+                variant="outline"
+                onClick={() => handleConfirm(alt.confirmation_token)}
+                disabled={confirming}
+              >
+                {confirming ? "Boeken..." : `Dit is ${alt.sku_name}`}
+              </Button>
             </Card>
           ))}
 
