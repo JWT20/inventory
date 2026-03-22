@@ -13,7 +13,7 @@ from app.config import settings
 from app.database import get_db
 from app.events import publish_event
 from app.models import SKU, Booking, Order, OrderLine, ReferenceImage, User
-from app.routers.skus import _sku_to_response
+from app.routers.skus import _sku_to_response, compute_image_hash
 from app.schemas import AlternativeMatch, BookingConfirmation, BookingResponse, ConfirmBookingRequest, MatchResult, SKUResponse
 from langfuse import observe, propagate_attributes
 
@@ -556,6 +556,22 @@ async def create_product_inline(
 
     image_bytes = _read_image(file)
 
+    # Duplicate image detection via perceptual hash
+    img_hash = compute_image_hash(image_bytes)
+    duplicate = (
+        db.query(ReferenceImage)
+        .join(SKU)
+        .filter(ReferenceImage.image_hash == img_hash)
+        .first()
+    )
+    if duplicate:
+        dup_sku = db.get(SKU, duplicate.sku_id)
+        dup_label = dup_sku.sku_code if dup_sku else f"SKU #{duplicate.sku_id}"
+        raise HTTPException(
+            409,
+            f"Deze foto is al gekoppeld aan {dup_label}",
+        )
+
     # Save reference image
     ref_dir = os.path.join(settings.upload_dir, "reference_images", str(sku.id))
     os.makedirs(ref_dir, exist_ok=True)
@@ -583,6 +599,7 @@ async def create_product_inline(
     ref_image = ReferenceImage(
         sku_id=sku.id,
         image_path=image_path,
+        image_hash=img_hash,
         vision_description=vision_description,
         embedding=embedding,
         description_quality=quality,

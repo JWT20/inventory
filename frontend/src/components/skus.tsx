@@ -214,6 +214,7 @@ function SKUDialog({
   }
 
   const WINE_REJECTION_MSG = "Dit is geen wijndoos";
+  const DUPLICATE_MSG = "Deze foto is al gekoppeld aan";
 
   async function uploadImages(
     skuId: number,
@@ -237,7 +238,10 @@ function SKUDialog({
         successCount++;
       } else {
         const msg = r.reason instanceof Error ? r.reason.message : "";
-        if (msg.includes(WINE_REJECTION_MSG)) {
+        if (msg.includes(DUPLICATE_MSG)) {
+          URL.revokeObjectURL(files[i].preview);
+          otherErrors.push(msg);
+        } else if (msg.includes(WINE_REJECTION_MSG)) {
           rejected.push(files[i]);
         } else {
           URL.revokeObjectURL(files[i].preview);

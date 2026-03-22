@@ -1,8 +1,12 @@
+import hashlib
+import io
 import logging
 import os
 import uuid
 
+import imagehash
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
+from PIL import Image, UnidentifiedImageError
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth import get_current_user, require_admin, require_product_manager
@@ -29,6 +33,18 @@ from app.services.embedding import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/skus", tags=["skus"])
+
+
+def compute_image_hash(image_bytes: bytes) -> str:
+    """Compute a perceptual hash for duplicate detection.
+
+    Falls back to SHA-256 if the image bytes cannot be decoded by PIL.
+    """
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        return str(imagehash.phash(img))
+    except (UnidentifiedImageError, Exception):
+        return hashlib.sha256(image_bytes).hexdigest()[:16]
 
 
 def _sku_to_response(sku: SKU) -> SKUResponse:
@@ -238,6 +254,22 @@ def upload_reference_image(
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
 
+    # Duplicate image detection via perceptual hash
+    img_hash = compute_image_hash(image_bytes)
+    duplicate = (
+        db.query(ReferenceImage)
+        .join(SKU)
+        .filter(ReferenceImage.image_hash == img_hash, ReferenceImage.sku_id != sku_id)
+        .first()
+    )
+    if duplicate:
+        dup_sku = db.get(SKU, duplicate.sku_id)
+        dup_label = dup_sku.sku_code if dup_sku else f"SKU #{duplicate.sku_id}"
+        raise HTTPException(
+            409,
+            f"Deze foto is al gekoppeld aan {dup_label}",
+        )
+
     # Synchronous package classification check before saving (can be overridden)
     if not skip_wine_check:
         is_package, summary = classify_image(image_bytes)
@@ -256,6 +288,7 @@ def upload_reference_image(
     ref_image = ReferenceImage(
         sku_id=sku_id,
         image_path=image_path,
+        image_hash=img_hash,
         processing_status="pending",
         wine_check_overridden=skip_wine_check,
     )

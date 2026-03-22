@@ -87,6 +87,7 @@ class ReferenceImage(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="CASCADE"))
     image_path: Mapped[str] = mapped_column(String(500))
+    image_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     vision_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     embedding = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
     processing_status: Mapped[str] = mapped_column(
