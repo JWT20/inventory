@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ImageSlideshow } from "@/components/image-slideshow";
+import { QuantityPicker } from "@/components/quantity-picker";
 
 interface Order {
   id: number;
@@ -20,6 +21,7 @@ interface BookingResult {
   id: number;
   order_id: number;
   order_reference: string;
+  sku_id?: number;
   sku_code: string;
   sku_name: string;
   klant: string;
@@ -28,6 +30,8 @@ interface BookingResult {
   scan_image_url?: string;
   reference_image_urls?: string[];
   confidence?: number;
+  booked_quantity?: number;
+  remaining_quantity?: number;
 }
 
 interface AlternativeMatch {
@@ -50,6 +54,7 @@ interface ConfirmationData {
   reference_image_url: string;
   reference_image_urls?: string[];
   alternatives?: AlternativeMatch[];
+  remaining_quantity?: number;
 }
 
 interface IdentifyResult {
@@ -367,6 +372,32 @@ function ResultStep({
   onDone: () => void;
 }) {
   const referenceImages = booking.reference_image_urls ?? [];
+  const [remaining, setRemaining] = useState(booking.remaining_quantity ?? 0);
+  const [moreQuantity, setMoreQuantity] = useState(1);
+  const [bookingMore, setBookingMore] = useState(false);
+  const [totalBooked, setTotalBooked] = useState(booking.booked_quantity ?? 1);
+
+  async function handleBookMore() {
+    if (!booking.sku_id || !booking.order_id) return;
+    setBookingMore(true);
+    try {
+      const result: BookingResult = await api.bookMore(
+        booking.order_id,
+        booking.sku_id,
+        moreQuantity,
+        booking.scan_image_url ?? "",
+      );
+      const actualBooked = result.booked_quantity ?? moreQuantity;
+      setTotalBooked((prev) => prev + actualBooked);
+      setRemaining(result.remaining_quantity ?? 0);
+      setMoreQuantity(1);
+      toast.success(`${actualBooked}× extra geboekt`);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Boeken mislukt");
+    } finally {
+      setBookingMore(false);
+    }
+  }
 
   return (
     <>
@@ -377,6 +408,11 @@ function ResultStep({
         <p className="text-green-300 text-3xl font-black">
           {booking.rolcontainer}
         </p>
+        {totalBooked > 1 && (
+          <p className="text-green-400 text-lg mt-1">
+            {totalBooked}× geboekt
+          </p>
+        )}
       </div>
 
       <Card className="p-4 mb-4">
@@ -430,6 +466,28 @@ function ResultStep({
         )}
       </Card>
 
+      {/* Book more identical boxes */}
+      {remaining > 0 && booking.sku_id && (
+        <Card className="p-4 mb-4 border-2 border-blue-600/30">
+          <p className="text-sm font-semibold text-center mb-3">
+            Nog {remaining} dezelfde in deze order
+          </p>
+          <QuantityPicker
+            value={moreQuantity}
+            onChange={setMoreQuantity}
+            max={remaining}
+          />
+          <Button
+            size="lg"
+            className="w-full h-12 text-base mt-3"
+            onClick={handleBookMore}
+            disabled={bookingMore}
+          >
+            {bookingMore ? "Boeken..." : `${moreQuantity}× extra boeken`}
+          </Button>
+        </Card>
+      )}
+
       <div className="flex flex-col gap-3">
         <Button size="lg" className="w-full h-14 text-lg" onClick={onNext}>
           Volgende doos scannen
@@ -454,13 +512,16 @@ function ConfirmStep({
   onReject: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const [quantity, setQuantity] = useState(1);
   const hasAlternatives = confirmation.alternatives && confirmation.alternatives.length > 0;
+  const maxQuantity = confirmation.remaining_quantity ?? 1;
 
   async function handleConfirm(token?: string) {
     setConfirming(true);
     try {
       const booking: BookingResult = await api.confirmBooking(
         token ?? confirmation.confirmation_token,
+        quantity,
       );
       onConfirmed(booking);
     } catch (err: unknown) {
@@ -504,6 +565,19 @@ function ConfirmStep({
         </div>
       </Card>
 
+      {/* Quantity picker */}
+      {maxQuantity > 1 && (
+        <Card className="p-4 mb-4">
+          <p className="text-xs text-muted-foreground mb-2 font-semibold text-center">
+            Hoeveel dozen van dit product?
+          </p>
+          <QuantityPicker value={quantity} onChange={setQuantity} max={maxQuantity} />
+          <p className="text-xs text-muted-foreground mt-2 text-center">
+            {maxQuantity} over in deze order
+          </p>
+        </Card>
+      )}
+
       {hasAlternatives ? (
         <>
           {/* Best match */}
@@ -533,7 +607,7 @@ function ConfirmStep({
               onClick={() => handleConfirm()}
               disabled={confirming}
             >
-              {confirming ? "Boeken..." : `Dit is ${confirmation.sku_name}`}
+              {confirming ? "Boeken..." : `Dit is ${confirmation.sku_name}${quantity > 1 ? ` (${quantity}×)` : ""}`}
             </Button>
           </Card>
 
@@ -614,7 +688,7 @@ function ConfirmStep({
               onClick={() => handleConfirm()}
               disabled={confirming}
             >
-              {confirming ? "Boeken..." : "Ja, dit klopt"}
+              {confirming ? "Boeken..." : `Ja, dit klopt${quantity > 1 ? ` (${quantity}×)` : ""}`}
             </Button>
             <Button
               variant="destructive"
