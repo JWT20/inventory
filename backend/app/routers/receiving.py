@@ -45,7 +45,7 @@ def _all_reference_image_urls(db: Session, sku_id: int) -> list[str]:
     """Return URLs for all reference images of a SKU."""
     images = (
         db.query(ReferenceImage)
-        .filter(ReferenceImage.sku_id == sku_id, ReferenceImage.processing_status == "done")
+        .filter(ReferenceImage.sku_id == sku_id, ReferenceImage.image_path.isnot(None))
         .order_by(ReferenceImage.created_at)
         .all()
     )
@@ -216,6 +216,8 @@ async def identify_box(
             needs_confirmation=needs_confirmation,
             confirmation_reason=confirmation_reason,
             alternatives=alternatives,
+            scan_image_url=_scan_url(scan_path),
+            reference_image_urls=_all_reference_image_urls(db, matched_sku.id),
         )
 
 

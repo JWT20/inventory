@@ -173,6 +173,8 @@ class MatchResult(BaseModel):
     needs_confirmation: bool = False
     confirmation_reason: str | None = None
     alternatives: list[AlternativeMatch] = []
+    scan_image_url: str = ""
+    reference_image_urls: list[str] = []
 
 
 # --- CSV Row ---
