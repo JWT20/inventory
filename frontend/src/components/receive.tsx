@@ -60,6 +60,8 @@ interface IdentifyResult {
   needs_confirmation: boolean;
   confirmation_reason: string | null;
   alternatives?: AlternativeMatch[];
+  scan_image_url?: string;
+  reference_image_urls?: string[];
 }
 
 type Step = "select-order" | "scan" | "result" | "confirm" | "identify-scan" | "identify-result";
@@ -781,7 +783,7 @@ function IdentifyResultStep({
       )}
 
       <Card className="p-4 mb-4">
-        <div className="space-y-1">
+        <div className="space-y-1 mb-3">
           <p className="text-sm">
             <span className="text-muted-foreground">Product:</span>{" "}
             <span className="font-semibold">{result.sku_name}</span>
@@ -795,6 +797,30 @@ function IdentifyResultStep({
             {Math.round(result.confidence * 100)}%
           </p>
         </div>
+
+        {/* Scan vs referentie vergelijking */}
+        {(result.scan_image_url || (result.reference_image_urls && result.reference_image_urls.length > 0)) && (
+          <div className="grid grid-cols-2 gap-3">
+            {result.scan_image_url && (
+              <div>
+                <p className="text-xs text-muted-foreground mb-1 font-semibold text-center">Scan</p>
+                <div className="aspect-square rounded-lg overflow-hidden bg-black">
+                  <img
+                    src={result.scan_image_url}
+                    alt="Scan"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              </div>
+            )}
+            {result.reference_image_urls && result.reference_image_urls.length > 0 && (
+              <div>
+                <p className="text-xs text-muted-foreground mb-1 font-semibold text-center">Referentie</p>
+                <ImageSlideshow images={result.reference_image_urls} maxWidth="100%" />
+              </div>
+            )}
+          </div>
+        )}
       </Card>
 
       <div className="flex flex-col gap-3">
