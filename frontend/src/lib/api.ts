@@ -234,12 +234,21 @@ export const api = {
     return request("/receiving/book", { method: "POST", body: form });
   },
 
-  confirmBooking: (token: string) =>
+  confirmBooking: (token: string, quantity = 1) =>
     request("/receiving/book/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirmation_token: token }),
+      body: JSON.stringify({ confirmation_token: token, quantity }),
     }),
+
+  bookMore: (orderId: number, skuId: number, quantity: number, scanImagePath = "") => {
+    const form = new FormData();
+    form.append("order_id", String(orderId));
+    form.append("sku_id", String(skuId));
+    form.append("quantity", String(quantity));
+    if (scanImagePath) form.append("scan_image_path", scanImagePath);
+    return request("/receiving/book/more", { method: "POST", body: form });
+  },
 
   // Vision (ad-hoc)
   identify: (blob: Blob) => upload("/vision/identify", blob, "scan.jpg"),

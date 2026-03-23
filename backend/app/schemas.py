@@ -261,6 +261,7 @@ class BookingResponse(BaseModel):
     id: int
     order_id: int
     order_reference: str
+    sku_id: int = 0
     sku_code: str
     sku_name: str
     klant: str
@@ -270,6 +271,8 @@ class BookingResponse(BaseModel):
     scan_image_url: str = ""
     reference_image_urls: list[str] = []
     confidence: float = 0.0
+    booked_quantity: int = 1
+    remaining_quantity: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -285,7 +288,9 @@ class BookingConfirmation(BaseModel):
     reference_image_url: str
     reference_image_urls: list[str] = []
     alternatives: list[AlternativeMatch] = []
+    remaining_quantity: int = 0
 
 
 class ConfirmBookingRequest(BaseModel):
     confirmation_token: str
+    quantity: int = Field(1, ge=1)
