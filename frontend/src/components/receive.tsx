@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ImageSlideshow } from "@/components/image-slideshow";
 
 interface Order {
   id: number;
@@ -24,6 +25,9 @@ interface BookingResult {
   klant: string;
   rolcontainer: string;
   needs_confirmation?: boolean;
+  scan_image_url?: string;
+  reference_image_urls?: string[];
+  confidence?: number;
 }
 
 interface AlternativeMatch {
@@ -32,6 +36,7 @@ interface AlternativeMatch {
   sku_name: string;
   confidence: number;
   reference_image_url: string;
+  reference_image_urls?: string[];
   confirmation_token: string;
 }
 
@@ -43,6 +48,7 @@ interface ConfirmationData {
   confidence: number;
   scan_image_url: string;
   reference_image_url: string;
+  reference_image_urls?: string[];
   alternatives?: AlternativeMatch[];
 }
 
@@ -358,6 +364,8 @@ function ResultStep({
   onNext: () => void;
   onDone: () => void;
 }) {
+  const referenceImages = booking.reference_image_urls ?? [];
+
   return (
     <>
       <div className="p-6 rounded-lg bg-green-600/20 border-2 border-green-600 text-center mb-4">
@@ -370,7 +378,7 @@ function ResultStep({
       </div>
 
       <Card className="p-4 mb-4">
-        <div className="space-y-1">
+        <div className="space-y-1 mb-3">
           <p className="text-sm">
             <span className="text-muted-foreground">Product:</span>{" "}
             <span className="font-semibold">{booking.sku_name}</span>
@@ -379,6 +387,12 @@ function ResultStep({
             <span className="text-muted-foreground">SKU:</span>{" "}
             <span className="font-mono">{booking.sku_code}</span>
           </p>
+          {booking.confidence != null && booking.confidence > 0 && (
+            <p className="text-sm">
+              <span className="text-muted-foreground">Zekerheid:</span>{" "}
+              {Math.round(booking.confidence * 100)}%
+            </p>
+          )}
           <p className="text-sm">
             <span className="text-muted-foreground">Order:</span>{" "}
             {booking.order_reference}
@@ -388,6 +402,30 @@ function ResultStep({
             {booking.klant}
           </p>
         </div>
+
+        {/* Scan vs referentie vergelijking */}
+        {(booking.scan_image_url || referenceImages.length > 0) && (
+          <div className="grid grid-cols-2 gap-3">
+            {booking.scan_image_url && (
+              <div>
+                <p className="text-xs text-muted-foreground mb-1 font-semibold text-center">Scan</p>
+                <div className="aspect-square rounded-lg overflow-hidden bg-black">
+                  <img
+                    src={booking.scan_image_url}
+                    alt="Scan"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              </div>
+            )}
+            {referenceImages.length > 0 && (
+              <div>
+                <p className="text-xs text-muted-foreground mb-1 font-semibold text-center">Referentie</p>
+                <ImageSlideshow images={referenceImages} maxWidth="100%" />
+              </div>
+            )}
+          </div>
+        )}
       </Card>
 
       <div className="flex flex-col gap-3">
@@ -483,19 +521,14 @@ function ConfirmStep({
                 {Math.round(confirmation.confidence * 100)}%
               </p>
             </div>
-            {confirmation.reference_image_url && (
-              <div className="aspect-square rounded-lg overflow-hidden bg-black max-w-[160px] mx-auto">
-                <img
-                  src={confirmation.reference_image_url}
-                  alt="Referentie"
-                  className="w-full h-full object-cover"
-                />
-              </div>
-            )}
+            <ImageSlideshow
+              images={confirmation.reference_image_urls?.length ? confirmation.reference_image_urls : (confirmation.reference_image_url ? [confirmation.reference_image_url] : [])}
+              maxWidth="160px"
+            />
             <Button
               size="lg"
               className="w-full h-12 text-base bg-green-600 hover:bg-green-700 mt-3"
-              onClick={handleConfirm}
+              onClick={() => handleConfirm()}
               disabled={confirming}
             >
               {confirming ? "Boeken..." : `Dit is ${confirmation.sku_name}`}
@@ -519,15 +552,10 @@ function ConfirmStep({
                   {Math.round(alt.confidence * 100)}%
                 </p>
               </div>
-              {alt.reference_image_url && (
-                <div className="aspect-square rounded-lg overflow-hidden bg-black max-w-[160px] mx-auto">
-                  <img
-                    src={alt.reference_image_url}
-                    alt="Referentie"
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-              )}
+              <ImageSlideshow
+                images={alt.reference_image_urls?.length ? alt.reference_image_urls : (alt.reference_image_url ? [alt.reference_image_url] : [])}
+                maxWidth="160px"
+              />
               <Button
                 size="lg"
                 className="w-full h-12 text-base mt-3"
@@ -571,26 +599,17 @@ function ConfirmStep({
             <p className="text-xs text-muted-foreground mb-2 font-semibold">
               Is dit dezelfde doos?
             </p>
-            <div className="aspect-square rounded-lg overflow-hidden bg-black max-w-[200px] mx-auto">
-              {confirmation.reference_image_url ? (
-                <img
-                  src={confirmation.reference_image_url}
-                  alt="Referentie"
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-muted-foreground text-xs">
-                  Geen referentie
-                </div>
-              )}
-            </div>
+            <ImageSlideshow
+              images={confirmation.reference_image_urls?.length ? confirmation.reference_image_urls : (confirmation.reference_image_url ? [confirmation.reference_image_url] : [])}
+              maxWidth="200px"
+            />
           </Card>
 
           <div className="flex flex-col gap-3">
             <Button
               size="lg"
               className="w-full h-14 text-lg bg-green-600 hover:bg-green-700"
-              onClick={handleConfirm}
+              onClick={() => handleConfirm()}
               disabled={confirming}
             >
               {confirming ? "Boeken..." : "Ja, dit klopt"}

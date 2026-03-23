@@ -41,6 +41,17 @@ def _reference_image_url(image_path: str | None) -> str:
     return ""
 
 
+def _all_reference_image_urls(db: Session, sku_id: int) -> list[str]:
+    """Return URLs for all reference images of a SKU."""
+    images = (
+        db.query(ReferenceImage)
+        .filter(ReferenceImage.sku_id == sku_id, ReferenceImage.processing_status == "done")
+        .order_by(ReferenceImage.created_at)
+        .all()
+    )
+    return [_reference_image_url(img.image_path) for img in images if img.image_path]
+
+
 def _read_image(file: UploadFile) -> bytes:
     """Read uploaded image bytes and reject files larger than 10 MB."""
     image_bytes = file.file.read()
@@ -186,6 +197,7 @@ async def identify_box(
                             sku_name=s.name,
                             confidence=sim,
                             reference_image_url=_reference_image_url(img_path),
+                            reference_image_urls=_all_reference_image_urls(db, s.id),
                         ))
 
         needs_confirmation = len(reasons) > 0
@@ -324,6 +336,7 @@ async def book_box(
                             sku_name=s.name,
                             confidence=sim,
                             reference_image_url=_reference_image_url(img_path),
+                            reference_image_urls=_all_reference_image_urls(db, s.id),
                         ))
 
         # Cross-check: if the unrestricted catalog has a better or close match
@@ -342,6 +355,7 @@ async def book_box(
                         sku_name=s.name,
                         confidence=sim,
                         reference_image_url=_reference_image_url(img_path),
+                        reference_image_urls=_all_reference_image_urls(db, s.id),
                     ))
 
         needs_confirmation = len(reason) > 0
@@ -377,6 +391,7 @@ async def book_box(
                 confidence=confidence,
                 scan_image_url=_scan_url(scan_path),
                 reference_image_url=_reference_image_url(matched_image_path),
+                reference_image_urls=_all_reference_image_urls(db, matched_sku.id),
                 alternatives=alternatives,
             )
 
@@ -453,6 +468,9 @@ async def book_box(
             klant=order_line.customer_name,
             rolcontainer=rolcontainer,
             created_at=booking.created_at,
+            scan_image_url=_scan_url(scan_path),
+            reference_image_urls=_all_reference_image_urls(db, matched_sku.id),
+            confidence=confidence,
         )
 
 
@@ -541,6 +559,9 @@ def confirm_booking(
         klant=order_line.customer_name,
         rolcontainer=rolcontainer,
         created_at=booking.created_at,
+        scan_image_url=_scan_url(data["scan_image_path"]) if data.get("scan_image_path") else "",
+        reference_image_urls=_all_reference_image_urls(db, sku.id),
+        confidence=data.get("confidence", 0.0),
     )
 
 

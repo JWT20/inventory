@@ -161,6 +161,7 @@ class AlternativeMatch(BaseModel):
     sku_name: str
     confidence: float
     reference_image_url: str = ""
+    reference_image_urls: list[str] = []
     confirmation_token: str = ""
 
 
@@ -264,6 +265,9 @@ class BookingResponse(BaseModel):
     rolcontainer: str
     created_at: datetime
     needs_confirmation: bool = False
+    scan_image_url: str = ""
+    reference_image_urls: list[str] = []
+    confidence: float = 0.0
 
     model_config = {"from_attributes": True}
 
@@ -277,6 +281,7 @@ class BookingConfirmation(BaseModel):
     confidence: float
     scan_image_url: str
     reference_image_url: str
+    reference_image_urls: list[str] = []
     alternatives: list[AlternativeMatch] = []
 
 
