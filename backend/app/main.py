@@ -32,10 +32,28 @@ if settings.sentry_dsn:
 
 
 def _run_migrations() -> None:
-    """Run Alembic migrations to bring the database up to date."""
+    """Run Alembic migrations to bring the database up to date.
+
+    On first deploy after adopting Alembic, detects a pre-existing database
+    (tables exist but no alembic_version table) and stamps the baseline
+    revision so that ``upgrade head`` doesn't try to recreate tables.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
     backend_dir = Path(__file__).resolve().parent.parent  # backend/
     alembic_cfg = AlembicConfig(str(backend_dir / "alembic.ini"))
     alembic_cfg.set_main_option("script_location", str(backend_dir / "alembic"))
+
+    # Auto-stamp existing databases that predate Alembic adoption
+    inspector = sa_inspect(engine)
+    tables = set(inspector.get_table_names())
+    has_existing_schema = "users" in tables
+    has_alembic_version = "alembic_version" in tables
+
+    if has_existing_schema and not has_alembic_version:
+        logger.info("Existing database detected without Alembic history — stamping baseline...")
+        command.stamp(alembic_cfg, "001")
+
     logger.info("Running Alembic migrations...")
     command.upgrade(alembic_cfg, "head")
     logger.info("Alembic migrations complete")
