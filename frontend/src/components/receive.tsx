@@ -83,14 +83,9 @@ export function ReceivePage() {
     setStep("scan");
   }
 
-  function handleBooked(booking: BookingResult | ConfirmationData) {
-    if ("needs_confirmation" in booking && booking.needs_confirmation && "confirmation_token" in booking) {
-      setPendingConfirmation(booking as ConfirmationData);
-      setStep("confirm");
-    } else {
-      setLastBooking(booking as BookingResult);
-      setStep("result");
-    }
+  function handleBooked(booking: ConfirmationData) {
+    setPendingConfirmation(booking);
+    setStep("confirm");
   }
 
   function handleIdentified(result: IdentifyResult) {
@@ -256,7 +251,7 @@ function ScanStep({
   onBack,
 }: {
   order: Order;
-  onBooked: (booking: BookingResult) => void;
+  onBooked: (booking: ConfirmationData) => void;
   onBack: () => void;
 }) {
   const [scanning, setScanning] = useState(false);
@@ -307,8 +302,8 @@ function ScanStep({
     }
 
     try {
-      const booking: BookingResult = await api.bookBox(blob, order.id);
-      onBooked(booking);
+      const confirmation: ConfirmationData = await api.bookBox(blob, order.id);
+      onBooked(confirmation);
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Scanfout");
     } finally {
@@ -515,6 +510,7 @@ function ConfirmStep({
   const [quantity, setQuantity] = useState(1);
   const hasAlternatives = confirmation.alternatives && confirmation.alternatives.length > 0;
   const maxQuantity = confirmation.remaining_quantity ?? 1;
+  const highConfidence = !hasAlternatives && confirmation.confidence >= 0.84;
 
   async function handleConfirm(token?: string) {
     setConfirming(true);
@@ -540,6 +536,15 @@ function ConfirmStep({
           </p>
           <p className="text-orange-300 text-sm">
             Vergelijkbare producten gevonden — welke doos is dit?
+          </p>
+        </div>
+      ) : highConfidence ? (
+        <div className="p-4 rounded-lg bg-green-600/20 border-2 border-green-600 text-center mb-4">
+          <p className="text-green-400 text-xl font-bold mb-1">
+            Match gevonden
+          </p>
+          <p className="text-green-300 text-sm">
+            {Math.round(confirmation.confidence * 100)}% zekerheid — bevestig om te boeken
           </p>
         </div>
       ) : (

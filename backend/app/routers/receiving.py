@@ -220,7 +220,7 @@ async def identify_box(
         )
 
 
-@router.post("/book", response_model=BookingResponse | BookingConfirmation)
+@router.post("/book", response_model=BookingConfirmation)
 @observe()
 async def book_box(
     file: UploadFile,
@@ -309,8 +309,7 @@ async def book_box(
                 "Doos niet herkend — geen match gevonden met SKUs in deze order",
             )
 
-        # Gate: require human confirmation if description quality is low,
-        # confidence is low, or there are close rival matches (ambiguity).
+        # Collect quality/confidence/ambiguity reasons for logging.
         CONFIRM_THRESHOLD = 0.84
         quality = assess_description_quality(description)
         reason: list[str] = []
@@ -359,60 +358,33 @@ async def book_box(
                         reference_image_urls=_all_reference_image_urls(db, s.id),
                     ))
 
-        needs_confirmation = len(reason) > 0
-        if needs_confirmation:
+        if reason:
             logger.info(
                 "SKU %s flagged for confirmation: %s",
                 matched_sku.sku_code, ", ".join(reason),
             )
-            token_data = {
+
+        token_data = {
+            "order_id": order_id,
+            "sku_id": matched_sku.id,
+            "confidence": round(confidence, 4),
+            "scan_image_path": scan_path,
+            "user_id": user.id,
+        }
+        token = _signer.dumps(token_data)
+
+        # Generate a confirmation token for each alternative
+        for alt in alternatives:
+            alt_token_data = {
                 "order_id": order_id,
-                "sku_id": matched_sku.id,
-                "confidence": round(confidence, 4),
+                "sku_id": alt.sku_id,
+                "confidence": round(alt.confidence, 4),
                 "scan_image_path": scan_path,
                 "user_id": user.id,
             }
-            token = _signer.dumps(token_data)
+            alt.confirmation_token = _signer.dumps(alt_token_data)
 
-            # Generate a confirmation token for each alternative
-            for alt in alternatives:
-                alt_token_data = {
-                    "order_id": order_id,
-                    "sku_id": alt.sku_id,
-                    "confidence": round(alt.confidence, 4),
-                    "scan_image_path": scan_path,
-                    "user_id": user.id,
-                }
-                alt.confirmation_token = _signer.dumps(alt_token_data)
-
-            # Calculate remaining quantity for the matched SKU in this order
-            confirm_order_line = (
-                db.query(OrderLine)
-                .filter(
-                    OrderLine.order_id == order_id,
-                    OrderLine.sku_id == matched_sku.id,
-                    OrderLine.booked_count < OrderLine.quantity,
-                )
-                .first()
-            )
-            confirm_remaining = (
-                confirm_order_line.quantity - confirm_order_line.booked_count
-                if confirm_order_line else 0
-            )
-
-            return BookingConfirmation(
-                confirmation_token=token,
-                sku_code=matched_sku.sku_code,
-                sku_name=matched_sku.name,
-                confidence=confidence,
-                scan_image_url=_scan_url(scan_path),
-                reference_image_url=_reference_image_url(matched_image_path),
-                reference_image_urls=_all_reference_image_urls(db, matched_sku.id),
-                alternatives=alternatives,
-                remaining_quantity=confirm_remaining,
-            )
-
-        # Find matching order line with remaining quantity
+        # Calculate remaining quantity for the matched SKU in this order
         order_line = (
             db.query(OrderLine)
             .filter(
@@ -427,71 +399,27 @@ async def book_box(
                 400,
                 f"SKU {matched_sku.sku_code} is al volledig geboekt in deze order",
             )
+        remaining = order_line.quantity - order_line.booked_count
 
-        # Create booking
-        booking = Booking(
-            order_id=order_id,
-            order_line_id=order_line.id,
-            sku_id=matched_sku.id,
-            scanned_by=user.id,
-            scan_image_path=scan_path,
-            confidence=confidence,
-        )
-        db.add(booking)
-        order_line.booked_count += 1
-        db.flush()
-
-        # Check if order is fully booked
-        all_booked = all(l.booked_count >= l.quantity for l in order.lines)
-        if all_booked:
-            order.status = "completed"
-
-        db.commit()
-        t_booking = time.perf_counter()
-
-        rolcontainer = f"KLANT {order_line.customer_name.upper()}"
-
+        t_done = time.perf_counter()
         logger.info(
-            "[TIMING] book total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms booking=%.0fms",
-            (t_booking - t_start) * 1000,
+            "[TIMING] book total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms",
+            (t_done - t_start) * 1000,
             (t_read - t_start) * 1000,
             (t_save - t_read) * 1000,
             (t_process - t_save) * 1000,
             (t_match - t_process) * 1000,
-            (t_booking - t_match) * 1000,
         )
 
-        publish_event(
-            "box_booked",
-            details={
-                "order_reference": order.reference,
-                "sku_code": matched_sku.sku_code,
-                "confidence": round(confidence, 4),
-                "rolcontainer": rolcontainer,
-                "klant": order_line.customer_name,
-                "order_completed": all_booked,
-            },
-            user=user,
-            resource_type="booking",
-            resource_id=booking.id,
-        )
-
-        remaining = order_line.quantity - order_line.booked_count
-
-        return BookingResponse(
-            id=booking.id,
-            order_id=order.id,
-            order_reference=order.reference,
-            sku_id=matched_sku.id,
+        return BookingConfirmation(
+            confirmation_token=token,
             sku_code=matched_sku.sku_code,
             sku_name=matched_sku.name,
-            klant=order_line.customer_name,
-            rolcontainer=rolcontainer,
-            created_at=booking.created_at,
-            scan_image_url=_scan_url(scan_path),
-            reference_image_urls=_all_reference_image_urls(db, matched_sku.id),
             confidence=confidence,
-            booked_quantity=1,
+            scan_image_url=_scan_url(scan_path),
+            reference_image_url=_reference_image_url(matched_image_path),
+            reference_image_urls=_all_reference_image_urls(db, matched_sku.id),
+            alternatives=alternatives,
             remaining_quantity=remaining,
         )
 
