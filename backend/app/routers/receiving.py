@@ -411,11 +411,15 @@ async def book_box(
             (t_match - t_process) * 1000,
         )
 
+        rolcontainer = f"KLANT {order_line.customer_name.upper()}"
+
         return BookingConfirmation(
             confirmation_token=token,
             sku_code=matched_sku.sku_code,
             sku_name=matched_sku.name,
             confidence=confidence,
+            klant=order_line.customer_name,
+            rolcontainer=rolcontainer,
             scan_image_url=_scan_url(scan_path),
             reference_image_url=_reference_image_url(matched_image_path),
             reference_image_urls=_all_reference_image_urls(db, matched_sku.id),

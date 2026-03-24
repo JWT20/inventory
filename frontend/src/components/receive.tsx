@@ -50,6 +50,8 @@ interface ConfirmationData {
   sku_code: string;
   sku_name: string;
   confidence: number;
+  klant?: string;
+  rolcontainer?: string;
   scan_image_url: string;
   reference_image_url: string;
   reference_image_urls?: string[];
@@ -558,6 +560,14 @@ function ConfirmStep({
         </div>
       )}
 
+      {/* Rolcontainer assignment */}
+      {confirmation.rolcontainer && (
+        <div className="p-4 rounded-lg bg-muted/50 border text-center mb-4">
+          <p className="text-sm text-muted-foreground mb-1">Zet op rolcontainer</p>
+          <p className="text-xl font-black">{confirmation.rolcontainer}</p>
+        </div>
+      )}
+
       {/* Scan image */}
       <Card className="p-4 mb-4">
         <p className="text-xs text-muted-foreground mb-2 font-semibold">Uw scan</p>
@@ -675,6 +685,12 @@ function ConfirmStep({
                 <span className="text-muted-foreground">Zekerheid:</span>{" "}
                 {Math.round(confirmation.confidence * 100)}%
               </p>
+              {confirmation.klant && (
+                <p className="text-sm">
+                  <span className="text-muted-foreground">Klant:</span>{" "}
+                  {confirmation.klant}
+                </p>
+              )}
             </div>
 
             <p className="text-xs text-muted-foreground mb-2 font-semibold">
