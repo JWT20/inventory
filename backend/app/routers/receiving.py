@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 import time
@@ -95,7 +94,7 @@ async def identify_box(
         t_save = time.perf_counter()
 
         try:
-            description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
+            description, embedding, is_package = await process_image(image_bytes)
         except Exception:
             logger.exception("Vision processing failed during identify")
             raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
@@ -261,7 +260,7 @@ async def book_box(
 
         # Vision: classify + describe + embed
         try:
-            description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
+            description, embedding, is_package = await process_image(image_bytes)
         except Exception:
             logger.exception("Vision processing failed during booking")
             raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
@@ -725,7 +724,7 @@ async def create_product_inline(
     # Process with Vision API
     logger.info("Processing reference image for new SKU %s", sku_code)
     try:
-        vision_description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
+        vision_description, embedding, is_package = await process_image(image_bytes)
     except Exception:
         logger.exception("Failed to process image for new SKU %s", sku_code)
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")

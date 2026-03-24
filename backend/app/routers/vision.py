@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -40,7 +39,7 @@ async def identify_box(
         if len(image_bytes) > 10 * 1024 * 1024:
             raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
         try:
-            description, embedding, is_package = await asyncio.to_thread(process_image, image_bytes)
+            description, embedding, is_package = await process_image(image_bytes)
         except Exception:
             logger.exception("Vision processing failed during ad-hoc identify")
             raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")

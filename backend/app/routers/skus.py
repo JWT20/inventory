@@ -198,7 +198,7 @@ def delete_sku(
 
 @router.post("/{sku_id}/images", response_model=ReferenceImageResponse, status_code=201)
 @observe()
-def upload_reference_image(
+async def upload_reference_image(
     sku_id: int,
     file: UploadFile,
     skip_wine_check: bool = Form(False),
@@ -214,15 +214,15 @@ def upload_reference_image(
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
 
-    # Classify + describe + embed synchronously, then check for duplicates
+    # Classify + describe + embed, then check for duplicates
     if skip_wine_check:
-        description, embedding, quality = describe_and_embed(image_bytes)
+        description, embedding, quality = await describe_and_embed(image_bytes)
     else:
-        is_package, description = classify_and_describe(image_bytes)
+        is_package, description = await classify_and_describe(image_bytes)
         if not is_package:
             raise HTTPException(400, f"Dit is geen doos of verpakking ({description}) — upload alleen foto's van dozen")
         quality = assess_description_quality(description)
-        embedding = generate_embedding(description)
+        embedding = await generate_embedding(description)
 
     # Duplicate detection via embedding similarity
     if not skip_duplicate_check:
