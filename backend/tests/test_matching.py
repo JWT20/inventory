@@ -3,7 +3,8 @@
 These are pure unit tests — the Gemini API and pgvector DB calls are mocked.
 """
 
-from unittest.mock import MagicMock, patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +129,7 @@ class TestFindBestMatches:
 
 
 # ---------------------------------------------------------------------------
-# embedding.classify_image
+# embedding.classify_image (async)
 # ---------------------------------------------------------------------------
 
 class TestClassifyImage:
@@ -138,19 +139,20 @@ class TestClassifyImage:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.text = '{"is_package": true, "summary": "wine box"}'
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
 
         with patch("app.services.embedding._get_client", return_value=mock_client), \
+             patch("app.services.embedding._get_semaphore", return_value=asyncio.Semaphore(5)), \
              patch("app.services.embedding.Image") as mock_pil:
             mock_img = MagicMock()
             mock_img.size = (800, 600)
             mock_pil.open.return_value = mock_img
             mock_pil.LANCZOS = 1
-            is_package, summary = classify_image(b"fake-image-bytes")
+            is_package, summary = asyncio.run(classify_image(b"fake-image-bytes"))
 
         assert is_package is True
         assert summary == "wine box"
-        mock_client.models.generate_content.assert_called_once()
+        mock_client.aio.models.generate_content.assert_called_once()
 
     def test_classifies_non_package(self):
         from app.services.embedding import classify_image
@@ -158,22 +160,23 @@ class TestClassifyImage:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.text = '{"is_package": false, "summary": "candles on table"}'
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
 
         with patch("app.services.embedding._get_client", return_value=mock_client), \
+             patch("app.services.embedding._get_semaphore", return_value=asyncio.Semaphore(5)), \
              patch("app.services.embedding.Image") as mock_pil:
             mock_img = MagicMock()
             mock_img.size = (800, 600)
             mock_pil.open.return_value = mock_img
             mock_pil.LANCZOS = 1
-            is_package, summary = classify_image(b"fake-image-bytes")
+            is_package, summary = asyncio.run(classify_image(b"fake-image-bytes"))
 
         assert is_package is False
         assert summary == "candles on table"
 
 
 # ---------------------------------------------------------------------------
-# embedding.describe_package
+# embedding.describe_package (async)
 # ---------------------------------------------------------------------------
 
 class TestDescribePackage:
@@ -183,22 +186,23 @@ class TestDescribePackage:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.text = "ROBERT WEIL Junior Pinot Gris 2023. Dark blue box with white text."
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
 
         with patch("app.services.embedding._get_client", return_value=mock_client), \
+             patch("app.services.embedding._get_semaphore", return_value=asyncio.Semaphore(5)), \
              patch("app.services.embedding.Image") as mock_pil:
             mock_img = MagicMock()
             mock_img.size = (800, 600)
             mock_pil.open.return_value = mock_img
             mock_pil.LANCZOS = 1
-            description = describe_package(b"fake-image-bytes")
+            description = asyncio.run(describe_package(b"fake-image-bytes"))
 
         assert "ROBERT WEIL" in description
-        mock_client.models.generate_content.assert_called_once()
+        mock_client.aio.models.generate_content.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
-# embedding.generate_embedding
+# embedding.generate_embedding (async)
 # ---------------------------------------------------------------------------
 
 class TestGenerateEmbedding:
@@ -212,26 +216,27 @@ class TestGenerateEmbedding:
         mock_embedding.values = fake_embedding
         mock_result = MagicMock()
         mock_result.embeddings = [mock_embedding]
-        mock_client.models.embed_content.return_value = mock_result
+        mock_client.aio.models.embed_content = AsyncMock(return_value=mock_result)
 
-        with patch("app.services.embedding._get_client", return_value=mock_client):
-            result = generate_embedding("Château Margaux 2015")
+        with patch("app.services.embedding._get_client", return_value=mock_client), \
+             patch("app.services.embedding._get_semaphore", return_value=asyncio.Semaphore(5)):
+            result = asyncio.run(generate_embedding("Château Margaux 2015"))
 
         assert result == fake_embedding
         assert len(result) == 3072
 
 
 # ---------------------------------------------------------------------------
-# embedding.process_image  (full pipeline)
+# embedding.process_image  (full pipeline, async)
 # ---------------------------------------------------------------------------
 
 class TestProcessImage:
     def test_pipeline_single_call_then_embeds(self):
         from app.services.embedding import process_image
 
-        with patch("app.services.embedding.classify_and_describe", return_value=(True, "A fine Bordeaux")) as mock_cd, \
-             patch("app.services.embedding.generate_embedding", return_value=[0.5] * 3072) as mock_emb:
-            description, embedding, is_package = process_image(b"image-data")
+        with patch("app.services.embedding.classify_and_describe", new_callable=AsyncMock, return_value=(True, "A fine Bordeaux")) as mock_cd, \
+             patch("app.services.embedding.generate_embedding", new_callable=AsyncMock, return_value=[0.5] * 3072) as mock_emb:
+            description, embedding, is_package = asyncio.run(process_image(b"image-data"))
 
         assert description == "A fine Bordeaux"
         assert is_package is True
@@ -242,9 +247,9 @@ class TestProcessImage:
     def test_pipeline_skips_embed_for_non_package(self):
         from app.services.embedding import process_image
 
-        with patch("app.services.embedding.classify_and_describe", return_value=(False, "digital clock")) as mock_cd, \
-             patch("app.services.embedding.generate_embedding") as mock_emb:
-            description, embedding, is_package = process_image(b"image-data")
+        with patch("app.services.embedding.classify_and_describe", new_callable=AsyncMock, return_value=(False, "digital clock")) as mock_cd, \
+             patch("app.services.embedding.generate_embedding", new_callable=AsyncMock) as mock_emb:
+            description, embedding, is_package = asyncio.run(process_image(b"image-data"))
 
         assert description == "digital clock"
         assert is_package is False
@@ -254,17 +259,17 @@ class TestProcessImage:
 
 
 # ---------------------------------------------------------------------------
-# embedding.describe_and_embed (override path)
+# embedding.describe_and_embed (override path, async)
 # ---------------------------------------------------------------------------
 
 class TestDescribeAndEmbed:
     def test_skips_classification(self):
         from app.services.embedding import describe_and_embed
 
-        with patch("app.services.embedding.classify_image") as mock_cls, \
-             patch("app.services.embedding.describe_package", return_value="NORTHWAVE CORSAIR 2 shoe box, black with red accents") as mock_desc, \
-             patch("app.services.embedding.generate_embedding", return_value=[0.5] * 3072) as mock_emb:
-            description, embedding, quality = describe_and_embed(b"image-data")
+        with patch("app.services.embedding.classify_image", new_callable=AsyncMock) as mock_cls, \
+             patch("app.services.embedding.describe_package", new_callable=AsyncMock, return_value="NORTHWAVE CORSAIR 2 shoe box, black with red accents") as mock_desc, \
+             patch("app.services.embedding.generate_embedding", new_callable=AsyncMock, return_value=[0.5] * 3072) as mock_emb:
+            description, embedding, quality = asyncio.run(describe_and_embed(b"image-data"))
 
         mock_cls.assert_not_called()
         mock_desc.assert_called_once_with(b"image-data")
