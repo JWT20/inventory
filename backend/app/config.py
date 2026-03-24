@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_vision_model: str = "gemini-2.5-flash"
     gemini_embedding_model: str = "gemini-embedding-001"
+    gemini_max_concurrent: int = 5  # max concurrent Gemini API requests
     match_threshold: float = 0.80
     ambiguity_margin: float = 0.05
     upload_dir: str = "/app/uploads"

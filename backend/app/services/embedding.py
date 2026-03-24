@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import time
@@ -23,6 +24,22 @@ RETRY_BASE_DELAY = 10  # seconds
 MAX_VISION_DIMENSION = 1024  # px – downscale before sending to Gemini
 
 _client: genai.Client | None = None
+
+# Semaphore to limit concurrent Gemini API requests (prevents quota exhaustion
+# and thread-pool starvation under load).
+_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    """Return the concurrency-limiting semaphore, creating it lazily.
+
+    Must be called from within a running event loop.
+    """
+    global _semaphore
+    if _semaphore is None:
+        _semaphore = asyncio.Semaphore(settings.gemini_max_concurrent)
+    return _semaphore
+
 
 # ---------------------------------------------------------------------------
 # Classification-only prompt (used when caller only needs is_package check)
@@ -171,26 +188,29 @@ def optimize_for_vision(image_bytes: bytes) -> Image.Image:
 
 
 @observe(as_type="generation")
-def _call_vision(image: Image.Image, prompt: str) -> str:
-    """Call Gemini Vision with retry logic. Returns raw response text."""
+async def _call_vision(image: Image.Image, prompt: str) -> str:
+    """Call Gemini Vision asynchronously with retry logic. Returns raw response text."""
     client = _get_client()
     logger.info("Calling Gemini Vision model=%s", settings.gemini_vision_model)
     t0 = time.perf_counter()
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            response = client.models.generate_content(
-                model=settings.gemini_vision_model,
-                contents=[prompt, image],
-            )
-            break
-        except ClientError as e:
-            if e.code == 429 and attempt < MAX_RETRIES:
-                delay = RETRY_BASE_DELAY * attempt
-                logger.warning("Gemini rate limited (attempt %d/%d), retrying in %ds", attempt, MAX_RETRIES, delay)
-                time.sleep(delay)
-            else:
-                logger.exception("Gemini Vision API call failed (model=%s, attempt=%d)", settings.gemini_vision_model, attempt)
-                raise
+
+    async with _get_semaphore():
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                response = await client.aio.models.generate_content(
+                    model=settings.gemini_vision_model,
+                    contents=[prompt, image],
+                )
+                break
+            except ClientError as e:
+                if e.code == 429 and attempt < MAX_RETRIES:
+                    delay = RETRY_BASE_DELAY * attempt
+                    logger.warning("Gemini rate limited (attempt %d/%d), retrying in %ds", attempt, MAX_RETRIES, delay)
+                    await asyncio.sleep(delay)
+                else:
+                    logger.exception("Gemini Vision API call failed (model=%s, attempt=%d)", settings.gemini_vision_model, attempt)
+                    raise
+
     vision_ms = (time.perf_counter() - t0) * 1000
     logger.info("[TIMING] gemini_vision=%.0fms", vision_ms)
 
@@ -217,17 +237,17 @@ def _call_vision(image: Image.Image, prompt: str) -> str:
 
 
 @observe()
-def classify_image(image_bytes: bytes) -> tuple[bool, str]:
+async def classify_image(image_bytes: bytes) -> tuple[bool, str]:
     """Step 1: Classify whether the image shows a box/package.
 
     Returns (is_package, summary).
     """
     t0 = time.perf_counter()
-    image = optimize_for_vision(image_bytes)
+    image = await asyncio.to_thread(optimize_for_vision, image_bytes)
     resize_ms = (time.perf_counter() - t0) * 1000
     logger.info("[TIMING] image_resize=%.0fms", resize_ms)
 
-    raw_text = _call_vision(image, CLASSIFY_PROMPT)
+    raw_text = await _call_vision(image, CLASSIFY_PROMPT)
     logger.info("Classification raw response: %s", raw_text[:120])
 
     is_package, summary = parse_classify_response(raw_text)
@@ -236,16 +256,16 @@ def classify_image(image_bytes: bytes) -> tuple[bool, str]:
 
 
 @observe()
-def describe_package(image_bytes: bytes) -> str:
+async def describe_package(image_bytes: bytes) -> str:
     """Step 2: Describe the packaging for embedding.
 
     Returns a description optimized for text-similarity search.
     Always call this AFTER classify_image confirms it's a package,
     or when the user has overridden classification.
     """
-    image = optimize_for_vision(image_bytes)
+    image = await asyncio.to_thread(optimize_for_vision, image_bytes)
     prompt = get_prompt("describe-package", fallback=DESCRIBE_DEFAULT)
-    raw_text = _call_vision(image, prompt)
+    raw_text = await _call_vision(image, prompt)
     logger.info("Description raw response: %s", raw_text[:120])
 
     description = _strip_markdown_fences(raw_text).strip()
@@ -257,38 +277,41 @@ def describe_package(image_bytes: bytes) -> str:
     return description
 
 
-def describe_image(image_bytes: bytes) -> tuple[str, bool]:
+async def describe_image(image_bytes: bytes) -> tuple[str, bool]:
     """Classify and describe in one call. Kept for backward compatibility.
 
     Returns (description, is_package).
     """
-    is_package, description = classify_and_describe(image_bytes)
+    is_package, description = await classify_and_describe(image_bytes)
     return description, is_package
 
 
 @observe(as_type="span")
-def generate_embedding(text: str) -> list[float]:
+async def generate_embedding(text: str) -> list[float]:
     """Generate a text embedding using gemini-embedding-001."""
     client = _get_client()
 
     logger.info("Calling Gemini Embedding model=%s", settings.gemini_embedding_model)
     t0 = time.perf_counter()
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            result = client.models.embed_content(
-                model=settings.gemini_embedding_model,
-                contents=text,
-                config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIM),
-            )
-            break
-        except ClientError as e:
-            if e.code == 429 and attempt < MAX_RETRIES:
-                delay = RETRY_BASE_DELAY * attempt
-                logger.warning("Gemini rate limited (attempt %d/%d), retrying in %ds", attempt, MAX_RETRIES, delay)
-                time.sleep(delay)
-            else:
-                logger.exception("Gemini Embedding API call failed (model=%s, attempt=%d)", settings.gemini_embedding_model, attempt)
-                raise
+
+    async with _get_semaphore():
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                result = await client.aio.models.embed_content(
+                    model=settings.gemini_embedding_model,
+                    contents=text,
+                    config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIM),
+                )
+                break
+            except ClientError as e:
+                if e.code == 429 and attempt < MAX_RETRIES:
+                    delay = RETRY_BASE_DELAY * attempt
+                    logger.warning("Gemini rate limited (attempt %d/%d), retrying in %ds", attempt, MAX_RETRIES, delay)
+                    await asyncio.sleep(delay)
+                else:
+                    logger.exception("Gemini Embedding API call failed (model=%s, attempt=%d)", settings.gemini_embedding_model, attempt)
+                    raise
+
     embedding_ms = (time.perf_counter() - t0) * 1000
 
     logger.info("[TIMING] gemini_embedding=%.0fms", embedding_ms)
@@ -327,7 +350,7 @@ def assess_description_quality(description: str) -> str:
 
 
 @observe()
-def describe_and_embed(image_bytes: bytes) -> tuple[str, list[float], str]:
+async def describe_and_embed(image_bytes: bytes) -> tuple[str, list[float], str]:
     """Skip classification, go straight to describe + embed.
 
     Used when the user has overridden classification (skip_wine_check=True).
@@ -336,9 +359,9 @@ def describe_and_embed(image_bytes: bytes) -> tuple[str, list[float], str]:
     t_start = time.perf_counter()
     logger.info("Processing overridden image (%d bytes) — skipping classification", len(image_bytes))
 
-    description = describe_package(image_bytes)
+    description = await describe_package(image_bytes)
     quality = assess_description_quality(description)
-    embedding = generate_embedding(description)
+    embedding = await generate_embedding(description)
 
     total_ms = (time.perf_counter() - t_start) * 1000
     logger.info("[TIMING] describe_and_embed_total=%.0fms quality=%s", total_ms, quality)
@@ -346,18 +369,18 @@ def describe_and_embed(image_bytes: bytes) -> tuple[str, list[float], str]:
 
 
 @observe()
-def classify_and_describe(image_bytes: bytes) -> tuple[bool, str]:
+async def classify_and_describe(image_bytes: bytes) -> tuple[bool, str]:
     """Classify and describe in a single Gemini call.
 
     Returns (is_package, description_or_summary).
     """
     t0 = time.perf_counter()
-    image = optimize_for_vision(image_bytes)
+    image = await asyncio.to_thread(optimize_for_vision, image_bytes)
     resize_ms = (time.perf_counter() - t0) * 1000
     logger.info("[TIMING] image_resize=%.0fms", resize_ms)
 
     prompt = get_prompt("classify-and-describe", fallback=CLASSIFY_AND_DESCRIBE_DEFAULT)
-    raw_text = _call_vision(image, prompt)
+    raw_text = await _call_vision(image, prompt)
     logger.info("Classify+describe raw response: %s", raw_text[:200])
 
     is_package, description = parse_classify_and_describe_response(raw_text)
@@ -366,7 +389,7 @@ def classify_and_describe(image_bytes: bytes) -> tuple[bool, str]:
 
 
 @observe()
-def process_image(image_bytes: bytes) -> tuple[str, list[float] | None, bool]:
+async def process_image(image_bytes: bytes) -> tuple[str, list[float] | None, bool]:
     """Full pipeline: classify + describe (single call) → embed.
 
     Returns (description, embedding, is_package).
@@ -375,14 +398,14 @@ def process_image(image_bytes: bytes) -> tuple[str, list[float] | None, bool]:
     t_start = time.perf_counter()
     logger.info("Processing image (%d bytes)", len(image_bytes))
 
-    is_package, description = classify_and_describe(image_bytes)
+    is_package, description = await classify_and_describe(image_bytes)
 
     if not is_package:
         total_ms = (time.perf_counter() - t_start) * 1000
         logger.info("[TIMING] process_image_total=%.0fms (rejected: not a package — %s)", total_ms, description)
         return description, None, False
 
-    embedding = generate_embedding(description)
+    embedding = await generate_embedding(description)
     total_ms = (time.perf_counter() - t_start) * 1000
     logger.info("[TIMING] process_image_total=%.0fms", total_ms)
     return description, embedding, True
