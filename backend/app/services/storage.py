@@ -108,6 +108,7 @@ class S3Storage(StorageBackend):
         presigned_url_expiry: int = 3600,
     ) -> None:
         import boto3
+        from botocore.config import Config as BotoConfig
 
         self._bucket = bucket
         self._presigned_url_expiry = presigned_url_expiry
@@ -117,6 +118,10 @@ class S3Storage(StorageBackend):
             aws_access_key_id=access_key_id,
             aws_secret_access_key=secret_access_key,
             region_name=region,
+            config=BotoConfig(
+                request_checksum_calculation="when_required",
+                response_checksum_validation="when_required",
+            ),
         )
         logger.info(
             "S3 storage initialized: bucket=%s endpoint=%s region=%s",
