@@ -9,6 +9,7 @@ from alembic import command
 from alembic.config import Config as AlembicConfig
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
@@ -18,6 +19,7 @@ from app.database import Base, SessionLocal, engine
 from app.models import User
 from app.events import init_producer, shutdown_producer
 from app.services.langfuse_client import get_langfuse, shutdown_langfuse
+from app.services.storage import storage, LocalStorage
 from app.routers import auth, customers, orders, receiving, skus, vision
 
 logging.basicConfig(level=logging.INFO)
@@ -61,15 +63,11 @@ def _run_migrations() -> None:
 
 def _cleanup_old_scans():
     """Delete scan images older than 30 days to prevent disk bloat."""
-    scan_dir = os.path.join(settings.upload_dir, "scans")
-    if not os.path.isdir(scan_dir):
-        return
     cutoff = time.time() - 30 * 86400
     removed = 0
-    for filename in os.listdir(scan_dir):
-        filepath = os.path.join(scan_dir, filename)
-        if os.path.isfile(filepath) and os.path.getmtime(filepath) < cutoff:
-            os.remove(filepath)
+    for key, mtime in storage.list_keys("scans"):
+        if mtime < cutoff:
+            storage.delete(key)
             removed += 1
     if removed:
         logger.info("Scan cleanup: removed %d images older than 30 days", removed)
@@ -102,9 +100,11 @@ async def lifespan(app: FastAPI):
     get_langfuse()  # Initialize Langfuse client (no-op if not configured)
     _cleanup_old_scans()
 
-    # Serve uploaded images (scans, reference images)
-    os.makedirs(settings.upload_dir, exist_ok=True)
-    app.mount("/api/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")
+    # For local storage, also mount StaticFiles as a fallback for legacy
+    # /api/uploads/ URLs (existing bookings may reference old paths).
+    if isinstance(storage, LocalStorage):
+        os.makedirs(settings.upload_dir, exist_ok=True)
+        app.mount("/api/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")
 
     yield
 
@@ -150,3 +150,24 @@ def health():
         from fastapi.responses import JSONResponse
         return JSONResponse({"status": "unhealthy", "db": "down"}, status_code=503)
     return {"status": "ok", "db": db_status}
+
+
+@app.get("/api/files/{file_path:path}")
+def serve_file(file_path: str):
+    """Serve uploaded files via the storage backend.
+
+    For local storage: streams the file directly.
+    For S3 storage: redirects to a presigned URL.
+    """
+    if isinstance(storage, LocalStorage):
+        import os as _os
+        from fastapi.responses import FileResponse
+        full_path = _os.path.join(settings.upload_dir, file_path)
+        if not _os.path.isfile(full_path):
+            from fastapi import HTTPException
+            raise HTTPException(404, "File not found")
+        return FileResponse(full_path)
+
+    # S3: redirect to presigned URL
+    url = storage.url(file_path)
+    return RedirectResponse(url=url, status_code=307)

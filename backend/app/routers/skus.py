@@ -1,5 +1,4 @@
 import logging
-import os
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
@@ -27,6 +26,7 @@ from app.services.embedding import (
     describe_and_embed,
     generate_embedding,
 )
+from app.services.storage import storage
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/skus", tags=["skus"])
@@ -233,18 +233,14 @@ async def upload_reference_image(
                 f"Deze foto lijkt te veel op een foto van {dup_sku.sku_code} (gelijkenis: {similarity:.0%})",
             )
 
-    # Save image to disk
-    ref_dir = os.path.join(settings.upload_dir, "reference_images", str(sku_id))
-    os.makedirs(ref_dir, exist_ok=True)
-    filename = f"{uuid.uuid4().hex}.jpg"
-    image_path = os.path.join(ref_dir, filename)
-    with open(image_path, "wb") as f:
-        f.write(image_bytes)
+    # Save image
+    image_key = f"reference_images/{sku_id}/{uuid.uuid4().hex}.jpg"
+    storage.save(image_key, image_bytes)
 
     # Create DB record with description + embedding already filled
     ref_image = ReferenceImage(
         sku_id=sku_id,
-        image_path=image_path,
+        image_path=image_key,
         vision_description=description,
         embedding=embedding,
         description_quality=quality,
@@ -293,8 +289,7 @@ def delete_reference_image(
     if not image:
         raise HTTPException(404, "Reference image not found")
     sku = db.get(SKU, sku_id)
-    if os.path.exists(image.image_path):
-        os.remove(image.image_path)
+    storage.delete(image.image_path)
     db.delete(image)
     db.commit()
     publish_event(
