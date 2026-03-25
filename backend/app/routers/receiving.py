@@ -1,5 +1,4 @@
 import logging
-import os
 import time
 import uuid
 
@@ -14,6 +13,7 @@ from app.events import publish_event
 from app.models import SKU, Booking, Order, OrderLine, ReferenceImage, User
 from app.routers.skus import _check_duplicate_embedding, _sku_to_response
 from app.schemas import AlternativeMatch, BookingConfirmation, BookingResponse, ConfirmBookingRequest, MatchResult, SKUResponse
+from app.services.storage import storage
 from langfuse import observe, propagate_attributes
 
 from app.services.embedding import assess_description_quality, process_image
@@ -27,16 +27,10 @@ CONFIRMATION_TOKEN_MAX_AGE = 120  # seconds
 _signer = URLSafeTimedSerializer(settings.secret_key, salt="booking-confirm")
 
 
-def _scan_url(scan_path: str) -> str:
-    """Convert an absolute file path to a URL served via /api/uploads/."""
-    rel = os.path.relpath(scan_path, settings.upload_dir)
-    return f"/api/uploads/{rel}"
-
-
-def _reference_image_url(image_path: str | None) -> str:
-    """Convert a reference image file path to a URL served via /api/uploads/."""
-    if image_path:
-        return _scan_url(image_path)
+def _image_url(key: str | None) -> str:
+    """Return a browser-accessible URL for a storage key."""
+    if key:
+        return storage.url(key)
     return ""
 
 
@@ -48,7 +42,7 @@ def _all_reference_image_urls(db: Session, sku_id: int) -> list[str]:
         .order_by(ReferenceImage.created_at)
         .all()
     )
-    return [_reference_image_url(img.image_path) for img in images if img.image_path]
+    return [_image_url(img.image_path) for img in images if img.image_path]
 
 
 def _read_image(file: UploadFile) -> bytes:
@@ -85,12 +79,8 @@ async def identify_box(
         t_read = time.perf_counter()
 
         # Save scan image for later reference
-        scan_dir = os.path.join(settings.upload_dir, "scans")
-        os.makedirs(scan_dir, exist_ok=True)
-        filename = f"{uuid.uuid4().hex}.jpg"
-        scan_path = os.path.join(scan_dir, filename)
-        with open(scan_path, "wb") as f:
-            f.write(image_bytes)
+        scan_key = f"scans/{uuid.uuid4().hex}.jpg"
+        storage.save(scan_key, image_bytes)
         t_save = time.perf_counter()
 
         try:
@@ -195,7 +185,7 @@ async def identify_box(
                             sku_code=s.sku_code,
                             sku_name=s.name,
                             confidence=sim,
-                            reference_image_url=_reference_image_url(img_path),
+                            reference_image_url=_image_url(img_path),
                             reference_image_urls=_all_reference_image_urls(db, s.id),
                         ))
 
@@ -215,7 +205,7 @@ async def identify_box(
             needs_confirmation=needs_confirmation,
             confirmation_reason=confirmation_reason,
             alternatives=alternatives,
-            scan_image_url=_scan_url(scan_path),
+            scan_image_url=_image_url(scan_key),
             reference_image_urls=_all_reference_image_urls(db, matched_sku.id),
         )
 
@@ -250,12 +240,8 @@ async def book_box(
         t_read = time.perf_counter()
 
         # Save scan image
-        scan_dir = os.path.join(settings.upload_dir, "scans")
-        os.makedirs(scan_dir, exist_ok=True)
-        filename = f"{uuid.uuid4().hex}.jpg"
-        scan_path = os.path.join(scan_dir, filename)
-        with open(scan_path, "wb") as f:
-            f.write(image_bytes)
+        scan_key = f"scans/{uuid.uuid4().hex}.jpg"
+        storage.save(scan_key, image_bytes)
         t_save = time.perf_counter()
 
         # Vision: classify + describe + embed
@@ -335,7 +321,7 @@ async def book_box(
                             sku_code=s.sku_code,
                             sku_name=s.name,
                             confidence=sim,
-                            reference_image_url=_reference_image_url(img_path),
+                            reference_image_url=_image_url(img_path),
                             reference_image_urls=_all_reference_image_urls(db, s.id),
                         ))
 
@@ -354,7 +340,7 @@ async def book_box(
                         sku_code=s.sku_code,
                         sku_name=s.name,
                         confidence=sim,
-                        reference_image_url=_reference_image_url(img_path),
+                        reference_image_url=_image_url(img_path),
                         reference_image_urls=_all_reference_image_urls(db, s.id),
                     ))
 
@@ -368,7 +354,7 @@ async def book_box(
             "order_id": order_id,
             "sku_id": matched_sku.id,
             "confidence": round(confidence, 4),
-            "scan_image_path": scan_path,
+            "scan_image_key": scan_key,
             "user_id": user.id,
         }
         token = _signer.dumps(token_data)
@@ -379,7 +365,7 @@ async def book_box(
                 "order_id": order_id,
                 "sku_id": alt.sku_id,
                 "confidence": round(alt.confidence, 4),
-                "scan_image_path": scan_path,
+                "scan_image_key": scan_key,
                 "user_id": user.id,
             }
             alt.confirmation_token = _signer.dumps(alt_token_data)
@@ -420,8 +406,8 @@ async def book_box(
             confidence=confidence,
             klant=order_line.customer_name,
             rolcontainer=rolcontainer,
-            scan_image_url=_scan_url(scan_path),
-            reference_image_url=_reference_image_url(matched_image_path),
+            scan_image_url=_image_url(scan_key),
+            reference_image_url=_image_url(matched_image_path),
             reference_image_urls=_all_reference_image_urls(db, matched_sku.id),
             alternatives=alternatives,
             remaining_quantity=remaining,
@@ -478,7 +464,7 @@ def confirm_booking(
             order_line_id=order_line.id,
             sku_id=data["sku_id"],
             scanned_by=user.id,
-            scan_image_path=data.get("scan_image_path"),
+            scan_image_path=data.get("scan_image_key", data.get("scan_image_path")),
             confidence=data.get("confidence"),
         )
         db.add(booking)
@@ -512,6 +498,7 @@ def confirm_booking(
         resource_id=last_booking.id,
     )
 
+    scan_key = data.get("scan_image_key", data.get("scan_image_path", ""))
     return BookingResponse(
         id=last_booking.id,
         order_id=order.id,
@@ -522,7 +509,7 @@ def confirm_booking(
         klant=order_line.customer_name,
         rolcontainer=rolcontainer,
         created_at=last_booking.created_at,
-        scan_image_url=_scan_url(data["scan_image_path"]) if data.get("scan_image_path") else "",
+        scan_image_url=_image_url(scan_key) if scan_key else "",
         reference_image_urls=_all_reference_image_urls(db, sku.id),
         confidence=data.get("confidence", 0.0),
         booked_quantity=quantity,
@@ -622,7 +609,7 @@ def book_more(
         klant=order_line.customer_name,
         rolcontainer=rolcontainer,
         created_at=last_booking.created_at,
-        scan_image_url=_scan_url(scan_image_path) if scan_image_path else "",
+        scan_image_url=_image_url(scan_image_path) if scan_image_path else "",
         reference_image_urls=_all_reference_image_urls(db, sku.id),
         booked_quantity=actual_quantity,
         remaining_quantity=remaining,
@@ -675,19 +662,15 @@ async def create_product_inline(
         )
 
     # Save reference image
-    ref_dir = os.path.join(settings.upload_dir, "reference_images", str(sku.id))
-    os.makedirs(ref_dir, exist_ok=True)
-    filename = f"{uuid.uuid4().hex}.jpg"
-    image_path = os.path.join(ref_dir, filename)
-    with open(image_path, "wb") as f:
-        f.write(image_bytes)
+    image_key = f"reference_images/{sku.id}/{uuid.uuid4().hex}.jpg"
+    storage.save(image_key, image_bytes)
 
     from app.services.embedding import assess_description_quality
     quality = assess_description_quality(vision_description)
 
     ref_image = ReferenceImage(
         sku_id=sku.id,
-        image_path=image_path,
+        image_path=image_key,
         vision_description=vision_description,
         embedding=embedding,
         description_quality=quality,

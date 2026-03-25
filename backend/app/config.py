@@ -29,6 +29,15 @@ class Settings(BaseSettings):
     # Redis (optional — used for rate limiting; empty = in-memory fallback)
     redis_url: str = ""
 
+    # Storage backend ("local" or "s3")
+    storage_backend: str = "local"
+    s3_endpoint_url: str = ""
+    s3_bucket: str = ""
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
+    s3_region: str = ""
+    s3_presigned_url_expiry: int = 3600  # seconds
+
     # Auth
     admin_password: str = _INSECURE_DEFAULT
     access_token_expire_minutes: int = 30

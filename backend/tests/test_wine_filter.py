@@ -14,7 +14,13 @@ Verifies that:
 import io
 from unittest.mock import patch, MagicMock
 
+from app.services.storage import LocalStorage
 from tests.conftest import auth_header
+
+
+def _tmp_storage(tmp_path):
+    """Create a LocalStorage instance pointing at a temp directory."""
+    return LocalStorage(str(tmp_path))
 
 
 # ---------------------------------------------------------------------------
@@ -141,8 +147,7 @@ class TestReferenceUploadPackageFilter:
         with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_package), \
              patch("app.routers.skus.generate_embedding", side_effect=_mock_generate_embedding), \
              patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_no_duplicate), \
-             patch("app.routers.skus.settings") as mock_settings:
-            mock_settings.upload_dir = str(tmp_path)
+             patch("app.routers.skus.storage", _tmp_storage(tmp_path)):
 
             resp = client.post(
                 f"/api/skus/{sample_sku.id}/images",
@@ -171,8 +176,7 @@ class TestReferenceUploadPackageFilter:
         with patch("app.routers.skus.describe_and_embed", side_effect=_mock_describe_and_embed), \
              patch("app.routers.skus.classify_and_describe") as mock_classify, \
              patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_no_duplicate), \
-             patch("app.routers.skus.settings") as mock_settings:
-            mock_settings.upload_dir = str(tmp_path)
+             patch("app.routers.skus.storage", _tmp_storage(tmp_path)):
 
             resp = client.post(
                 f"/api/skus/{sample_sku.id}/images",
@@ -200,8 +204,7 @@ class TestReferenceUploadPackageFilter:
         # Step 2: Same image re-uploaded with override
         with patch("app.routers.skus.describe_and_embed", side_effect=_mock_describe_and_embed), \
              patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_no_duplicate), \
-             patch("app.routers.skus.settings") as mock_settings:
-            mock_settings.upload_dir = str(tmp_path)
+             patch("app.routers.skus.storage", _tmp_storage(tmp_path)):
 
             resp2 = client.post(
                 f"/api/skus/{sample_sku.id}/images",
@@ -241,8 +244,7 @@ class TestReferenceUploadPackageFilter:
         with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_package), \
              patch("app.routers.skus.generate_embedding", side_effect=_mock_generate_embedding), \
              patch("app.routers.skus._check_duplicate_embedding") as mock_dup, \
-             patch("app.routers.skus.settings") as mock_settings:
-            mock_settings.upload_dir = str(tmp_path)
+             patch("app.routers.skus.storage", _tmp_storage(tmp_path)):
 
             resp = client.post(
                 f"/api/skus/{sample_sku.id}/images",
@@ -264,8 +266,8 @@ class TestIdentifyPackageFilter:
     def test_non_package_scan_returns_null(self, client, courier_token, tmp_path):
         """Scanning a non-package item should return null (no match)."""
         with patch("app.routers.receiving.process_image", side_effect=_mock_process_not_package), \
+             patch("app.routers.receiving.storage", _tmp_storage(tmp_path)), \
              patch("app.routers.receiving.settings") as mock_settings:
-            mock_settings.upload_dir = str(tmp_path)
             mock_settings.match_threshold = 0.85
 
             resp = client.post(
@@ -290,11 +292,11 @@ class TestIdentifyPackageFilter:
         db.commit()
 
         with patch("app.routers.receiving.process_image", side_effect=_mock_process_package), \
+             patch("app.routers.receiving.storage", _tmp_storage(tmp_path)), \
              patch("app.routers.receiving.settings") as mock_settings, \
              patch("app.routers.receiving.find_best_matches") as mock_match:
-            mock_settings.upload_dir = str(tmp_path)
             mock_settings.match_threshold = 0.85
-            mock_match.return_value = [(sample_sku, 0.95, "/app/uploads/ref/1/img.jpg", "White box with bull logo, Rioja")]
+            mock_match.return_value = [(sample_sku, 0.95, "reference_images/1/img.jpg", "White box with bull logo, Rioja")]
 
             resp = client.post(
                 "/api/receiving/identify",
@@ -316,8 +318,7 @@ class TestNewProductPackageFilter:
     def test_non_package_rejected(self, client, courier_token, tmp_path):
         """Quick-creating a product with a non-package image should be rejected."""
         with patch("app.routers.receiving.process_image", side_effect=_mock_process_not_package), \
-             patch("app.routers.receiving.settings") as mock_settings:
-            mock_settings.upload_dir = str(tmp_path)
+             patch("app.routers.receiving.storage", _tmp_storage(tmp_path)):
 
             resp = client.post(
                 "/api/receiving/new-product",

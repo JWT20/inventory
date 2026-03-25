@@ -432,7 +432,7 @@ function SKUDialog({
                   className="relative aspect-square rounded-lg overflow-hidden border border-border"
                 >
                   <img
-                    src={`/api/uploads/reference_images/${img.sku_id}/${img.image_path.split("/").pop()}`}
+                    src={img.image_path.startsWith("/") ? `/api/uploads/${img.image_path.replace(/^\/app\/uploads\//, "")}` : `/api/files/${img.image_path}`}
                     alt="ref"
                     className={`w-full h-full object-cover${img.processing_status !== "done" ? " opacity-50" : ""}`}
                   />
