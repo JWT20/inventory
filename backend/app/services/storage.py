@@ -134,6 +134,7 @@ class S3Storage(StorageBackend):
             Bucket=self._bucket,
             Key=key,
             Body=data,
+            ContentLength=len(data),
             ContentType=content_type,
         )
         return key
