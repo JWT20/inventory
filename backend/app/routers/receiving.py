@@ -10,7 +10,8 @@ from app.auth import require_warehouse
 from app.config import settings
 from app.database import get_db
 from app.events import publish_event
-from app.models import SKU, Booking, Order, OrderLine, ReferenceImage, User
+from app.models import SKU, Booking, InventoryBalance, Order, OrderLine, ReferenceImage, User
+from app.routers.inventory import apply_stock_movement
 from app.routers.skus import _check_duplicate_embedding, _sku_to_response
 from app.schemas import AlternativeMatch, BookingConfirmation, BookingResponse, ConfirmBookingRequest, MatchResult, SKUResponse
 from app.services.storage import storage
@@ -385,6 +386,22 @@ async def book_box(
                 400,
                 f"SKU {matched_sku.sku_code} is al volledig geboekt in deze order",
             )
+
+        # Pre-check stock availability
+        balance = (
+            db.query(InventoryBalance)
+            .filter(
+                InventoryBalance.sku_id == matched_sku.id,
+                InventoryBalance.merchant_id == order.merchant_id,
+            )
+            .first()
+        )
+        if not balance or balance.quantity_on_hand < 1:
+            raise HTTPException(
+                409,
+                f"Geen voorraad voor {matched_sku.sku_code} — is de pakbon al ingeboekt?",
+            )
+
         remaining = order_line.quantity - order_line.booked_count
 
         t_done = time.perf_counter()
@@ -471,6 +488,18 @@ def confirm_booking(
         last_booking = booking
     order_line.booked_count += quantity
     db.flush()
+
+    # Deduct stock
+    apply_stock_movement(
+        db,
+        sku_id=data["sku_id"],
+        merchant_id=order.merchant_id,
+        quantity=-quantity,
+        movement_type="pick",
+        reference_type="booking",
+        reference_id=last_booking.id,
+        performed_by=user.id,
+    )
 
     all_booked = all(l.booked_count >= l.quantity for l in order.lines)
     if all_booked:
@@ -573,6 +602,18 @@ def book_more(
         last_booking = booking
     order_line.booked_count += actual_quantity
     db.flush()
+
+    # Deduct stock
+    apply_stock_movement(
+        db,
+        sku_id=sku_id,
+        merchant_id=order.merchant_id,
+        quantity=-actual_quantity,
+        movement_type="pick",
+        reference_type="booking",
+        reference_id=last_booking.id,
+        performed_by=user.id,
+    )
 
     all_booked = all(l.booked_count >= l.quantity for l in order.lines)
     if all_booked:

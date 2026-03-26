@@ -20,7 +20,7 @@ from app.models import User
 from app.events import init_producer, shutdown_producer
 from app.services.langfuse_client import get_langfuse, shutdown_langfuse
 from app.services.storage import storage, LocalStorage
-from app.routers import auth, customers, orders, receiving, skus, vision
+from app.routers import auth, customers, inventory, orders, receiving, skus, vision
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -138,6 +138,7 @@ app.include_router(customers.router, prefix="/api")
 app.include_router(orders.router, prefix="/api")
 app.include_router(receiving.router, prefix="/api")
 app.include_router(vision.router, prefix="/api")
+app.include_router(inventory.router, prefix="/api")
 
 
 @app.get("/api/health")
