@@ -20,8 +20,6 @@ from app.schemas import (
     OrderLineResponse,
     OrderResponse,
     SKUResponse,
-    generate_display_name,
-    generate_sku_code,
 )
 from app.routers.skus import _sku_to_response
 
@@ -136,16 +134,14 @@ def upload_csv(
         if existing:
             matched_skus.append(existing)
         else:
+            attrs = row.wine_attributes
             sku = SKU(
                 sku_code=sku_code,
                 name=row.display_name,
                 description=f"{row.producent} {row.wijnaam} {row.type} {row.jaargang} {row.volume}",
-                producent=row.producent,
-                wijnaam=row.wijnaam,
-                wijntype=row.type,
-                jaargang=row.jaargang,
-                volume=row.volume,
+                category="wine",
             )
+            sku.set_attributes(attrs)
             db.add(sku)
             db.flush()
             new_skus.append(sku)

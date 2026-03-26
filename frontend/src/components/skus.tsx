@@ -21,11 +21,8 @@ interface SKU {
   name: string;
   description: string | null;
   active: boolean;
-  producent: string | null;
-  wijnaam: string | null;
-  wijntype: string | null;
-  jaargang: string | null;
-  volume: string | null;
+  category: string | null;
+  attributes: Record<string, string>;
   image_count: number;
 }
 
@@ -127,6 +124,15 @@ function SKUDialog({
   const [wijntype, setWijntype] = useState("");
   const [jaargang, setJaargang] = useState("");
   const [volume, setVolume] = useState("");
+
+  // Helper to build attributes dict from individual state fields
+  const getAttributes = () => ({
+    producent,
+    wijnaam,
+    wijntype,
+    jaargang,
+    volume,
+  });
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [images, setImages] = useState<RefImage[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -138,11 +144,12 @@ function SKUDialog({
 
   useEffect(() => {
     if (open && sku) {
-      setProducent(sku.producent || "");
-      setWijnaam(sku.wijnaam || "");
-      setWijntype(sku.wijntype || "");
-      setJaargang(sku.jaargang || "");
-      setVolume(sku.volume || "");
+      const a = sku.attributes || {};
+      setProducent(a.producent || "");
+      setWijnaam(a.wijnaam || "");
+      setWijntype(a.wijntype || "");
+      setJaargang(a.jaargang || "");
+      setVolume(a.volume || "");
       setCurrentId(sku.id);
       loadImages(sku.id);
     } else if (open) {
@@ -186,20 +193,13 @@ function SKUDialog({
       let skuId = currentId;
       if (skuId) {
         await api.updateSKU(skuId, {
-          producent,
-          wijnaam,
-          wijntype,
-          jaargang,
-          volume,
+          attributes: getAttributes(),
         });
         toast.success("SKU bijgewerkt");
       } else {
         const created = await api.createSKU({
-          producent,
-          wijnaam,
-          wijntype,
-          jaargang,
-          volume,
+          category: "wine",
+          attributes: getAttributes(),
         });
         skuId = created.id;
         setCurrentId(skuId);

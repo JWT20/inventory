@@ -3,7 +3,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from sqlalchemy import text
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, selectinload
 
 from app.auth import get_current_user, require_admin, require_product_manager
 from app.config import settings
@@ -11,12 +11,13 @@ from app.database import get_db
 from app.events import publish_event
 from app.models import SKU, ReferenceImage, User
 from app.schemas import (
+    WINE_ATTRIBUTE_KEYS,
     ReferenceImageResponse,
     SKUCreate,
     SKUResponse,
     SKUUpdate,
-    generate_display_name,
-    generate_sku_code,
+    generate_wine_display_name,
+    generate_wine_sku_code,
 )
 from langfuse import observe
 
@@ -67,11 +68,8 @@ def _sku_to_response(sku: SKU) -> SKUResponse:
         name=sku.name,
         description=sku.description,
         active=sku.active,
-        producent=sku.producent,
-        wijnaam=sku.wijnaam,
-        wijntype=sku.wijntype,
-        jaargang=sku.jaargang,
-        volume=sku.volume,
+        category=sku.category,
+        attributes=sku.attributes_dict,
         created_at=sku.created_at,
         updated_at=sku.updated_at,
         image_count=len(sku.reference_images),
@@ -84,7 +82,7 @@ def list_skus(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    query = db.query(SKU).options(joinedload(SKU.reference_images))
+    query = db.query(SKU).options(selectinload(SKU.reference_images), selectinload(SKU.attributes))
     if active_only:
         query = query.filter(SKU.active.is_(True))
     skus = query.order_by(SKU.name).all()
@@ -97,23 +95,32 @@ def create_sku(
     db: Session = Depends(get_db),
     user: User = Depends(require_product_manager),
 ):
-    sku_code = generate_sku_code(data.producent, data.wijnaam, data.wijntype, data.jaargang, data.volume)
+    # For wine: auto-generate sku_code and name from attributes
+    if data.category == "wine":
+        sku_code = data.sku_code or generate_wine_sku_code(data.attributes)
+        name = data.name or generate_wine_display_name(data.attributes)
+        description = " ".join(data.attributes.get(k, "") for k in WINE_ATTRIBUTE_KEYS)
+    else:
+        if not data.sku_code:
+            raise HTTPException(400, "sku_code is verplicht voor niet-wijn producten")
+        if not data.name:
+            raise HTTPException(400, "name is verplicht voor niet-wijn producten")
+        sku_code = data.sku_code
+        name = data.name
+        description = name
+
     existing = db.query(SKU).filter(SKU.sku_code == sku_code).first()
     if existing:
         raise HTTPException(400, f"SKU code '{sku_code}' bestaat al")
-    name = generate_display_name(data.producent, data.wijnaam, data.wijntype, data.jaargang)
-    description = f"{data.producent} {data.wijnaam} {data.wijntype} {data.jaargang} {data.volume}"
+
     sku = SKU(
         sku_code=sku_code,
         name=name,
         description=description,
         active=data.active,
-        producent=data.producent,
-        wijnaam=data.wijnaam,
-        wijntype=data.wijntype,
-        jaargang=data.jaargang,
-        volume=data.volume,
+        category=data.category,
     )
+    sku.set_attributes(data.attributes)
     db.add(sku)
     db.commit()
     db.refresh(sku)
@@ -149,19 +156,24 @@ def update_sku(
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU not found")
-    changed_fields = data.model_dump(exclude_unset=True)
-    for field, value in changed_fields.items():
-        setattr(sku, field, value)
 
-    # Regenerate sku_code and name if wine fields are all present
-    wine_fields = ("producent", "wijnaam", "wijntype", "jaargang", "volume")
-    if any(f in changed_fields for f in wine_fields) and all(getattr(sku, f) for f in wine_fields):
-        new_code = generate_sku_code(sku.producent, sku.wijnaam, sku.wijntype, sku.jaargang, sku.volume)
-        conflict = db.query(SKU).filter(SKU.sku_code == new_code, SKU.id != sku_id).first()
-        if conflict:
-            raise HTTPException(400, f"SKU code '{new_code}' bestaat al")
-        sku.sku_code = new_code
-        sku.name = generate_display_name(sku.producent, sku.wijnaam, sku.wijntype, sku.jaargang)
+    changed_fields = data.model_dump(exclude_unset=True)
+
+    if data.active is not None:
+        sku.active = data.active
+
+    if data.attributes is not None:
+        sku.set_attributes(data.attributes)
+        # Regenerate sku_code and name for wine SKUs when attributes change
+        if sku.category == "wine":
+            attrs = sku.attributes_dict
+            if all(attrs.get(k) for k in WINE_ATTRIBUTE_KEYS):
+                new_code = generate_wine_sku_code(attrs)
+                conflict = db.query(SKU).filter(SKU.sku_code == new_code, SKU.id != sku_id).first()
+                if conflict:
+                    raise HTTPException(400, f"SKU code '{new_code}' bestaat al")
+                sku.sku_code = new_code
+                sku.name = generate_wine_display_name(attrs)
 
     db.commit()
     db.refresh(sku)
