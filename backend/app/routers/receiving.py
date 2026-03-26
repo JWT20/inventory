@@ -623,6 +623,7 @@ async def create_product_inline(
     sku_code: str = Form(...),
     name: str = Form(...),
     description: str | None = Form(None),
+    category: str | None = Form(None),
     db: Session = Depends(get_db),
     user: User = Depends(require_warehouse),
 ):
@@ -634,7 +635,7 @@ async def create_product_inline(
     if existing:
         raise HTTPException(400, f"SKU code '{sku_code}' already exists")
 
-    sku = SKU(sku_code=sku_code, name=name, description=description)
+    sku = SKU(sku_code=sku_code, name=name, description=description, category=category)
     db.add(sku)
     db.flush()
 

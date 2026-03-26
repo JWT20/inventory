@@ -61,13 +61,7 @@ class SKU(Base):
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-
-    # Wine-specific fields
-    producent: Mapped[str | None] = mapped_column(String(150), nullable=True)
-    wijnaam: Mapped[str | None] = mapped_column(String(150), nullable=True)
-    wijntype: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    jaargang: Mapped[str | None] = mapped_column(String(10), nullable=True)
-    volume: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
@@ -79,6 +73,39 @@ class SKU(Base):
     reference_images: Mapped[list["ReferenceImage"]] = relationship(
         back_populates="sku", cascade="all, delete-orphan"
     )
+    attributes: Mapped[list["SKUAttribute"]] = relationship(
+        back_populates="sku", cascade="all, delete-orphan"
+    )
+
+    @property
+    def attributes_dict(self) -> dict[str, str]:
+        """Return attributes as a {key: value} dictionary."""
+        return {a.key: a.value for a in self.attributes}
+
+    def set_attribute(self, key: str, value: str) -> None:
+        """Set a single attribute, updating if exists or creating if new."""
+        for attr in self.attributes:
+            if attr.key == key:
+                attr.value = value
+                return
+        self.attributes.append(SKUAttribute(key=key, value=value))
+
+    def set_attributes(self, attrs: dict[str, str]) -> None:
+        """Bulk-set attributes from a dictionary."""
+        for key, value in attrs.items():
+            self.set_attribute(key, value)
+
+
+class SKUAttribute(Base):
+    __tablename__ = "sku_attributes"
+    __table_args__ = (UniqueConstraint("sku_id", "key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="CASCADE"))
+    key: Mapped[str] = mapped_column(String(100))
+    value: Mapped[str] = mapped_column(String(500))
+
+    sku: Mapped["SKU"] = relationship(back_populates="attributes")
 
 
 class ReferenceImage(Base):

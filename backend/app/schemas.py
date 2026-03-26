@@ -85,8 +85,11 @@ class UserResponse(BaseModel):
 
 # --- SKU ---
 
-def generate_sku_code(producent: str, wijnaam: str, wijntype: str, jaargang: str, volume: str) -> str:
-    """Generate SKU code like CHAT-GRAN-ROO-2019-750."""
+WINE_ATTRIBUTE_KEYS = ("producent", "wijnaam", "wijntype", "jaargang", "volume")
+
+
+def generate_wine_sku_code(attrs: dict[str, str]) -> str:
+    """Generate SKU code from wine attributes like CHAT-GRAN-ROO-2019-750."""
     def abbrev(s: str, length: int = 4) -> str:
         normalized = unicodedata.normalize("NFKD", s)
         ascii_only = "".join(c for c in normalized if not unicodedata.combining(c))
@@ -94,33 +97,38 @@ def generate_sku_code(producent: str, wijnaam: str, wijntype: str, jaargang: str
         return cleaned[:length]
 
     return "-".join([
-        abbrev(producent),
-        abbrev(wijnaam),
-        abbrev(wijntype, 3),
-        jaargang.strip(),
-        volume.strip().replace("ml", "").replace("cl", ""),
+        abbrev(attrs["producent"]),
+        abbrev(attrs["wijnaam"]),
+        abbrev(attrs["wijntype"], 3),
+        attrs["jaargang"].strip(),
+        attrs["volume"].strip().replace("ml", "").replace("cl", ""),
     ])
 
 
-def generate_display_name(producent: str, wijnaam: str, wijntype: str, jaargang: str) -> str:
-    return f"{producent} {wijnaam} {wijntype} {jaargang}"
+def generate_wine_display_name(attrs: dict[str, str]) -> str:
+    return f"{attrs['producent']} {attrs['wijnaam']} {attrs['wijntype']} {attrs['jaargang']}"
 
 
 class SKUCreate(BaseModel):
-    producent: str = Field(..., min_length=1)
-    wijnaam: str = Field(..., min_length=1)
-    wijntype: str = Field(..., min_length=1)
-    jaargang: str = Field(..., min_length=1)
-    volume: str = Field(..., min_length=1)
+    sku_code: str | None = None
+    name: str | None = None
+    category: str = "wine"
+    attributes: dict[str, str] = {}
     active: bool = True
+
+    @field_validator("attributes")
+    @classmethod
+    def validate_wine_attributes(cls, v: dict[str, str], info) -> dict[str, str]:
+        category = info.data.get("category", "wine")
+        if category == "wine":
+            missing = [k for k in WINE_ATTRIBUTE_KEYS if k not in v or not v[k].strip()]
+            if missing:
+                raise ValueError(f"Wijn-attributen ontbreken: {', '.join(missing)}")
+        return v
 
 
 class SKUUpdate(BaseModel):
-    producent: str | None = None
-    wijnaam: str | None = None
-    wijntype: str | None = None
-    jaargang: str | None = None
-    volume: str | None = None
+    attributes: dict[str, str] | None = None
     active: bool | None = None
 
 
@@ -130,11 +138,8 @@ class SKUResponse(BaseModel):
     name: str
     description: str | None
     active: bool
-    producent: str | None = None
-    wijnaam: str | None = None
-    wijntype: str | None = None
-    jaargang: str | None = None
-    volume: str | None = None
+    category: str | None = None
+    attributes: dict[str, str] = {}
     created_at: datetime
     updated_at: datetime
     image_count: int = 0
@@ -188,12 +193,22 @@ class CSVRow(BaseModel):
     aantal: int
 
     @property
+    def wine_attributes(self) -> dict[str, str]:
+        return {
+            "producent": self.producent,
+            "wijnaam": self.wijnaam,
+            "wijntype": self.type,
+            "jaargang": self.jaargang,
+            "volume": self.volume,
+        }
+
+    @property
     def sku_code(self) -> str:
-        return generate_sku_code(self.producent, self.wijnaam, self.type, self.jaargang, self.volume)
+        return generate_wine_sku_code(self.wine_attributes)
 
     @property
     def display_name(self) -> str:
-        return generate_display_name(self.producent, self.wijnaam, self.type, self.jaargang)
+        return generate_wine_display_name(self.wine_attributes)
 
 
 class CSVValidationResult(BaseModel):

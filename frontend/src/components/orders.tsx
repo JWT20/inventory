@@ -18,11 +18,8 @@ interface SKUOption {
   id: number;
   sku_code: string;
   name: string;
-  producent?: string;
-  wijnaam?: string;
-  wijntype?: string;
-  jaargang?: string;
-  volume?: string;
+  category?: string;
+  attributes?: Record<string, string>;
 }
 
 interface CustomerOption {
