@@ -21,6 +21,8 @@ EMBEDDING_DIM = 3072
 
 
 VALID_ROLES = ("admin", "merchant", "courier")
+VALID_SHIPMENT_STATUSES = ("draft", "booked")
+VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count")
 
 
 class User(Base):
@@ -222,3 +224,80 @@ class Booking(Base):
     order: Mapped["Order"] = relationship(back_populates="bookings")
     order_line: Mapped["OrderLine"] = relationship()
     sku: Mapped["SKU"] = relationship()
+
+
+class InboundShipment(Base):
+    """Pakbon / delivery note for incoming goods."""
+    __tablename__ = "inbound_shipments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    merchant_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    supplier_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    booked_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    booked_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+
+    merchant: Mapped["User"] = relationship(foreign_keys=[merchant_id])
+    booked_by_user: Mapped["User | None"] = relationship(foreign_keys=[booked_by])
+    lines: Mapped[list["InboundShipmentLine"]] = relationship(
+        back_populates="shipment", cascade="all, delete-orphan"
+    )
+
+
+class InboundShipmentLine(Base):
+    __tablename__ = "inbound_shipment_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    shipment_id: Mapped[int] = mapped_column(
+        ForeignKey("inbound_shipments.id", ondelete="CASCADE")
+    )
+    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
+    quantity: Mapped[int] = mapped_column(Integer)
+
+    shipment: Mapped["InboundShipment"] = relationship(back_populates="lines")
+    sku: Mapped["SKU"] = relationship()
+
+
+class InventoryBalance(Base):
+    __tablename__ = "inventory_balances"
+    __table_args__ = (UniqueConstraint("sku_id", "merchant_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
+    merchant_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    quantity_on_hand: Mapped[int] = mapped_column(Integer, default=0)
+    last_movement_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+
+    sku: Mapped["SKU"] = relationship()
+    merchant: Mapped["User"] = relationship()
+
+
+class StockMovement(Base):
+    __tablename__ = "stock_movements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
+    merchant_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    movement_type: Mapped[str] = mapped_column(String(20))
+    quantity: Mapped[int] = mapped_column(Integer)
+    reference_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    reference_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    performed_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    sku: Mapped["SKU"] = relationship()
+    merchant: Mapped["User"] = relationship(foreign_keys=[merchant_id])
+    performed_by_user: Mapped["User"] = relationship(foreign_keys=[performed_by])

@@ -311,3 +311,80 @@ class BookingConfirmation(BaseModel):
 class ConfirmBookingRequest(BaseModel):
     confirmation_token: str
     quantity: int = Field(1, ge=1)
+
+
+# --- Inbound Shipments ---
+
+class ShipmentLineCreate(BaseModel):
+    sku_id: int = Field(..., gt=0)
+    quantity: int = Field(..., gt=0)
+
+
+class ShipmentCreate(BaseModel):
+    supplier_name: str | None = None
+    reference: str | None = None
+    lines: list[ShipmentLineCreate] = Field(..., min_length=1)
+
+
+class ShipmentLineResponse(BaseModel):
+    id: int
+    sku_id: int
+    sku_code: str = ""
+    sku_name: str = ""
+    quantity: int
+
+    model_config = {"from_attributes": True}
+
+
+class ShipmentResponse(BaseModel):
+    id: int
+    merchant_id: int
+    supplier_name: str | None
+    reference: str | None
+    status: str
+    created_at: datetime
+    booked_at: datetime | None
+    booked_by: int | None
+    lines: list[ShipmentLineResponse] = []
+
+    model_config = {"from_attributes": True}
+
+
+# --- Inventory ---
+
+class InventoryBalanceResponse(BaseModel):
+    sku_id: int
+    sku_code: str = ""
+    sku_name: str = ""
+    merchant_id: int
+    quantity_on_hand: int
+    last_movement_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class StockMovementResponse(BaseModel):
+    id: int
+    sku_id: int
+    merchant_id: int
+    movement_type: str
+    quantity: int
+    reference_type: str | None
+    reference_id: int | None
+    note: str | None
+    performed_by: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class InventoryAdjustRequest(BaseModel):
+    sku_id: int = Field(..., gt=0)
+    quantity: int
+    note: str | None = None
+
+
+class InventoryCountRequest(BaseModel):
+    sku_id: int = Field(..., gt=0)
+    counted_quantity: int = Field(..., ge=0)
+    note: str | None = None

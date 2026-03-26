@@ -86,6 +86,45 @@ erDiagram
         datetime created_at
     }
 
+    inbound_shipments {
+        int id PK
+        int merchant_id FK
+        varchar supplier_name "nullable"
+        varchar reference "nullable"
+        varchar status "draft | booked"
+        datetime created_at
+        datetime booked_at "nullable"
+        int booked_by FK "nullable"
+    }
+
+    inbound_shipment_lines {
+        int id PK
+        int shipment_id FK
+        int sku_id FK
+        int quantity
+    }
+
+    inventory_balances {
+        int id PK
+        int sku_id FK
+        int merchant_id FK
+        int quantity_on_hand "default 0"
+        datetime last_movement_at "nullable"
+    }
+
+    stock_movements {
+        int id PK
+        int sku_id FK
+        int merchant_id FK
+        varchar movement_type "receive | pick | adjust | count"
+        int quantity "positive or negative"
+        varchar reference_type "shipment | booking | manual"
+        int reference_id "nullable"
+        text note "nullable"
+        int performed_by FK
+        datetime created_at
+    }
+
     %% --- Relationships ---
 
     skus ||--o{ sku_attributes : "has attributes"
@@ -93,40 +132,55 @@ erDiagram
     skus ||--o{ customer_skus : "in catalog"
     skus ||--o{ order_lines : "ordered as"
     skus ||--o{ bookings : "booked as"
+    skus ||--o{ inbound_shipment_lines : "received as"
+    skus ||--o{ inventory_balances : "tracked in"
+    skus ||--o{ stock_movements : "moved as"
 
     customers ||--o{ customer_skus : "has catalog"
     customers ||--o{ order_lines : "orders from"
 
     users ||--o{ orders : "merchant creates"
     users ||--o{ bookings : "courier scans"
+    users ||--o{ inbound_shipments : "merchant creates"
+    users ||--o{ stock_movements : "user performs"
 
     orders ||--o{ order_lines : "contains"
     orders ||--o{ bookings : "has bookings"
 
     order_lines ||--o{ bookings : "fulfilled by"
+
+    inbound_shipments ||--o{ inbound_shipment_lines : "contains"
 ```
 
-## Dataflow
+## Operational Flow
 
 ```mermaid
 flowchart LR
     subgraph Inbound
-        CSV[CSV Upload] --> SKU
-        FORM[Manual Form] --> SKU
-        SCAN[AI Box Scan] --> |identify| REF[Reference Images]
+        A[Pallet arriveert] --> B[Pakbon invoeren]
+        B --> C[Pakbon boeken]
+        C --> D[(voorraad +N)]
     end
 
-    subgraph Platform
-        SKU[SKU + Attributes]
-        REF --> SKU
-        SKU --> OL[Order Lines]
-        CUST[Customer] --> OL
-        ORD[Order] --> OL
-        OL --> BOOK[Booking]
+    subgraph Cross-dock
+        E[Doos scannen] --> F[AI match SKU]
+        F --> G[Toewijzen aan klantorder]
+        G --> H[Op rolcontainer]
+        G --> I[(voorraad -1)]
     end
 
     subgraph Outbound
-        BOOK --> PICK[Picklijst]
-        PICK --> DELIV[Bezorging]
+        H --> J[Koerier bezorgt]
     end
+
+    D --> E
 ```
+
+## Stock Movement Types
+
+| Type | Trigger | Qty | Description |
+|------|---------|-----|-------------|
+| `receive` | Pakbon boeken | +N | Goederen ontvangen van leverancier |
+| `pick` | Scan/booking | -1 | Doos gescand en op rolcontainer gezet |
+| `adjust` | Handmatige correctie | +/- | Correctie door admin/merchant |
+| `count` | Fysieke telling | +/- | Delta na telling (saldo bijstellen) |
