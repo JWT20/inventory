@@ -1,33 +1,24 @@
-"""Order management: CSV upload, SKU validation, order lifecycle."""
+"""Order management: manual order creation and lifecycle."""
 
-import csv
-import io
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, require_admin, require_product_manager
+from app.auth import get_current_user, require_admin, require_can_create_orders
 from app.database import get_db
 from app.events import publish_event
-from app.models import Booking, Customer, CustomerSKU, Order, OrderLine, SKU, User
+from app.models import Customer, CustomerSKU, Order, OrderLine, SKU, User
 from app.schemas import (
     BookingResponse,
-    CSVRow,
-    CSVValidationResult,
     ManualOrderCreate,
     OrderLineResponse,
     OrderResponse,
-    SKUResponse,
 )
-from app.routers.skus import _sku_to_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
-
-
-REQUIRED_CSV_COLUMNS = {"klant", "producent", "wijnaam", "type", "jaargang", "volume", "aantal"}
 
 
 def _order_line_to_response(line: OrderLine) -> OrderLineResponse:
@@ -51,170 +42,13 @@ def _order_to_response(order: Order) -> OrderResponse:
         id=order.id,
         reference=order.reference,
         status=order.status,
-        merchant_name=order.merchant.username,
+        organization_name=order.organization.name if order.organization else "",
+        created_by_name=order.creator.username if order.creator else "",
         created_at=order.created_at,
         updated_at=order.updated_at,
         lines=lines,
         total_boxes=sum(l.quantity for l in order.lines),
         booked_boxes=sum(l.booked_count for l in order.lines),
-    )
-
-
-def _parse_csv(content: str) -> tuple[list[CSVRow], list[str]]:
-    """Parse CSV content and return rows + errors."""
-    errors: list[str] = []
-    rows: list[CSVRow] = []
-
-    reader = csv.DictReader(io.StringIO(content), delimiter=";")
-
-    if reader.fieldnames is None:
-        return [], ["CSV bestand is leeg of ongeldig"]
-
-    # Normalize headers (lowercase, strip)
-    normalized = {h.strip().lower(): h for h in reader.fieldnames}
-    missing = REQUIRED_CSV_COLUMNS - set(normalized.keys())
-    if missing:
-        return [], [f"Ontbrekende kolommen: {', '.join(sorted(missing))}"]
-
-    for i, raw_row in enumerate(reader, start=2):
-        # Map normalized keys back
-        row_data = {k: raw_row[normalized[k]].strip() for k in normalized if normalized[k] in raw_row}
-        try:
-            aantal = int(row_data.get("aantal", "0"))
-            if aantal <= 0:
-                errors.append(f"Rij {i}: aantal moet groter zijn dan 0")
-                continue
-            csv_row = CSVRow(
-                klant=row_data["klant"],
-                producent=row_data["producent"],
-                wijnaam=row_data["wijnaam"],
-                type=row_data["type"],
-                jaargang=row_data["jaargang"],
-                volume=row_data["volume"],
-                aantal=aantal,
-            )
-            rows.append(csv_row)
-        except (ValueError, KeyError) as e:
-            errors.append(f"Rij {i}: {e}")
-
-    return rows, errors
-
-
-@router.post("/upload-csv", response_model=CSVValidationResult)
-def upload_csv(
-    file: UploadFile,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_product_manager),
-):
-    """Upload CSV, validate SKUs, create/match SKUs, create draft order."""
-    if not file.filename or not (file.filename.endswith(".csv") or file.filename.endswith(".txt")):
-        raise HTTPException(400, "Alleen CSV bestanden zijn toegestaan")
-
-    raw = file.file.read()
-    try:
-        content = raw.decode("utf-8-sig")  # handle BOM
-    except UnicodeDecodeError:
-        content = raw.decode("latin-1")
-
-    rows, errors = _parse_csv(content)
-    if not rows and errors:
-        raise HTTPException(400, detail="; ".join(errors))
-
-    matched_skus: list[SKU] = []
-    new_skus: list[SKU] = []
-    seen_codes: set[str] = set()
-
-    for row in rows:
-        sku_code = row.sku_code
-        if sku_code in seen_codes:
-            continue
-        seen_codes.add(sku_code)
-
-        existing = db.query(SKU).filter(SKU.sku_code == sku_code).first()
-        if existing:
-            matched_skus.append(existing)
-        else:
-            attrs = row.wine_attributes
-            sku = SKU(
-                sku_code=sku_code,
-                name=row.display_name,
-                description=f"{row.producent} {row.wijnaam} {row.type} {row.jaargang} {row.volume}",
-                category="wine",
-            )
-            sku.set_attributes(attrs)
-            db.add(sku)
-            db.flush()
-            new_skus.append(sku)
-
-    # Create order with lines
-    ref = f"ORD-{uuid.uuid4().hex[:8].upper()}"
-    order = Order(merchant_id=user.id, reference=ref, status="draft")
-    db.add(order)
-    db.flush()
-
-    # Resolve customers by name (find-or-create, case-insensitive)
-    customer_cache: dict[str, Customer] = {}
-    for row in rows:
-        name = row.klant.strip().lower()
-        if name in customer_cache:
-            continue
-        customer = db.query(Customer).filter(Customer.name == name).first()
-        if not customer:
-            customer = Customer(name=name)
-            db.add(customer)
-            db.flush()
-        customer_cache[name] = customer
-
-    # Group rows by (SKU code, customer_name) and sum quantities
-    line_quantities: dict[tuple[str, str], int] = {}
-    for row in rows:
-        key = (row.sku_code, row.klant.strip().lower())
-        line_quantities[key] = line_quantities.get(key, 0) + row.aantal
-
-    all_skus = {s.sku_code: s for s in matched_skus + new_skus}
-    customer_sku_pairs: set[tuple[int, int]] = set()
-    for (sku_code, cust_name), qty in line_quantities.items():
-        sku = all_skus[sku_code]
-        customer = customer_cache[cust_name]
-        line = OrderLine(
-            order_id=order.id,
-            sku_id=sku.id,
-            customer_id=customer.id,
-            klant=customer.name,
-            quantity=qty,
-        )
-        db.add(line)
-        customer_sku_pairs.add((customer.id, sku.id))
-
-    # Auto-populate customer_skus catalog
-    _upsert_customer_skus(db, customer_sku_pairs)
-
-    # Determine status: if any new SKU has no image → pending_images
-    if new_skus:
-        order.status = "pending_images"
-    else:
-        all_have_images = all(len(s.reference_images) > 0 for s in matched_skus)
-        order.status = "active" if all_have_images else "pending_images"
-
-    db.commit()
-
-    publish_event(
-        "order_created_from_csv",
-        details={
-            "order_reference": ref,
-            "matched_count": len(matched_skus),
-            "new_count": len(new_skus),
-            "total_lines": len(line_quantities),
-        },
-        user=user,
-        resource_type="order",
-        resource_id=order.id,
-    )
-
-    return CSVValidationResult(
-        matched_skus=[_sku_to_response(s) for s in matched_skus],
-        new_skus=[_sku_to_response(s) for s in new_skus],
-        errors=errors,
     )
 
 
@@ -230,19 +64,33 @@ def _upsert_customer_skus(db: Session, pairs: set[tuple[int, int]]):
             db.add(CustomerSKU(customer_id=customer_id, sku_id=sku_id))
 
 
+def _resolve_organization_id(user: User, body_org_id: int | None, db: Session) -> int:
+    """Determine the organization_id for an order based on user context."""
+    if user.is_platform_admin:
+        if body_org_id:
+            return body_org_id
+        raise HTTPException(400, "Platform admin must specify organization_id")
+    if user.organization_id:
+        return user.organization_id
+    raise HTTPException(400, "User has no organization")
+
+
 @router.post("", response_model=OrderResponse)
 def create_order(
     body: ManualOrderCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_product_manager),
+    user: User = Depends(require_can_create_orders),
 ):
     """Create an order by picking existing customers and SKUs."""
-    merchant = db.get(User, body.merchant_id)
-    if not merchant:
-        raise HTTPException(404, "Handelaar niet gevonden")
+    org_id = _resolve_organization_id(user, body.organization_id, db)
 
     ref = f"ORD-{uuid.uuid4().hex[:8].upper()}"
-    order = Order(merchant_id=merchant.id, reference=ref, status="draft")
+    order = Order(
+        organization_id=org_id,
+        created_by=user.id,
+        reference=ref,
+        status="draft",
+    )
     db.add(order)
     db.flush()
 
@@ -301,10 +149,26 @@ def list_orders(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """List orders. Merchants see their own, admins see all."""
+    """List orders based on user role.
+
+    - Platform admin: all orders
+    - Org owner/member: orders for their organization
+    - Customer: only their own orders
+    - Courier: all active orders (for delivery)
+    """
     query = db.query(Order)
-    if user.role == "merchant":
-        query = query.filter(Order.merchant_id == user.id)
+
+    if user.is_platform_admin:
+        pass  # See everything
+    elif user.role == "courier":
+        query = query.filter(Order.status == "active")
+    elif user.role == "customer":
+        query = query.filter(Order.created_by == user.id)
+    elif user.organization_id:
+        query = query.filter(Order.organization_id == user.organization_id)
+    else:
+        return []
+
     orders = query.order_by(Order.created_at.desc()).all()
     return [_order_to_response(o) for o in orders]
 
@@ -313,11 +177,20 @@ def list_orders(
 def get_order(
     order_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, "Order niet gevonden")
+
+    # Access control
+    if not user.is_platform_admin:
+        if user.role == "customer" and order.created_by != user.id:
+            raise HTTPException(403, "Geen toegang tot deze order")
+        elif user.organization_id and order.organization_id != user.organization_id:
+            if user.role != "courier":
+                raise HTTPException(403, "Geen toegang tot deze order")
+
     return _order_to_response(order)
 
 
@@ -325,12 +198,19 @@ def get_order(
 def activate_order(
     order_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_product_manager),
+    user: User = Depends(get_current_user),
 ):
     """Activate order — only possible when all SKUs have reference images."""
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, "Order niet gevonden")
+
+    # Only platform admin or org owner can activate
+    if not user.is_platform_admin and user.role != "owner":
+        raise HTTPException(403, "Alleen eigenaren kunnen orders activeren")
+    if not user.is_platform_admin and order.organization_id != user.organization_id:
+        raise HTTPException(403, "Geen toegang tot deze order")
+
     if order.status not in ("draft", "pending_images"):
         raise HTTPException(400, f"Order kan niet geactiveerd worden (status: {order.status})")
 
@@ -367,7 +247,7 @@ def delete_order(
     db: Session = Depends(get_db),
     user: User = Depends(require_admin),
 ):
-    """Delete an order and all its lines and bookings (admin only)."""
+    """Delete an order and all its lines and bookings (platform admin only)."""
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, "Order niet gevonden")
@@ -391,6 +271,8 @@ def list_bookings(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
+    from app.models import Booking
+
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, "Order niet gevonden")

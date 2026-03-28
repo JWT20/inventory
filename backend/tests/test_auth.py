@@ -19,7 +19,7 @@ class TestLogin:
         assert "access_token" in data
         assert data["token_type"] == "bearer"
         assert data["username"] == "admin"
-        assert data["role"] == "admin"
+        assert data["is_platform_admin"] is True
 
     def test_login_wrong_password(self, client, admin_user):
         resp = client.post("/api/auth/login", json={
@@ -50,7 +50,7 @@ class TestLogin:
             "password": "merchantpass",
         })
         assert resp.status_code == 200
-        assert resp.json()["role"] == "merchant"
+        assert resp.json()["role"] == "owner"
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ class TestMe:
         assert resp.status_code == 200
         data = resp.json()
         assert data["username"] == "admin"
-        assert data["role"] == "admin"
+        assert data["is_platform_admin"] is True
 
     def test_get_me_no_token(self, client):
         resp = client.get("/api/auth/me")
@@ -86,7 +86,7 @@ class TestListUsers:
         assert "admin" in usernames
         assert "merchant" in usernames
 
-    def test_merchant_cannot_list_users(self, client, merchant_token):
+    def test_owner_cannot_list_users(self, client, merchant_token):
         resp = client.get("/api/auth/users", headers=auth_header(merchant_token))
         assert resp.status_code == 403
 
@@ -119,7 +119,7 @@ class TestCreateUser:
         }, headers=auth_header(admin_token))
         assert resp.status_code == 400
 
-    def test_merchant_cannot_create_user(self, client, merchant_token):
+    def test_owner_cannot_create_user(self, client, merchant_token):
         resp = client.post("/api/auth/users", json={
             "username": "someone",
             "password": "Secret1x",
@@ -162,52 +162,49 @@ class TestDeleteUser:
         )
         assert resp.status_code == 404
 
-    def test_merchant_cannot_delete_user(self, client, merchant_token, courier_user):
+    def test_owner_cannot_delete_user(self, client, merchant_token, courier_user):
         resp = client.delete(
             f"/api/auth/users/{courier_user.id}",
             headers=auth_header(merchant_token),
         )
         assert resp.status_code == 403
 
-    def test_cannot_delete_last_admin(self, client, admin_token, admin_user):
-        """The only admin in the DB — deleting them should be blocked."""
-        # Create a non-admin user to delete *from* (admin can't self-delete anyway)
-        # Instead, try to delete the only admin via another admin
-        # Since admin can't delete themselves, create a second admin and then
-        # delete the first, leaving only one — then try deleting the remaining one.
-        resp = client.post("/api/auth/users", json={
-            "username": "admin2",
-            "password": "Secret1x",
-            "role": "admin",
-        }, headers=auth_header(admin_token))
-        assert resp.status_code == 201
-        admin2_id = resp.json()["id"]
+    def test_cannot_delete_last_platform_admin(self, client, admin_token, admin_user, db):
+        """The only platform admin in the DB — deleting them should be blocked."""
+        from app.auth import hash_password, create_token
+        from app.models import User
+        admin2 = User(
+            username="admin2", email="admin2@local",
+            hashed_password=hash_password("Secret1x"),
+            role="owner", is_platform_admin=True, is_superuser=True, is_verified=True,
+        )
+        db.add(admin2)
+        db.commit()
+        db.refresh(admin2)
+        admin2_token = create_token(admin2.id)
 
-        # Delete admin_user (original) — should succeed since admin2 still exists
-        # But admin can't delete self, so use admin2's token
-        from app.auth import create_token
-        admin2_token = create_token(admin2_id)
+        # Delete admin_user — should succeed since admin2 still exists
         resp = client.delete(
             f"/api/auth/users/{admin_user.id}",
             headers=auth_header(admin2_token),
         )
         assert resp.status_code == 204
 
-        # Now admin2 is the last admin — try to delete admin2 from admin2 (self-delete blocked)
+        # Now admin2 is the last platform admin — self-delete blocked
         resp = client.delete(
-            f"/api/auth/users/{admin2_id}",
+            f"/api/auth/users/{admin2.id}",
             headers=auth_header(admin2_token),
         )
         assert resp.status_code == 400  # "Cannot delete yourself"
 
-    def test_can_delete_non_last_admin(self, client, admin_token, admin_user, db):
-        """When multiple admins exist, deleting one should succeed."""
+    def test_can_delete_non_last_platform_admin(self, client, admin_token, admin_user, db):
+        """When multiple platform admins exist, deleting one should succeed."""
         from app.auth import hash_password
         from app.models import User
         admin2 = User(
             username="admin2", email="admin2@local",
             hashed_password=hash_password("Secret1x"),
-            role="admin", is_superuser=True, is_verified=True,
+            role="owner", is_platform_admin=True, is_superuser=True, is_verified=True,
         )
         db.add(admin2)
         db.commit()
@@ -294,11 +291,11 @@ class TestPasswordChange:
         )
         assert resp.status_code == 204
 
-    def test_non_admin_cannot_reset_others(self, client, merchant_token, admin_user):
+    def test_non_admin_cannot_reset_others(self, client, owner_token, admin_user):
         resp = client.put(
             f"/api/auth/users/{admin_user.id}/password",
             json={"new_password": "NewPass1x"},
-            headers=auth_header(merchant_token),
+            headers=auth_header(owner_token),
         )
         assert resp.status_code == 403
 

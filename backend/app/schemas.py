@@ -19,6 +19,9 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     username: str
     role: str
+    is_platform_admin: bool = False
+    organization_id: int | None = None
+    organization_name: str | None = None
 
 
 class RefreshRequest(BaseModel):
@@ -46,7 +49,8 @@ def _validate_password(password: str) -> str:
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=100)
     password: str = Field(..., min_length=8, max_length=128)
-    role: Literal["admin", "merchant", "courier"] = "courier"
+    role: Literal["owner", "member", "courier", "customer"] = "courier"
+    organization_id: int | None = None
 
     @field_validator("password")
     @classmethod
@@ -77,7 +81,28 @@ class UserResponse(BaseModel):
     id: int
     username: str
     role: str
+    is_platform_admin: bool = False
+    organization_id: int | None = None
+    organization_name: str | None = None
     is_active: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# --- Organization ---
+
+class OrganizationCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    slug: str = Field(..., min_length=1, max_length=100)
+    enabled_modules: list[str] = ["inventory", "orders"]
+
+
+class OrganizationResponse(BaseModel):
+    id: int
+    name: str
+    slug: str
+    enabled_modules: list[str] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -182,41 +207,6 @@ class MatchResult(BaseModel):
     reference_image_urls: list[str] = []
 
 
-# --- CSV Row ---
-class CSVRow(BaseModel):
-    klant: str
-    producent: str
-    wijnaam: str
-    type: str
-    jaargang: str
-    volume: str
-    aantal: int
-
-    @property
-    def wine_attributes(self) -> dict[str, str]:
-        return {
-            "producent": self.producent,
-            "wijnaam": self.wijnaam,
-            "wijntype": self.type,
-            "jaargang": self.jaargang,
-            "volume": self.volume,
-        }
-
-    @property
-    def sku_code(self) -> str:
-        return generate_wine_sku_code(self.wine_attributes)
-
-    @property
-    def display_name(self) -> str:
-        return generate_wine_display_name(self.wine_attributes)
-
-
-class CSVValidationResult(BaseModel):
-    matched_skus: list[SKUResponse]
-    new_skus: list[SKUResponse]
-    errors: list[str]
-
-
 # --- Customer ---
 class CustomerCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=150)
@@ -251,7 +241,8 @@ class OrderResponse(BaseModel):
     id: int
     reference: str
     status: str
-    merchant_name: str
+    organization_name: str = ""
+    created_by_name: str = ""
     created_at: datetime
     updated_at: datetime
     lines: list[OrderLineResponse] = []
@@ -268,7 +259,7 @@ class ManualOrderLineCreate(BaseModel):
 
 
 class ManualOrderCreate(BaseModel):
-    merchant_id: int
+    organization_id: int | None = None
     lines: list[ManualOrderLineCreate] = Field(..., min_length=1)
 
 
@@ -338,7 +329,7 @@ class ShipmentLineResponse(BaseModel):
 
 class ShipmentResponse(BaseModel):
     id: int
-    merchant_id: int
+    organization_id: int | None = None
     supplier_name: str | None
     reference: str | None
     status: str
@@ -356,7 +347,7 @@ class InventoryBalanceResponse(BaseModel):
     sku_id: int
     sku_code: str = ""
     sku_name: str = ""
-    merchant_id: int
+    organization_id: int | None = None
     quantity_on_hand: int
     last_movement_at: datetime | None
 
@@ -366,7 +357,7 @@ class InventoryBalanceResponse(BaseModel):
 class StockMovementResponse(BaseModel):
     id: int
     sku_id: int
-    merchant_id: int
+    organization_id: int | None = None
     movement_type: str
     quantity: int
     reference_type: str | None

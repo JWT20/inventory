@@ -233,24 +233,40 @@ def get_current_user(user: User = Depends(current_active_user)) -> User:
 
 
 def require_admin(user: User = Depends(current_active_user)) -> User:
-    """Must be admin."""
-    if not user.is_admin:
+    """Must be platform admin."""
+    if not user.is_platform_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
     return user
 
 
+def require_platform_admin(user: User = Depends(current_active_user)) -> User:
+    """Must be platform admin."""
+    if not user.is_platform_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Platform admin access required")
+    return user
+
+
 def require_warehouse(user: User = Depends(current_active_user)) -> User:
-    """Must be admin or courier (warehouse workers who scan & book)."""
-    if user.role not in ("admin", "courier"):
+    """Must be platform admin or courier (warehouse workers who scan & book)."""
+    if not user.is_platform_admin and user.role != "courier":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Warehouse access required")
     return user
 
 
 def require_product_manager(user: User = Depends(current_active_user)) -> User:
-    """Must be admin or merchant."""
+    """Must be platform admin or org owner/member."""
     if not user.can_manage_products:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Merchant or admin access required")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Product management access required")
     return user
+
+
+def require_can_create_orders(user: User = Depends(current_active_user)) -> User:
+    """Must be platform admin, org owner/member, or customer."""
+    if user.is_platform_admin:
+        return user
+    if user.role in ("owner", "member", "customer"):
+        return user
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "Order creation access required")
 
 
 # ---------------------------------------------------------------------------

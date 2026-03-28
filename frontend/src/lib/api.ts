@@ -142,7 +142,7 @@ export const api = {
     json("/auth/login", "POST", { username, password }),
   me: () => request("/auth/me"),
   listUsers: () => request("/auth/users"),
-  createUser: (data: { username: string; password: string; role: string }) =>
+  createUser: (data: { username: string; password: string; role: string; organization_id?: number | null }) =>
     json("/auth/users", "POST", data),
   deleteUser: (id: number) => request(`/auth/users/${id}`, { method: "DELETE" }),
   resetUserPassword: (userId: number, newPassword: string) =>
@@ -151,6 +151,12 @@ export const api = {
     json("/auth/me/password", "PUT", { current_password: currentPassword, new_password: newPassword }),
   logout: (refreshToken: string) =>
     json("/auth/logout", "POST", { refresh_token: refreshToken }),
+
+  // Organizations
+  listOrganizations: () => request("/auth/organizations"),
+  createOrganization: (data: { name: string; slug: string; enabled_modules?: string[] }) =>
+    json("/auth/organizations", "POST", data),
+  deleteOrganization: (id: number) => request(`/auth/organizations/${id}`, { method: "DELETE" }),
 
   // SKUs
   listSKUs: (activeOnly = false) =>
@@ -204,13 +210,8 @@ export const api = {
   deleteCustomer: (id: number) => request(`/customers/${id}`, { method: "DELETE" }),
 
   // Orders
-  uploadCSV: (file: File) => {
-    const form = new FormData();
-    form.append("file", file);
-    return request("/orders/upload-csv", { method: "POST", body: form });
-  },
   createOrder: (data: {
-    merchant_id: number;
+    organization_id?: number | null;
     lines: {
       customer_id: number;
       sku_id: number;

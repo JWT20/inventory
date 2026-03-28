@@ -28,12 +28,6 @@ interface CustomerOption {
   sku_ids: number[];
 }
 
-interface UserOption {
-  id: number;
-  username: string;
-  role: string;
-}
-
 interface OrderLine {
   id: number;
   sku_id: number;
@@ -51,17 +45,12 @@ interface Order {
   id: number;
   reference: string;
   status: string;
-  merchant_name: string;
+  organization_name: string;
+  created_by_name: string;
   created_at: string;
   lines: OrderLine[];
   total_boxes: number;
   booked_boxes: number;
-}
-
-interface CSVResult {
-  matched_skus: { id: number; sku_code: string; name: string; image_count: number }[];
-  new_skus: { id: number; sku_code: string; name: string; image_count: number }[];
-  errors: string[];
 }
 
 interface CustomerSkuLine {
@@ -90,9 +79,7 @@ export function OrdersPage() {
   const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const [showUpload, setShowUpload] = useState(false);
   const [showManual, setShowManual] = useState(false);
-  const [csvResult, setCsvResult] = useState<CSVResult | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -106,19 +93,22 @@ export function OrdersPage() {
     load();
   }, [load]);
 
+  // Who can create orders?
+  const canCreate =
+    user &&
+    (user.is_platform_admin ||
+      user.role === "owner" ||
+      user.role === "member" ||
+      user.role === "customer");
+
   return (
     <>
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Orders</h2>
-        {user && user.role !== "courier" && (
-          <div className="flex gap-2">
-            <Button size="sm" variant="secondary" onClick={() => setShowUpload(true)}>
-              CSV Upload
-            </Button>
-            <Button size="sm" onClick={() => setShowManual(true)}>
-              + Order
-            </Button>
-          </div>
+        {canCreate && (
+          <Button size="sm" onClick={() => setShowManual(true)}>
+            + Order
+          </Button>
         )}
       </div>
 
@@ -141,7 +131,8 @@ export function OrdersPage() {
                 </Badge>
               </div>
               <p className="text-sm text-muted-foreground">
-                {o.merchant_name} &middot; {o.lines.length} product
+                {o.organization_name || o.created_by_name} &middot;{" "}
+                {o.lines.length} product
                 {o.lines.length !== 1 ? "en" : ""}
               </p>
               <p className="text-sm text-muted-foreground">
@@ -156,19 +147,6 @@ export function OrdersPage() {
         open={showManual}
         onClose={() => setShowManual(false)}
         onCreated={load}
-      />
-
-      <CSVUploadDialog
-        open={showUpload}
-        onClose={() => {
-          setShowUpload(false);
-          setCsvResult(null);
-        }}
-        onResult={(r) => {
-          setCsvResult(r);
-          load();
-        }}
-        result={csvResult}
       />
 
       <OrderDetailDialog
@@ -191,15 +169,12 @@ function ManualOrderDialog({
   onCreated: () => void;
 }) {
   const { user } = useAuth();
-  const [merchants, setMerchants] = useState<UserOption[]>([]);
   const [allSkus, setAllSkus] = useState<SKUOption[]>([]);
   const [allCustomers, setAllCustomers] = useState<CustomerOption[]>([]);
-  const [merchantId, setMerchantId] = useState<number | "">("");
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<number[]>([]);
-  // Per-customer SKU lines: customerId → { skuId → { checked, quantity } }
-  const [customerLines, setCustomerLines] = useState<Record<number, CustomerSkuLine[]>>({});
-  // Per-customer extra SKUs added via search
-  const [extraSkus, setExtraSkus] = useState<Record<number, number[]>>({});
+  const [customerLines, setCustomerLines] = useState<
+    Record<number, CustomerSkuLine[]>
+  >({});
   const [submitting, setSubmitting] = useState(false);
   const [customerSearch, setCustomerSearch] = useState("");
   const [newCustomerName, setNewCustomerName] = useState("");
@@ -207,30 +182,27 @@ function ManualOrderDialog({
 
   useEffect(() => {
     if (!open) return;
-    if (user?.role === "merchant") {
-      setMerchantId(user.id);
-    }
-    api.listUsers().then((users: UserOption[]) =>
-      setMerchants(users.filter((u) => u.role === "merchant" || u.role === "admin")),
-    );
     api.listSKUs().then((s: SKUOption[]) => setAllSkus(s));
     api.listCustomers().then((c: CustomerOption[]) => setAllCustomers(c));
-  }, [open, user]);
+  }, [open]);
 
   function toggleCustomer(customerId: number) {
     if (selectedCustomerIds.includes(customerId)) {
-      setSelectedCustomerIds(selectedCustomerIds.filter((id) => id !== customerId));
+      setSelectedCustomerIds(
+        selectedCustomerIds.filter((id) => id !== customerId),
+      );
       return;
     }
     setSelectedCustomerIds([...selectedCustomerIds, customerId]);
-    // Initialize lines from customer's known SKUs if not already set
     if (!customerLines[customerId]) {
       const customer = allCustomers.find((c) => c.id === customerId);
-      const lines: CustomerSkuLine[] = (customer?.sku_ids || []).map((skuId) => ({
-        sku_id: skuId,
-        checked: false,
-        quantity: 1,
-      }));
+      const lines: CustomerSkuLine[] = (customer?.sku_ids || []).map(
+        (skuId) => ({
+          sku_id: skuId,
+          checked: false,
+          quantity: 1,
+        }),
+      );
       setCustomerLines((prev) => ({ ...prev, [customerId]: lines }));
     }
   }
@@ -246,7 +218,11 @@ function ManualOrderDialog({
     });
   }
 
-  function updateSkuQuantity(customerId: number, skuId: number, qty: number) {
+  function updateSkuQuantity(
+    customerId: number,
+    skuId: number,
+    qty: number,
+  ) {
     setCustomerLines((prev) => {
       const lines = [...(prev[customerId] || [])];
       const idx = lines.findIndex((l) => l.sku_id === skuId);
@@ -258,17 +234,12 @@ function ManualOrderDialog({
   }
 
   function addExtraSku(customerId: number, skuId: number) {
-    // Add to the customer's lines if not already there
     setCustomerLines((prev) => {
       const lines = [...(prev[customerId] || [])];
       if (lines.some((l) => l.sku_id === skuId)) return prev;
       lines.push({ sku_id: skuId, checked: true, quantity: 1 });
       return { ...prev, [customerId]: lines };
     });
-    setExtraSkus((prev) => ({
-      ...prev,
-      [customerId]: [...(prev[customerId] || []), skuId],
-    }));
   }
 
   async function handleCreateCustomer() {
@@ -278,22 +249,22 @@ function ManualOrderDialog({
       const created = await api.createCustomer(newCustomerName.trim());
       setAllCustomers((prev) => [...prev, created]);
       setNewCustomerName("");
-      // Auto-select the new customer
       toggleCustomer(created.id);
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Klant aanmaken mislukt");
+      toast.error(
+        err instanceof Error ? err.message : "Klant aanmaken mislukt",
+      );
     } finally {
       setCreatingCustomer(false);
     }
   }
 
   async function submit() {
-    if (!merchantId) {
-      toast.error("Selecteer een handelaar");
-      return;
-    }
-    // Build lines from all selected customers
-    const orderLines: { customer_id: number; sku_id: number; quantity: number }[] = [];
+    const orderLines: {
+      customer_id: number;
+      sku_id: number;
+      quantity: number;
+    }[] = [];
     for (const customerId of selectedCustomerIds) {
       const lines = customerLines[customerId] || [];
       for (const line of lines) {
@@ -313,17 +284,14 @@ function ManualOrderDialog({
     setSubmitting(true);
     try {
       await api.createOrder({
-        merchant_id: merchantId as number,
+        organization_id: user?.organization_id,
         lines: orderLines,
       });
       toast.success("Order aangemaakt");
       onCreated();
       onClose();
-      // Reset state
-      setMerchantId(user?.role === "merchant" ? user.id : "");
       setSelectedCustomerIds([]);
       setCustomerLines({});
-      setExtraSkus({});
       setCustomerSearch("");
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Aanmaken mislukt");
@@ -332,7 +300,8 @@ function ManualOrderDialog({
     }
   }
 
-  const inp = "rounded-md border border-border bg-background px-2 py-1.5 text-sm w-full";
+  const inp =
+    "rounded-md border border-border bg-background px-2 py-1.5 text-sm w-full";
 
   const filteredCustomers = allCustomers.filter((c) =>
     c.name.toLowerCase().includes(customerSearch.toLowerCase()),
@@ -346,26 +315,6 @@ function ManualOrderDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          {user?.role !== "merchant" && (
-            <div>
-              <Label className="mb-1 block text-sm">Handelaar</Label>
-              <select
-                className={inp}
-                value={merchantId}
-                onChange={(e) =>
-                  setMerchantId(e.target.value ? Number(e.target.value) : "")
-                }
-              >
-                <option value="">Selecteer handelaar...</option>
-                {merchants.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.username}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
           {/* Customer selection */}
           <div>
             <Label className="mb-1 block text-sm">Klanten</Label>
@@ -379,7 +328,9 @@ function ManualOrderDialog({
             </div>
             <div className="max-h-32 overflow-y-auto border border-border rounded-md">
               {filteredCustomers.length === 0 ? (
-                <p className="text-xs text-muted-foreground p-2">Geen klanten gevonden</p>
+                <p className="text-xs text-muted-foreground p-2">
+                  Geen klanten gevonden
+                </p>
               ) : (
                 filteredCustomers.map((c) => (
                   <label
@@ -393,7 +344,8 @@ function ManualOrderDialog({
                     />
                     <span>{c.name}</span>
                     <span className="text-xs text-muted-foreground ml-auto">
-                      {c.sku_ids.length} product{c.sku_ids.length !== 1 ? "en" : ""}
+                      {c.sku_ids.length} product
+                      {c.sku_ids.length !== 1 ? "en" : ""}
                     </span>
                   </label>
                 ))
@@ -406,7 +358,9 @@ function ManualOrderDialog({
                 placeholder="Nieuwe klant..."
                 value={newCustomerName}
                 onChange={(e) => setNewCustomerName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleCreateCustomer()}
+                onKeyDown={(e) =>
+                  e.key === "Enter" && handleCreateCustomer()
+                }
               />
               <Button
                 variant="secondary"
@@ -440,13 +394,21 @@ function ManualOrderDialog({
                       const sku = allSkus.find((s) => s.id === line.sku_id);
                       if (!sku) return null;
                       return (
-                        <div key={line.sku_id} className="flex items-center gap-2">
+                        <div
+                          key={line.sku_id}
+                          className="flex items-center gap-2"
+                        >
                           <input
                             type="checkbox"
                             checked={line.checked}
-                            onChange={() => toggleSkuLine(customerId, line.sku_id)}
+                            onChange={() =>
+                              toggleSkuLine(customerId, line.sku_id)
+                            }
                           />
-                          <span className="text-sm flex-1 truncate" title={`${sku.name} (${sku.sku_code})`}>
+                          <span
+                            className="text-sm flex-1 truncate"
+                            title={`${sku.name} (${sku.sku_code})`}
+                          >
                             {sku.name}
                           </span>
                           <Input
@@ -457,7 +419,11 @@ function ManualOrderDialog({
                             value={line.checked ? line.quantity : ""}
                             disabled={!line.checked}
                             onChange={(e) =>
-                              updateSkuQuantity(customerId, line.sku_id, Number(e.target.value) || 1)
+                              updateSkuQuantity(
+                                customerId,
+                                line.sku_id,
+                                Number(e.target.value) || 1,
+                              )
                             }
                           />
                         </div>
@@ -470,13 +436,16 @@ function ManualOrderDialog({
                       className={inp}
                       value=""
                       onChange={(e) => {
-                        if (e.target.value) addExtraSku(customerId, Number(e.target.value));
+                        if (e.target.value)
+                          addExtraSku(customerId, Number(e.target.value));
                         e.target.value = "";
                       }}
                     >
                       <option value="">+ Ander product toevoegen...</option>
                       {allSkus
-                        .filter((s) => !lines.some((l) => l.sku_id === s.id))
+                        .filter(
+                          (s) => !lines.some((l) => l.sku_id === s.id),
+                        )
                         .map((s) => (
                           <option key={s.id} value={s.id}>
                             {s.name} ({s.sku_code})
@@ -502,133 +471,6 @@ function ManualOrderDialog({
   );
 }
 
-function CSVUploadDialog({
-  open,
-  onClose,
-  onResult,
-  result,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onResult: (r: CSVResult) => void;
-  result: CSVResult | null;
-}) {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-
-  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
-    try {
-      const res = await api.uploadCSV(file);
-      onResult(res);
-      toast.success("CSV verwerkt");
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Upload mislukt");
-    } finally {
-      setUploading(false);
-      e.target.value = "";
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>CSV Importeren</DialogTitle>
-        </DialogHeader>
-
-        <div className="space-y-4">
-          <div>
-            <Label className="mb-2 block text-sm">
-              Upload een CSV met kolommen: klant, producent, wijnaam, type, jaargang,
-              volume, aantal (scheidingsteken: puntkomma)
-            </Label>
-            <Button
-              variant="secondary"
-              onClick={() => fileRef.current?.click()}
-              disabled={uploading}
-            >
-              {uploading ? "Uploaden..." : "CSV selecteren"}
-            </Button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".csv,.txt"
-              className="hidden"
-              onChange={handleFile}
-            />
-          </div>
-
-          {result && (
-            <div className="space-y-3">
-              {result.errors.length > 0 && (
-                <div className="p-3 bg-red-600/20 border border-red-600 rounded-lg">
-                  <p className="text-sm font-semibold text-red-400 mb-1">
-                    Waarschuwingen
-                  </p>
-                  {result.errors.map((e, i) => (
-                    <p key={i} className="text-xs text-red-300">
-                      {e}
-                    </p>
-                  ))}
-                </div>
-              )}
-
-              {result.matched_skus.length > 0 && (
-                <div>
-                  <p className="text-sm font-semibold mb-1">
-                    Bestaande SKU's gekoppeld ({result.matched_skus.length})
-                  </p>
-                  {result.matched_skus.map((s) => (
-                    <p key={s.id} className="text-xs text-muted-foreground">
-                      {s.sku_code} — {s.name}
-                    </p>
-                  ))}
-                </div>
-              )}
-
-              {result.new_skus.length > 0 && (
-                <div>
-                  <p className="text-sm font-semibold mb-1 text-amber-400">
-                    Nieuwe SKU's aangemaakt ({result.new_skus.length}) — upload
-                    referentiebeelden
-                  </p>
-                  {result.new_skus.map((s) => (
-                    <div
-                      key={s.id}
-                      className="flex items-center justify-between text-xs py-1"
-                    >
-                      <span>
-                        {s.sku_code} — {s.name}
-                      </span>
-                      <Badge variant={s.image_count > 0 ? "active" : "inactive"}>
-                        {s.image_count > 0 ? "Beeld" : "Geen beeld"}
-                      </Badge>
-                    </div>
-                  ))}
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Ga naar Producten om referentiebeelden te uploaden
-                  </p>
-                </div>
-              )}
-
-              {result.new_skus.length === 0 &&
-                result.matched_skus.length > 0 &&
-                result.errors.length === 0 && (
-                  <p className="text-sm text-green-400">
-                    Alle SKU's gekoppeld — order is direct actief
-                  </p>
-                )}
-            </div>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 function OrderDetailDialog({
   open,
   order,
@@ -648,10 +490,15 @@ function OrderDetailDialog({
 
   if (!order) return null;
 
+  const isAdmin = user?.is_platform_admin;
+  const isOwner = user?.role === "owner";
+  const canManage = isAdmin || isOwner;
+
   const skusWithoutImages = order.lines.filter((l) => !l.has_image);
   const canActivate =
     (order.status === "draft" || order.status === "pending_images") &&
-    skusWithoutImages.length === 0;
+    skusWithoutImages.length === 0 &&
+    canManage;
 
   async function activate() {
     if (!order) return;
@@ -670,7 +517,12 @@ function OrderDetailDialog({
 
   async function handleDelete() {
     if (!order) return;
-    if (!confirm(`Order ${order.reference} verwijderen? Dit kan niet ongedaan worden.`)) return;
+    if (
+      !confirm(
+        `Order ${order.reference} verwijderen? Dit kan niet ongedaan worden.`,
+      )
+    )
+      return;
     setDeleting(true);
     try {
       await api.deleteOrder(order.id);
@@ -678,13 +530,18 @@ function OrderDetailDialog({
       onUpdated();
       onClose();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Verwijderen mislukt");
+      toast.error(
+        err instanceof Error ? err.message : "Verwijderen mislukt",
+      );
     } finally {
       setDeleting(false);
     }
   }
 
-  async function handleImageUpload(skuId: number, e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleImageUpload(
+    skuId: number,
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploadingSkuId(skuId);
@@ -717,7 +574,8 @@ function OrderDetailDialog({
 
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Handelaar: {order.merchant_name}
+            {order.organization_name}
+            {order.created_by_name && ` — ${order.created_by_name}`}
           </p>
           <p className="text-sm text-muted-foreground">
             Voortgang: {order.booked_boxes}/{order.total_boxes} dozen geboekt
@@ -734,35 +592,44 @@ function OrderDetailDialog({
                   <div>
                     <p className="font-medium">{line.sku_name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {line.sku_code} &middot; Klant: {line.customer_name || line.klant}
+                      {line.sku_code} &middot; Klant:{" "}
+                      {line.customer_name || line.klant}
                     </p>
                   </div>
                   <div className="text-right flex items-center gap-2">
                     <p>
                       {line.booked_count}/{line.quantity} dozen
                     </p>
-                    {!line.has_image && user && user.role !== "courier" && (
+                    {!line.has_image && canManage && (
                       <>
                         <Button
                           variant="secondary"
                           size="sm"
                           className="text-xs h-7 px-2"
                           disabled={uploadingSkuId === line.sku_id}
-                          onClick={() => fileRefs.current[line.sku_id]?.click()}
+                          onClick={() =>
+                            fileRefs.current[line.sku_id]?.click()
+                          }
                         >
-                          {uploadingSkuId === line.sku_id ? "Uploaden..." : "Foto"}
+                          {uploadingSkuId === line.sku_id
+                            ? "Uploaden..."
+                            : "Foto"}
                         </Button>
                         <input
-                          ref={(el) => { fileRefs.current[line.sku_id] = el; }}
+                          ref={(el) => {
+                            fileRefs.current[line.sku_id] = el;
+                          }}
                           type="file"
                           accept="image/*"
                           capture="environment"
                           className="hidden"
-                          onChange={(e) => handleImageUpload(line.sku_id, e)}
+                          onChange={(e) =>
+                            handleImageUpload(line.sku_id, e)
+                          }
                         />
                       </>
                     )}
-                    {!line.has_image && (user?.role === "courier" || !user) && (
+                    {!line.has_image && !canManage && (
                       <p className="text-xs text-amber-400">Geen beeld</p>
                     )}
                   </div>
@@ -790,7 +657,7 @@ function OrderDetailDialog({
             </Button>
           )}
 
-          {user?.role === "admin" && (
+          {isAdmin && (
             <Button
               variant="destructive"
               className="w-full"
