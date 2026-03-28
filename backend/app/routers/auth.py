@@ -54,14 +54,23 @@ class _LoginCredentials:
     password: str
 
 
-def _user_to_response(user: User) -> UserResponse:
+def _user_to_response(user: User, db: Session | None = None) -> UserResponse:
+    # Resolve org name: use relationship if already loaded, else query via db
+    org_name = None
+    if user.organization_id:
+        try:
+            org_name = user.organization.name if user.organization else None
+        except Exception:
+            if db:
+                org = db.get(Organization, user.organization_id)
+                org_name = org.name if org else None
     return UserResponse(
         id=user.id,
         username=user.username,
         role=user.role,
         is_platform_admin=user.is_platform_admin,
         organization_id=user.organization_id,
-        organization_name=user.organization.name if user.organization else None,
+        organization_name=org_name,
         is_active=user.is_active,
         created_at=user.created_at,
     )
@@ -71,6 +80,7 @@ def _user_to_response(user: User) -> UserResponse:
 async def login(
     body: LoginRequest,
     request: Request,
+    db: Session = Depends(get_db),
     user_manager: UserManager = Depends(get_user_manager),
 ):
     # Rate limit by IP + username combination
@@ -99,6 +109,12 @@ async def login(
     # Create access token via FastAPI-Users' JWT strategy (includes exp)
     access_token = await create_access_token_for_user(user)
 
+    # Resolve organization name via sync session (async lazy-load not possible)
+    org_name = None
+    if user.organization_id:
+        org = db.get(Organization, user.organization_id)
+        org_name = org.name if org else None
+
     publish_event(
         "user_login",
         details={"username": user.username, "success": True},
@@ -112,7 +128,7 @@ async def login(
         role=user.role,
         is_platform_admin=user.is_platform_admin,
         organization_id=user.organization_id,
-        organization_name=user.organization.name if user.organization else None,
+        organization_name=org_name,
     )
 
 
@@ -131,8 +147,8 @@ async def refresh_token(body: RefreshRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/me", response_model=UserResponse)
-def get_me(user: User = Depends(get_current_user)):
-    return _user_to_response(user)
+def get_me(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return _user_to_response(user, db)
 
 
 # --- Admin-only user management ---
@@ -140,7 +156,7 @@ def get_me(user: User = Depends(get_current_user)):
 @router.get("/users", response_model=list[UserResponse])
 def list_users(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     users = db.query(User).order_by(User.username).all()
-    return [_user_to_response(u) for u in users]
+    return [_user_to_response(u, db) for u in users]
 
 
 @router.post("/users", response_model=UserResponse, status_code=201)
