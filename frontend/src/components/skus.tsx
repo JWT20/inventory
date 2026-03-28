@@ -576,7 +576,7 @@ function SKUDialog({
           )}
         </div>
 
-        {user?.role === "admin" && currentId && (
+        {user?.is_platform_admin && currentId && (
           <div className="mt-6 pt-4 border-t border-border">
             <Button
               variant="destructive"
