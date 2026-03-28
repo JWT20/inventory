@@ -80,11 +80,13 @@ def _sku_to_response(sku: SKU) -> SKUResponse:
 def list_skus(
     active_only: bool = False,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     query = db.query(SKU).options(selectinload(SKU.reference_images), selectinload(SKU.attributes))
     if active_only:
         query = query.filter(SKU.active.is_(True))
+    if not user.is_platform_admin and user.organization_id:
+        query = query.filter(SKU.organization_id == user.organization_id)
     skus = query.order_by(SKU.name).all()
     return [_sku_to_response(s) for s in skus]
 
