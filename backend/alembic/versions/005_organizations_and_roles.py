@@ -138,10 +138,8 @@ def upgrade() -> None:
         batch_op.drop_column("merchant_id")
 
     # 7. Remove uniqueness on customers.name (now org-scoped)
-    # The unique constraint was created inline with the column in 001.
-    # PostgreSQL names it "customers_name_key" by default.
-    with op.batch_alter_table("customers") as batch_op:
-        batch_op.drop_constraint("customers_name_key", type_="unique")
+    op.drop_index("ix_customers_name", table_name="customers")
+    op.create_index("ix_customers_name", "customers", ["name"])
 
 
 def downgrade() -> None:
