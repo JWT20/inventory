@@ -121,6 +121,7 @@ def create_sku(
         description=description,
         active=data.active,
         category=data.category,
+        organization_id=user.organization_id,
     )
     sku.set_attributes(data.attributes)
     db.add(sku)
