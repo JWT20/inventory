@@ -1,4 +1,5 @@
 import datetime
+import json
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
@@ -20,17 +21,46 @@ from app.database import Base
 EMBEDDING_DIM = 3072
 
 
-VALID_ROLES = ("admin", "merchant", "courier")
+VALID_ROLES = ("owner", "member", "courier", "customer")
 VALID_SHIPMENT_STATUSES = ("draft", "booked")
 VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count")
+
+
+class Organization(Base):
+    """A merchant organization (e.g. 'Wijnhandel De Druif')."""
+    __tablename__ = "organizations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    slug: Mapped[str] = mapped_column(String(100), unique=True)
+    enabled_modules: Mapped[str] = mapped_column(
+        Text, default='["inventory","orders"]'
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    users: Mapped[list["User"]] = relationship(back_populates="organization")
+
+    @property
+    def modules(self) -> list[str]:
+        return json.loads(self.enabled_modules)
+
+    @modules.setter
+    def modules(self, value: list[str]) -> None:
+        self.enabled_modules = json.dumps(value)
 
 
 class User(Base):
     """User model compatible with FastAPI-Users.
 
-    FastAPI-Users requires: email, hashed_password, is_active, is_superuser,
-    is_verified.  We keep ``username`` as the primary login identifier and
-    ``role`` for fine-grained RBAC.
+    Roles:
+    - owner: merchant organization owner (has organization_id)
+    - member: merchant organization member (has organization_id)
+    - courier: platform-level courier (no organization)
+    - customer: customer who can place orders (has organization_id)
+
+    Platform admin is a separate flag (is_platform_admin), not a role.
     """
     __tablename__ = "users"
 
@@ -39,6 +69,10 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(1024))
     role: Mapped[str] = mapped_column(String(20), default="courier")
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
+    is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -46,13 +80,15 @@ class User(Base):
         DateTime, server_default=func.now()
     )
 
+    organization: Mapped["Organization | None"] = relationship(back_populates="users")
+
     @property
     def is_admin(self) -> bool:
-        return self.role == "admin"
+        return self.is_platform_admin
 
     @property
     def can_manage_products(self) -> bool:
-        return self.role in ("admin", "merchant")
+        return self.is_platform_admin or self.role in ("owner", "member")
 
 
 class SKU(Base):
@@ -64,6 +100,9 @@ class SKU(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
@@ -78,6 +117,7 @@ class SKU(Base):
     attributes: Mapped[list["SKUAttribute"]] = relationship(
         back_populates="sku", cascade="all, delete-orphan"
     )
+    organization: Mapped["Organization | None"] = relationship()
 
     @property
     def attributes_dict(self) -> dict[str, str]:
@@ -134,11 +174,15 @@ class Customer(Base):
     __tablename__ = "customers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(150), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(150), index=True)
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
 
+    organization: Mapped["Organization | None"] = relationship()
     sku_links: Mapped[list["CustomerSKU"]] = relationship(
         back_populates="customer", cascade="all, delete-orphan"
     )
@@ -163,7 +207,12 @@ class Order(Base):
     __tablename__ = "orders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    merchant_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
     reference: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="draft")
     created_at: Mapped[datetime.datetime] = mapped_column(
@@ -173,7 +222,8 @@ class Order(Base):
         DateTime, server_default=func.now(), onupdate=func.now()
     )
 
-    merchant: Mapped["User"] = relationship()
+    organization: Mapped["Organization | None"] = relationship()
+    creator: Mapped["User | None"] = relationship()
     lines: Mapped[list["OrderLine"]] = relationship(
         back_populates="order", cascade="all, delete-orphan"
     )
@@ -231,7 +281,9 @@ class InboundShipment(Base):
     __tablename__ = "inbound_shipments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    merchant_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
     supplier_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft")
@@ -245,7 +297,7 @@ class InboundShipment(Base):
         ForeignKey("users.id"), nullable=True
     )
 
-    merchant: Mapped["User"] = relationship(foreign_keys=[merchant_id])
+    organization: Mapped["Organization | None"] = relationship()
     booked_by_user: Mapped["User | None"] = relationship(foreign_keys=[booked_by])
     lines: Mapped[list["InboundShipmentLine"]] = relationship(
         back_populates="shipment", cascade="all, delete-orphan"
@@ -268,18 +320,20 @@ class InboundShipmentLine(Base):
 
 class InventoryBalance(Base):
     __tablename__ = "inventory_balances"
-    __table_args__ = (UniqueConstraint("sku_id", "merchant_id"),)
+    __table_args__ = (UniqueConstraint("sku_id", "organization_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
-    merchant_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
     quantity_on_hand: Mapped[int] = mapped_column(Integer, default=0)
     last_movement_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime, nullable=True
     )
 
     sku: Mapped["SKU"] = relationship()
-    merchant: Mapped["User"] = relationship()
+    organization: Mapped["Organization | None"] = relationship()
 
 
 class StockMovement(Base):
@@ -287,7 +341,9 @@ class StockMovement(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
-    merchant_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
     movement_type: Mapped[str] = mapped_column(String(20))
     quantity: Mapped[int] = mapped_column(Integer)
     reference_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -299,5 +355,5 @@ class StockMovement(Base):
     )
 
     sku: Mapped["SKU"] = relationship()
-    merchant: Mapped["User"] = relationship(foreign_keys=[merchant_id])
+    organization: Mapped["Organization | None"] = relationship()
     performed_by_user: Mapped["User"] = relationship(foreign_keys=[performed_by])

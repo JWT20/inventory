@@ -1,12 +1,15 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { api, setToken, setRefreshToken, clearToken } from "./api";
 
-type Role = "admin" | "merchant" | "courier";
+type Role = "owner" | "member" | "courier" | "customer";
 
 interface AuthUser {
   id: number;
   username: string;
   role: Role;
+  is_platform_admin: boolean;
+  organization_id: number | null;
+  organization_name: string | null;
 }
 
 interface AuthCtx {
@@ -39,7 +42,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const resp = await api.login(username, password);
     setToken(resp.access_token);
     setRefreshToken(resp.refresh_token);
-    setUser({ id: 0, username: resp.username, role: resp.role });
+    setUser({
+      id: 0,
+      username: resp.username,
+      role: resp.role,
+      is_platform_admin: resp.is_platform_admin ?? false,
+      organization_id: resp.organization_id ?? null,
+      organization_name: resp.organization_name ?? null,
+    });
     // Refresh full user data
     const me = await api.me();
     setUser(me);

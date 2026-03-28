@@ -38,7 +38,7 @@ def apply_stock_movement(
     db: Session,
     *,
     sku_id: int,
-    merchant_id: int,
+    organization_id: int,
     quantity: int,
     movement_type: str,
     reference_type: str | None = None,
@@ -55,7 +55,7 @@ def apply_stock_movement(
         db.query(InventoryBalance)
         .filter(
             InventoryBalance.sku_id == sku_id,
-            InventoryBalance.merchant_id == merchant_id,
+            InventoryBalance.organization_id == organization_id,
         )
         .with_for_update()
         .first()
@@ -63,7 +63,7 @@ def apply_stock_movement(
     if not balance:
         balance = InventoryBalance(
             sku_id=sku_id,
-            merchant_id=merchant_id,
+            organization_id=organization_id,
             quantity_on_hand=0,
         )
         db.add(balance)
@@ -84,7 +84,7 @@ def apply_stock_movement(
 
     movement = StockMovement(
         sku_id=sku_id,
-        merchant_id=merchant_id,
+        organization_id=organization_id,
         movement_type=movement_type,
         quantity=quantity,
         reference_type=reference_type,
@@ -104,7 +104,7 @@ def apply_stock_movement(
 def _shipment_to_response(shipment: InboundShipment) -> ShipmentResponse:
     return ShipmentResponse(
         id=shipment.id,
-        merchant_id=shipment.merchant_id,
+        organization_id=shipment.organization_id,
         supplier_name=shipment.supplier_name,
         reference=shipment.reference,
         status=shipment.status,
@@ -138,8 +138,12 @@ def create_shipment(
     if missing:
         raise HTTPException(400, f"SKU's niet gevonden: {missing}")
 
+    if not user.is_platform_admin and not user.organization_id:
+        raise HTTPException(400, "User has no organization")
+    org_id = user.organization_id
+
     shipment = InboundShipment(
-        merchant_id=user.id,
+        organization_id=org_id,
         supplier_name=data.supplier_name,
         reference=data.reference,
         status="draft",
@@ -225,7 +229,7 @@ def book_shipment(
         apply_stock_movement(
             db,
             sku_id=line.sku_id,
-            merchant_id=shipment.merchant_id,
+            organization_id=shipment.organization_id,
             quantity=line.quantity,
             movement_type="receive",
             reference_type="shipment",
@@ -261,23 +265,30 @@ def book_shipment(
 
 @router.get("/inventory", response_model=list[InventoryBalanceResponse])
 def list_inventory(
-    merchant_id: int | None = None,
+    organization_id: int | None = None,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     query = (
         db.query(InventoryBalance)
         .join(SKU, InventoryBalance.sku_id == SKU.id)
     )
-    if merchant_id:
-        query = query.filter(InventoryBalance.merchant_id == merchant_id)
+    # Scope by organization
+    if user.is_platform_admin:
+        if organization_id:
+            query = query.filter(InventoryBalance.organization_id == organization_id)
+    elif user.organization_id:
+        query = query.filter(InventoryBalance.organization_id == user.organization_id)
+    else:
+        return []
+
     balances = query.order_by(SKU.name).all()
     return [
         InventoryBalanceResponse(
             sku_id=b.sku_id,
             sku_code=b.sku.sku_code,
             sku_name=b.sku.name,
-            merchant_id=b.merchant_id,
+            organization_id=b.organization_id,
             quantity_on_hand=b.quantity_on_hand,
             last_movement_at=b.last_movement_at,
         )
@@ -288,13 +299,18 @@ def list_inventory(
 @router.get("/inventory/{sku_id}/movements", response_model=list[StockMovementResponse])
 def list_movements(
     sku_id: int,
-    merchant_id: int | None = None,
+    organization_id: int | None = None,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     query = db.query(StockMovement).filter(StockMovement.sku_id == sku_id)
-    if merchant_id:
-        query = query.filter(StockMovement.merchant_id == merchant_id)
+    if user.is_platform_admin:
+        if organization_id:
+            query = query.filter(StockMovement.organization_id == organization_id)
+    elif user.organization_id:
+        query = query.filter(StockMovement.organization_id == user.organization_id)
+    else:
+        return []
     return query.order_by(StockMovement.created_at.desc()).all()
 
 
@@ -309,10 +325,13 @@ def adjust_inventory(
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
 
+    if not user.is_platform_admin and not user.organization_id:
+        raise HTTPException(400, "User has no organization")
+
     movement = apply_stock_movement(
         db,
         sku_id=data.sku_id,
-        merchant_id=user.id,
+        organization_id=user.organization_id,
         quantity=data.quantity,
         movement_type="adjust",
         reference_type="manual",
@@ -348,11 +367,14 @@ def count_inventory(
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
 
+    if not user.is_platform_admin and not user.organization_id:
+        raise HTTPException(400, "User has no organization")
+
     balance = (
         db.query(InventoryBalance)
         .filter(
             InventoryBalance.sku_id == data.sku_id,
-            InventoryBalance.merchant_id == user.id,
+            InventoryBalance.organization_id == user.organization_id,
         )
         .first()
     )
@@ -365,7 +387,7 @@ def count_inventory(
     movement = apply_stock_movement(
         db,
         sku_id=data.sku_id,
-        merchant_id=user.id,
+        organization_id=user.organization_id,
         quantity=delta,
         movement_type="count",
         reference_type="manual",

@@ -14,7 +14,8 @@ type Page = "orders" | "receive" | "skus" | "accounts";
 
 function Main() {
   const { user, loading, logout } = useAuth();
-  const [page, setPage] = useState<Page>(user?.role === "courier" ? "receive" : "orders");
+  const defaultPage: Page = user?.role === "courier" ? "receive" : "orders";
+  const [page, setPage] = useState<Page>(defaultPage);
 
   if (loading) {
     return (
@@ -26,14 +27,32 @@ function Main() {
 
   if (!user) return <LoginPage />;
 
-  const tabs: { id: Page; label: string; hide?: (role: string) => boolean }[] = [
-    { id: "orders", label: "Orders" },
-    { id: "receive", label: "Scan & Boek", hide: (r) => r === "merchant" },
-    { id: "skus", label: "Producten", hide: (r) => r === "courier" },
-    { id: "accounts", label: "Accounts", hide: (r) => r !== "admin" },
+  const isAdmin = user.is_platform_admin;
+
+  const tabs: { id: Page; label: string; show: boolean }[] = [
+    {
+      id: "orders",
+      label: "Orders",
+      show: true, // Everyone sees orders
+    },
+    {
+      id: "receive",
+      label: "Scan & Boek",
+      show: isAdmin || user.role === "courier",
+    },
+    {
+      id: "skus",
+      label: "Producten",
+      show: isAdmin || user.role === "owner" || user.role === "member",
+    },
+    {
+      id: "accounts",
+      label: "Accounts",
+      show: isAdmin,
+    },
   ];
 
-  const visibleTabs = tabs.filter((t) => !t.hide || !t.hide(user.role));
+  const visibleTabs = tabs.filter((t) => t.show);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -69,7 +88,7 @@ function Main() {
         {page === "orders" && <OrdersPage />}
         {page === "receive" && <ReceivePage />}
         {page === "skus" && <SKUsPage />}
-        {page === "accounts" && user.role === "admin" && <AccountsPage />}
+        {page === "accounts" && isAdmin && <AccountsPage />}
       </main>
     </div>
   );

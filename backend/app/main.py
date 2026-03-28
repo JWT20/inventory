@@ -86,13 +86,14 @@ async def lifespan(app: FastAPI):
                 username="admin",
                 email="admin@local",
                 hashed_password=hash_password(settings.admin_password),
-                role="admin",
+                role="owner",
+                is_platform_admin=True,
                 is_superuser=True,
                 is_verified=True,
             )
             db.add(admin)
             db.commit()
-            logger.info("Created default admin user — change the password!")
+            logger.info("Created default platform admin user — change the password!")
     finally:
         db.close()
 

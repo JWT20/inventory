@@ -392,7 +392,7 @@ async def book_box(
             db.query(InventoryBalance)
             .filter(
                 InventoryBalance.sku_id == matched_sku.id,
-                InventoryBalance.merchant_id == order.merchant_id,
+                InventoryBalance.organization_id == order.organization_id,
             )
             .first()
         )
@@ -493,7 +493,7 @@ def confirm_booking(
     apply_stock_movement(
         db,
         sku_id=data["sku_id"],
-        merchant_id=order.merchant_id,
+        organization_id=order.organization_id,
         quantity=-quantity,
         movement_type="pick",
         reference_type="booking",
@@ -607,7 +607,7 @@ def book_more(
     apply_stock_movement(
         db,
         sku_id=sku_id,
-        merchant_id=order.merchant_id,
+        organization_id=order.organization_id,
         quantity=-actual_quantity,
         movement_type="pick",
         reference_type="booking",

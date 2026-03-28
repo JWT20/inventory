@@ -5,6 +5,7 @@ Access tokens are created via FastAPI-Users' JWTStrategy; refresh tokens are
 handled by our custom logic in auth.py.
 """
 
+import json
 import logging
 from dataclasses import dataclass
 
@@ -26,12 +27,14 @@ from app.auth import (
 )
 from app.database import get_db
 from app.events import publish_event
-from app.models import User
+from app.models import Organization, User
 from app.schemas import (
     AdminResetPassword,
     ChangeOwnPassword,
     LoginRequest,
     LogoutRequest,
+    OrganizationCreate,
+    OrganizationResponse,
     RefreshRequest,
     RefreshResponse,
     TokenResponse,
@@ -49,6 +52,19 @@ class _LoginCredentials:
     """Adapter between our JSON login body and UserManager.authenticate()."""
     username: str
     password: str
+
+
+def _user_to_response(user: User) -> UserResponse:
+    return UserResponse(
+        id=user.id,
+        username=user.username,
+        role=user.role,
+        is_platform_admin=user.is_platform_admin,
+        organization_id=user.organization_id,
+        organization_name=user.organization.name if user.organization else None,
+        is_active=user.is_active,
+        created_at=user.created_at,
+    )
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -94,6 +110,9 @@ async def login(
         refresh_token=create_refresh_token(user.id),
         username=user.username,
         role=user.role,
+        is_platform_admin=user.is_platform_admin,
+        organization_id=user.organization_id,
+        organization_name=user.organization.name if user.organization else None,
     )
 
 
@@ -113,14 +132,15 @@ async def refresh_token(body: RefreshRequest, db: Session = Depends(get_db)):
 
 @router.get("/me", response_model=UserResponse)
 def get_me(user: User = Depends(get_current_user)):
-    return user
+    return _user_to_response(user)
 
 
 # --- Admin-only user management ---
 
 @router.get("/users", response_model=list[UserResponse])
 def list_users(db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    return db.query(User).order_by(User.username).all()
+    users = db.query(User).order_by(User.username).all()
+    return [_user_to_response(u) for u in users]
 
 
 @router.post("/users", response_model=UserResponse, status_code=201)
@@ -131,12 +151,26 @@ def create_user(
 ):
     if db.query(User).filter(User.username == data.username).first():
         raise HTTPException(400, f"Username '{data.username}' already taken")
+
+    # Validate organization_id for org-bound roles
+    if data.role in ("owner", "member", "customer"):
+        if not data.organization_id:
+            raise HTTPException(400, f"Role '{data.role}' requires an organization_id")
+        org = db.get(Organization, data.organization_id)
+        if not org:
+            raise HTTPException(404, f"Organization with id {data.organization_id} not found")
+    elif data.role == "courier":
+        if data.organization_id:
+            raise HTTPException(400, "Couriers cannot be linked to an organization")
+
     user = User(
         username=data.username,
         email=f"{data.username}@local",
         hashed_password=hash_password(data.password),
         role=data.role,
-        is_superuser=(data.role == "admin"),
+        organization_id=data.organization_id,
+        is_platform_admin=False,
+        is_superuser=False,
     )
     db.add(user)
     db.commit()
@@ -149,7 +183,7 @@ def create_user(
         resource_type="user",
         resource_id=user.id,
     )
-    return user
+    return _user_to_response(user)
 
 
 @router.delete("/users/{user_id}", status_code=204)
@@ -163,13 +197,14 @@ def delete_user(
         raise HTTPException(404, "User not found")
     if user.id == admin.id:
         raise HTTPException(400, "Cannot delete yourself")
-    # Prevent deleting the last admin
-    if user.role == "admin":
+    # Prevent deleting the last platform admin
+    if user.is_platform_admin:
         admin_count = db.query(User).filter(
-            User.role == "admin", User.is_active == True  # noqa: E712
+            User.is_platform_admin == True,  # noqa: E712
+            User.is_active == True,  # noqa: E712
         ).count()
         if admin_count <= 1:
-            raise HTTPException(400, "Cannot delete the last admin account")
+            raise HTTPException(400, "Cannot delete the last platform admin")
     username = user.username
     db.delete(user)
     db.commit()
@@ -249,3 +284,62 @@ def logout(
         user=user,
         resource_type="auth",
     )
+
+
+# --- Organization management (platform admin only) ---
+
+@router.get("/organizations", response_model=list[OrganizationResponse])
+def list_organizations(db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    orgs = db.query(Organization).order_by(Organization.name).all()
+    return [
+        OrganizationResponse(
+            id=o.id,
+            name=o.name,
+            slug=o.slug,
+            enabled_modules=o.modules,
+            created_at=o.created_at,
+        )
+        for o in orgs
+    ]
+
+
+@router.post("/organizations", response_model=OrganizationResponse, status_code=201)
+def create_organization(
+    data: OrganizationCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    if db.query(Organization).filter(Organization.slug == data.slug).first():
+        raise HTTPException(400, f"Slug '{data.slug}' is already taken")
+    org = Organization(
+        name=data.name,
+        slug=data.slug,
+        enabled_modules=json.dumps(data.enabled_modules),
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+    return OrganizationResponse(
+        id=org.id,
+        name=org.name,
+        slug=org.slug,
+        enabled_modules=org.modules,
+        created_at=org.created_at,
+    )
+
+
+@router.delete("/organizations/{org_id}", status_code=204)
+def delete_organization(
+    org_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    org = db.get(Organization, org_id)
+    if not org:
+        raise HTTPException(404, "Organization not found")
+    # Check no users are linked
+    user_count = db.query(User).filter(User.organization_id == org_id).count()
+    if user_count > 0:
+        raise HTTPException(400, f"Organization still has {user_count} users — remove them first")
+    db.delete(org)
+    db.commit()

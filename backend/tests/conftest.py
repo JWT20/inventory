@@ -33,7 +33,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.auth import create_token, hash_password, _failed_attempts, _revoked_tokens  # noqa: E402
 from app.database import Base, get_db, get_async_session  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import SKU, User  # noqa: E402
+from app.models import SKU, Organization, User  # noqa: E402
 
 SQLALCHEMY_DATABASE_URL = "sqlite://"
 
@@ -128,6 +128,19 @@ def client(db):
 
 
 # ---------------------------------------------------------------------------
+# Organization fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def sample_org(db):
+    org = Organization(name="Test Wijnhandel", slug="test-wijnhandel")
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+    return org
+
+
+# ---------------------------------------------------------------------------
 # User fixtures
 # ---------------------------------------------------------------------------
 
@@ -137,7 +150,8 @@ def admin_user(db):
         username="admin",
         email="admin@local",
         hashed_password=hash_password("adminpass"),
-        role="admin",
+        role="owner",
+        is_platform_admin=True,
         is_superuser=True,
         is_verified=True,
     )
@@ -148,12 +162,46 @@ def admin_user(db):
 
 
 @pytest.fixture
-def merchant_user(db):
+def owner_user(db, sample_org):
+    user = User(
+        username="owner",
+        email="owner@local",
+        hashed_password=hash_password("ownerpass"),
+        role="owner",
+        organization_id=sample_org.id,
+        is_verified=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@pytest.fixture
+def merchant_user(db, sample_org):
+    """Backwards-compatible fixture — now an org owner."""
     user = User(
         username="merchant",
         email="merchant@local",
         hashed_password=hash_password("merchantpass"),
-        role="merchant",
+        role="owner",
+        organization_id=sample_org.id,
+        is_verified=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@pytest.fixture
+def customer_user(db, sample_org):
+    user = User(
+        username="customer",
+        email="customer@local",
+        hashed_password=hash_password("customerpass"),
+        role="customer",
+        organization_id=sample_org.id,
         is_verified=True,
     )
     db.add(user)
@@ -187,8 +235,18 @@ def admin_token(admin_user):
 
 
 @pytest.fixture
+def owner_token(owner_user):
+    return create_token(owner_user.id)
+
+
+@pytest.fixture
 def merchant_token(merchant_user):
     return create_token(merchant_user.id)
+
+
+@pytest.fixture
+def customer_token(customer_user):
+    return create_token(customer_user.id)
 
 
 @pytest.fixture
