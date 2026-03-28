@@ -2,12 +2,22 @@
 
 ```mermaid
 erDiagram
+    organizations {
+        int id PK
+        varchar name
+        varchar slug UK
+        text enabled_modules "JSON array, default: inventory+orders"
+        datetime created_at
+    }
+
     users {
         int id PK
         varchar username UK "unique, indexed"
-        varchar email UK
+        varchar email UK "indexed"
         varchar hashed_password
-        varchar role "admin | merchant | courier"
+        varchar role "owner | member | courier | customer"
+        int organization_id FK "nullable"
+        bool is_platform_admin "default false"
         bool is_active
         bool is_superuser
         bool is_verified
@@ -18,9 +28,10 @@ erDiagram
         int id PK
         varchar sku_code UK "unique, indexed"
         varchar name
-        text description
+        text description "nullable"
         bool active
-        varchar category "wine | beer | coffee | ..."
+        varchar category "nullable, e.g. wine"
+        int organization_id FK "nullable"
         datetime created_at
         datetime updated_at
     }
@@ -36,17 +47,18 @@ erDiagram
         int id PK
         int sku_id FK
         varchar image_path
-        text vision_description
-        vector embedding "3072-dim pgvector"
-        varchar processing_status "pending | done | failed"
-        varchar description_quality "low | medium | high"
+        text vision_description "nullable"
+        vector embedding "3072-dim pgvector, nullable"
+        varchar processing_status "pending | processing | done | failed"
+        varchar description_quality "nullable"
         bool wine_check_overridden
         datetime created_at
     }
 
     customers {
         int id PK
-        varchar name UK "unique, indexed"
+        varchar name "indexed"
+        int organization_id FK "nullable"
         datetime created_at
     }
 
@@ -58,8 +70,9 @@ erDiagram
 
     orders {
         int id PK
-        int merchant_id FK
-        varchar reference UK "ORD-XXXXXXXX"
+        int organization_id FK "nullable"
+        int created_by FK "nullable"
+        varchar reference UK "indexed"
         varchar status "draft | pending_images | active | completed | cancelled"
         datetime created_at
         datetime updated_at
@@ -81,14 +94,14 @@ erDiagram
         int order_line_id FK
         int sku_id FK
         int scanned_by FK
-        varchar scan_image_path
-        float confidence
+        varchar scan_image_path "nullable"
+        float confidence "nullable"
         datetime created_at
     }
 
     inbound_shipments {
         int id PK
-        int merchant_id FK
+        int organization_id FK "nullable"
         varchar supplier_name "nullable"
         varchar reference "nullable"
         varchar status "draft | booked"
@@ -107,7 +120,7 @@ erDiagram
     inventory_balances {
         int id PK
         int sku_id FK
-        int merchant_id FK
+        int organization_id FK "nullable"
         int quantity_on_hand "default 0"
         datetime last_movement_at "nullable"
     }
@@ -115,10 +128,10 @@ erDiagram
     stock_movements {
         int id PK
         int sku_id FK
-        int merchant_id FK
+        int organization_id FK "nullable"
         varchar movement_type "receive | pick | adjust | count"
         int quantity "positive or negative"
-        varchar reference_type "shipment | booking | manual"
+        varchar reference_type "nullable, e.g. order | shipment"
         int reference_id "nullable"
         text note "nullable"
         int performed_by FK
@@ -126,6 +139,14 @@ erDiagram
     }
 
     %% --- Relationships ---
+
+    organizations ||--o{ users : "has members"
+    organizations ||--o{ skus : "owns"
+    organizations ||--o{ customers : "has customers"
+    organizations ||--o{ orders : "has orders"
+    organizations ||--o{ inbound_shipments : "receives"
+    organizations ||--o{ inventory_balances : "tracks stock"
+    organizations ||--o{ stock_movements : "logs movements"
 
     skus ||--o{ sku_attributes : "has attributes"
     skus ||--o{ reference_images : "has reference images"
@@ -139,10 +160,10 @@ erDiagram
     customers ||--o{ customer_skus : "has catalog"
     customers ||--o{ order_lines : "orders from"
 
-    users ||--o{ orders : "merchant creates"
+    users ||--o{ orders : "creates"
     users ||--o{ bookings : "courier scans"
-    users ||--o{ inbound_shipments : "merchant creates"
-    users ||--o{ stock_movements : "user performs"
+    users ||--o{ inbound_shipments : "books"
+    users ||--o{ stock_movements : "performs"
 
     orders ||--o{ order_lines : "contains"
     orders ||--o{ bookings : "has bookings"
