@@ -9,20 +9,28 @@ from app.database import get_db
 from app.events import publish_event
 from app.models import (
     SKU,
+    SKUAttribute,
+    Customer,
+    CustomerSKU,
     InboundShipment,
     InboundShipmentLine,
     InventoryBalance,
+    ReferenceImage,
     StockMovement,
     User,
 )
 from app.schemas import (
+    CustomerPriceResponse,
     InventoryAdjustRequest,
     InventoryBalanceResponse,
     InventoryCountRequest,
+    InventoryOverviewItem,
     ShipmentCreate,
     ShipmentLineResponse,
     ShipmentResponse,
     StockMovementResponse,
+    UpdateCustomerPriceRequest,
+    UpdateDefaultPriceRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -294,6 +302,174 @@ def list_inventory(
         )
         for b in balances
     ]
+
+
+@router.get("/inventory/overview", response_model=list[InventoryOverviewItem])
+def inventory_overview(
+    search: str | None = None,
+    wijntype: str | None = None,
+    producent: str | None = None,
+    in_stock_only: bool = False,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    """Full inventory overview for merchants: stock, attributes, prices per customer."""
+    if not user.is_platform_admin and not user.organization_id:
+        return []
+    org_id = user.organization_id
+
+    query = (
+        db.query(InventoryBalance)
+        .join(SKU, InventoryBalance.sku_id == SKU.id)
+        .options(
+            joinedload(InventoryBalance.sku).joinedload(SKU.attributes),
+            joinedload(InventoryBalance.sku).joinedload(SKU.reference_images),
+        )
+    )
+
+    if user.is_platform_admin and not org_id:
+        pass  # show all
+    else:
+        query = query.filter(InventoryBalance.organization_id == org_id)
+
+    if in_stock_only:
+        query = query.filter(InventoryBalance.quantity_on_hand > 0)
+
+    if search:
+        query = query.filter(SKU.name.ilike(f"%{search}%"))
+
+    if wijntype:
+        query = query.filter(
+            SKU.id.in_(
+                db.query(SKUAttribute.sku_id).filter(
+                    SKUAttribute.key == "wijntype",
+                    SKUAttribute.value.ilike(f"%{wijntype}%"),
+                )
+            )
+        )
+
+    if producent:
+        query = query.filter(
+            SKU.id.in_(
+                db.query(SKUAttribute.sku_id).filter(
+                    SKUAttribute.key == "producent",
+                    SKUAttribute.value.ilike(f"%{producent}%"),
+                )
+            )
+        )
+
+    balances = query.order_by(SKU.name).all()
+
+    # Batch-load customer prices for all SKUs in result
+    sku_ids = [b.sku_id for b in balances]
+    customer_prices_rows = (
+        db.query(CustomerSKU, Customer.name)
+        .join(Customer, CustomerSKU.customer_id == Customer.id)
+        .filter(CustomerSKU.sku_id.in_(sku_ids))
+        .all()
+    ) if sku_ids else []
+
+    # Group by sku_id
+    prices_by_sku: dict[int, list[CustomerPriceResponse]] = {}
+    for cs, cname in customer_prices_rows:
+        prices_by_sku.setdefault(cs.sku_id, []).append(
+            CustomerPriceResponse(
+                customer_id=cs.customer_id,
+                customer_name=cname,
+                unit_price=float(cs.unit_price) if cs.unit_price is not None else None,
+            )
+        )
+
+    result = []
+    for b in balances:
+        sku = b.sku
+        first_image = next(
+            (img for img in sku.reference_images if img.processing_status == "done"),
+            None,
+        )
+        image_url = f"/api/files/{first_image.image_path}" if first_image else None
+
+        result.append(
+            InventoryOverviewItem(
+                sku_id=sku.id,
+                sku_code=sku.sku_code,
+                sku_name=sku.name,
+                attributes=sku.attributes_dict,
+                default_price=float(sku.default_price) if sku.default_price is not None else None,
+                quantity_on_hand=b.quantity_on_hand,
+                last_movement_at=b.last_movement_at,
+                image_url=image_url,
+                customer_prices=prices_by_sku.get(sku.id, []),
+            )
+        )
+
+    return result
+
+
+@router.put("/skus/{sku_id}/price", response_model=InventoryOverviewItem)
+def update_default_price(
+    sku_id: int,
+    data: UpdateDefaultPriceRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    sku = db.get(SKU, sku_id)
+    if not sku:
+        raise HTTPException(404, "SKU niet gevonden")
+    if not user.is_platform_admin and sku.organization_id != user.organization_id:
+        raise HTTPException(403, "Geen toegang")
+
+    sku.default_price = data.default_price
+    db.commit()
+    db.refresh(sku)
+
+    # Return a minimal overview item
+    balance = (
+        db.query(InventoryBalance)
+        .filter(
+            InventoryBalance.sku_id == sku_id,
+            InventoryBalance.organization_id == (user.organization_id or sku.organization_id),
+        )
+        .first()
+    )
+
+    return InventoryOverviewItem(
+        sku_id=sku.id,
+        sku_code=sku.sku_code,
+        sku_name=sku.name,
+        attributes=sku.attributes_dict,
+        default_price=float(sku.default_price) if sku.default_price is not None else None,
+        quantity_on_hand=balance.quantity_on_hand if balance else 0,
+        last_movement_at=balance.last_movement_at if balance else None,
+    )
+
+
+@router.put("/customers/{customer_id}/skus/{sku_id}/price")
+def update_customer_price(
+    customer_id: int,
+    sku_id: int,
+    data: UpdateCustomerPriceRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    customer = db.get(Customer, customer_id)
+    if not customer:
+        raise HTTPException(404, "Klant niet gevonden")
+    if not user.is_platform_admin and customer.organization_id != user.organization_id:
+        raise HTTPException(403, "Geen toegang")
+
+    link = (
+        db.query(CustomerSKU)
+        .filter(CustomerSKU.customer_id == customer_id, CustomerSKU.sku_id == sku_id)
+        .first()
+    )
+    if not link:
+        raise HTTPException(404, "Klant-SKU koppeling niet gevonden")
+
+    link.unit_price = data.unit_price
+    db.commit()
+
+    return {"ok": True}
 
 
 @router.get("/inventory/{sku_id}/movements", response_model=list[StockMovementResponse])

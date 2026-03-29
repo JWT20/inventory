@@ -343,6 +343,14 @@ class ShipmentResponse(BaseModel):
 
 # --- Inventory ---
 
+class CustomerPriceResponse(BaseModel):
+    customer_id: int
+    customer_name: str
+    unit_price: float | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class InventoryBalanceResponse(BaseModel):
     sku_id: int
     sku_code: str = ""
@@ -350,6 +358,20 @@ class InventoryBalanceResponse(BaseModel):
     organization_id: int | None = None
     quantity_on_hand: int
     last_movement_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class InventoryOverviewItem(BaseModel):
+    sku_id: int
+    sku_code: str = ""
+    sku_name: str = ""
+    attributes: dict[str, str] = {}
+    default_price: float | None = None
+    quantity_on_hand: int = 0
+    last_movement_at: datetime | None = None
+    image_url: str | None = None
+    customer_prices: list[CustomerPriceResponse] = []
 
     model_config = {"from_attributes": True}
 
@@ -379,3 +401,11 @@ class InventoryCountRequest(BaseModel):
     sku_id: int = Field(..., gt=0)
     counted_quantity: int = Field(..., ge=0)
     note: str | None = None
+
+
+class UpdateDefaultPriceRequest(BaseModel):
+    default_price: float | None = None
+
+
+class UpdateCustomerPriceRequest(BaseModel):
+    unit_price: float | None = None

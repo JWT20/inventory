@@ -8,6 +8,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -103,6 +104,9 @@ class SKU(Base):
     organization_id: Mapped[int | None] = mapped_column(
         ForeignKey("organizations.id"), nullable=True
     )
+    default_price: Mapped[float | None] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
@@ -195,6 +199,9 @@ class CustomerSKU(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"))
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="CASCADE"))
+    unit_price: Mapped[float | None] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
 
     customer: Mapped["Customer"] = relationship(back_populates="sku_links")
     sku: Mapped["SKU"] = relationship()
