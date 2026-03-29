@@ -318,19 +318,23 @@ def inventory_overview(
         return []
     org_id = user.organization_id
 
+    # Start from SKU with LEFT JOIN to InventoryBalance so all products show up
     query = (
-        db.query(InventoryBalance)
-        .join(SKU, InventoryBalance.sku_id == SKU.id)
-        .options(
-            joinedload(InventoryBalance.sku).joinedload(SKU.attributes),
-            joinedload(InventoryBalance.sku).joinedload(SKU.reference_images),
+        db.query(SKU, InventoryBalance)
+        .outerjoin(
+            InventoryBalance,
+            (InventoryBalance.sku_id == SKU.id)
+            & (InventoryBalance.organization_id == org_id),
         )
+        .options(
+            joinedload(SKU.attributes),
+            joinedload(SKU.reference_images),
+        )
+        .filter(SKU.active.is_(True))
     )
 
-    if user.is_platform_admin and not org_id:
-        pass  # show all
-    else:
-        query = query.filter(InventoryBalance.organization_id == org_id)
+    if not user.is_platform_admin:
+        query = query.filter(SKU.organization_id == org_id)
 
     if in_stock_only:
         query = query.filter(InventoryBalance.quantity_on_hand > 0)
@@ -358,10 +362,10 @@ def inventory_overview(
             )
         )
 
-    balances = query.order_by(SKU.name).all()
+    rows = query.order_by(SKU.name).all()
 
     # Batch-load customer prices for all SKUs in result
-    sku_ids = [b.sku_id for b in balances]
+    sku_ids = [sku.id for sku, _ in rows]
     customer_prices_rows = (
         db.query(CustomerSKU, Customer.name)
         .join(Customer, CustomerSKU.customer_id == Customer.id)
@@ -381,8 +385,7 @@ def inventory_overview(
         )
 
     result = []
-    for b in balances:
-        sku = b.sku
+    for sku, balance in rows:
         first_image = next(
             (img for img in sku.reference_images if img.processing_status == "done"),
             None,
@@ -396,8 +399,8 @@ def inventory_overview(
                 sku_name=sku.name,
                 attributes=sku.attributes_dict,
                 default_price=float(sku.default_price) if sku.default_price is not None else None,
-                quantity_on_hand=b.quantity_on_hand,
-                last_movement_at=b.last_movement_at,
+                quantity_on_hand=balance.quantity_on_hand if balance else 0,
+                last_movement_at=balance.last_movement_at if balance else None,
                 image_url=image_url,
                 customer_prices=prices_by_sku.get(sku.id, []),
             )
