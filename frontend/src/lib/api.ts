@@ -249,6 +249,13 @@ export const api = {
     return request("/receiving/book/more", { method: "POST", body: form });
   },
 
+  // Inventory
+  listInventoryOverview: (qs = "") => request(`/inventory/overview${qs}`),
+  updateDefaultPrice: (skuId: number, defaultPrice: number | null) =>
+    json(`/skus/${skuId}/price`, "PUT", { default_price: defaultPrice }),
+  updateCustomerPrice: (customerId: number, skuId: number, unitPrice: number | null) =>
+    json(`/customers/${customerId}/skus/${skuId}/price`, "PUT", { unit_price: unitPrice }),
+
   // Vision (ad-hoc)
   identify: (blob: Blob) => upload("/vision/identify", blob, "scan.jpg"),
 };

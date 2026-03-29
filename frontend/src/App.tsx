@@ -6,11 +6,12 @@ import { ReceivePage } from "@/components/receive";
 import { SKUsPage } from "@/components/skus";
 import { OrdersPage } from "@/components/orders";
 import { AccountsPage } from "@/components/accounts";
+import { InventoryPage } from "@/components/inventory";
 import { LogOut } from "lucide-react";
 
 export { toast };
 
-type Page = "orders" | "receive" | "skus" | "accounts";
+type Page = "orders" | "receive" | "skus" | "inventory" | "accounts";
 
 function Main() {
   const { user, loading, logout } = useAuth();
@@ -43,6 +44,11 @@ function Main() {
     {
       id: "skus",
       label: "Producten",
+      show: isAdmin || user.role === "owner" || user.role === "member",
+    },
+    {
+      id: "inventory",
+      label: "Voorraad",
       show: isAdmin || user.role === "owner" || user.role === "member",
     },
     {
@@ -88,6 +94,7 @@ function Main() {
         {page === "orders" && <OrdersPage />}
         {page === "receive" && <ReceivePage />}
         {page === "skus" && <SKUsPage />}
+        {page === "inventory" && <InventoryPage />}
         {page === "accounts" && isAdmin && <AccountsPage />}
       </main>
     </div>
