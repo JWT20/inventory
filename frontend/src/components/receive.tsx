@@ -232,7 +232,7 @@ function OrderSelectStep({
         </div>
       )}
 
-      {user?.role === "admin" && (
+      {(user?.role === "courier" || user?.is_platform_admin) && (
         <Button
           variant="secondary"
           className="w-full mt-4"
