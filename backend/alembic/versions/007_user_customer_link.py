@@ -1,4 +1,4 @@
-"""Add customer_id FK to users table for linking customer-role users to a Customer record.
+"""Add customer_id FK to users table and fix order_lines FK ondelete.
 
 Revision ID: 007
 Revises: 006
@@ -16,11 +16,36 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Add customer_id to users for linking customer-role users
     op.add_column(
         "users",
         sa.Column("customer_id", sa.Integer, sa.ForeignKey("customers.id", ondelete="SET NULL"), nullable=True),
     )
 
+    # Fix order_lines.customer_id FK to SET NULL on delete (was RESTRICT)
+    op.drop_constraint(
+        "order_lines_customer_id_fkey", "order_lines", type_="foreignkey"
+    )
+    op.create_foreign_key(
+        "order_lines_customer_id_fkey",
+        "order_lines",
+        "customers",
+        ["customer_id"],
+        ["id"],
+        ondelete="SET NULL",
+    )
+
 
 def downgrade() -> None:
+    # Restore original FK without ondelete
+    op.drop_constraint(
+        "order_lines_customer_id_fkey", "order_lines", type_="foreignkey"
+    )
+    op.create_foreign_key(
+        "order_lines_customer_id_fkey",
+        "order_lines",
+        "customers",
+        ["customer_id"],
+        ["id"],
+    )
     op.drop_column("users", "customer_id")
