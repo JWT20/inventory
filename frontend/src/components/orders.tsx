@@ -261,7 +261,7 @@ function ManualOrderDialog({
     if (!newCustomerName.trim()) return;
     setCreatingCustomer(true);
     try {
-      const created = await api.createCustomer(newCustomerName.trim());
+      const created = await api.createCustomer(newCustomerName.trim(), user?.organization_id);
       setAllCustomers((prev) => [...prev, created]);
       setNewCustomerName("");
       toggleCustomer(created.id);

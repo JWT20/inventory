@@ -214,6 +214,7 @@ class MatchResult(BaseModel):
 # --- Customer ---
 class CustomerCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=150)
+    organization_id: int | None = None
 
 
 class CustomerResponse(BaseModel):
