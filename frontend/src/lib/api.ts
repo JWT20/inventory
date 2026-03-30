@@ -206,7 +206,8 @@ export const api = {
 
   // Customers
   listCustomers: () => request("/customers"),
-  createCustomer: (name: string) => json("/customers", "POST", { name }),
+  createCustomer: (name: string, organizationId?: number | null) =>
+    json("/customers", "POST", { name, organization_id: organizationId ?? undefined }),
   deleteCustomer: (id: number) => request(`/customers/${id}`, { method: "DELETE" }),
 
   // Orders

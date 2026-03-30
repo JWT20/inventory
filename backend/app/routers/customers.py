@@ -9,7 +9,7 @@ from app.auth import get_current_user, require_product_manager
 from app.database import get_db
 from sqlalchemy.exc import IntegrityError
 
-from app.models import Customer, CustomerSKU, OrderLine, User
+from app.models import Customer, CustomerSKU, OrderLine, Organization, User
 from app.schemas import CustomerCreate, CustomerResponse
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,15 @@ def create_customer(
     name = body.name.strip().lower()
     if not name:
         raise HTTPException(400, "Naam mag niet leeg zijn")
-    org_id = user.organization_id
+    # Resolve organization: admin must specify, others use their own
+    if user.is_platform_admin:
+        org_id = body.organization_id or user.organization_id
+        if not org_id:
+            raise HTTPException(400, "Platform admin moet een organization_id opgeven")
+        if not db.get(Organization, org_id):
+            raise HTTPException(404, f"Organisatie met id {org_id} niet gevonden")
+    else:
+        org_id = user.organization_id
     existing = (
         db.query(Customer)
         .filter(Customer.name == name, Customer.organization_id == org_id)
