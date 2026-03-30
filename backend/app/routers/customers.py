@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, require_product_manager
 from app.database import get_db
-from app.models import Customer, CustomerSKU, User
+from sqlalchemy.exc import IntegrityError
+
+from app.models import Customer, CustomerSKU, OrderLine, User
 from app.schemas import CustomerCreate, CustomerResponse
 
 logger = logging.getLogger(__name__)
@@ -78,5 +80,20 @@ def delete_customer(
         raise HTTPException(404, "Klant niet gevonden")
     if not user.is_platform_admin and customer.organization_id != user.organization_id:
         raise HTTPException(403, "Access denied")
+
+    # Unlink any users tied to this customer
+    for u in db.query(User).filter(User.customer_id == customer_id).all():
+        u.customer_id = None
+
+    # Unlink order lines (keep history via the klant text field)
+    for ol in db.query(OrderLine).filter(OrderLine.customer_id == customer_id).all():
+        ol.customer_id = None
+
     db.delete(customer)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            409, "Klant kan niet verwijderd worden: er zijn nog gekoppelde gegevens"
+        )
