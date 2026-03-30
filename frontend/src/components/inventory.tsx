@@ -14,6 +14,9 @@ interface CustomerPrice {
   customer_id: number;
   customer_name: string;
   unit_price: number | null;
+  discount_type: string | null;
+  discount_value: number | null;
+  effective_price: number | null;
 }
 
 interface InventoryItem {
@@ -147,11 +150,15 @@ function InventoryDetailDialog({
   const [defaultPriceValue, setDefaultPriceValue] = useState("");
   const [editingCustomerPriceId, setEditingCustomerPriceId] = useState<number | null>(null);
   const [customerPriceValue, setCustomerPriceValue] = useState("");
+  const [editingDiscountId, setEditingDiscountId] = useState<number | null>(null);
+  const [discountType, setDiscountType] = useState<string>("");
+  const [discountValue, setDiscountValue] = useState("");
 
   useEffect(() => {
     if (item) {
       setEditingDefaultPrice(false);
       setEditingCustomerPriceId(null);
+      setEditingDiscountId(null);
     }
   }, [item]);
 
@@ -181,6 +188,25 @@ function InventoryDetailDialog({
       onUpdated({ ...item, customer_prices: updatedPrices });
       setEditingCustomerPriceId(null);
       toast.success("Klantprijs opgeslagen");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Fout bij opslaan");
+    }
+  }
+
+  async function saveDiscount(customerId: number) {
+    if (!item) return;
+    try {
+      const dt = discountType || null;
+      const dv = discountValue.trim() === "" ? null : parseFloat(discountValue);
+      const result = await api.updateCustomerSKUDiscount(customerId, item.sku_id, dt, dv);
+      const updatedPrices = item.customer_prices.map((cp) =>
+        cp.customer_id === customerId
+          ? { ...cp, discount_type: dt, discount_value: dv, effective_price: result.effective_price }
+          : cp
+      );
+      onUpdated({ ...item, customer_prices: updatedPrices });
+      setEditingDiscountId(null);
+      toast.success("Korting opgeslagen");
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Fout bij opslaan");
     }
@@ -291,56 +317,129 @@ function InventoryDetailDialog({
                 Geen klanten gekoppeld aan dit product
               </p>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {item.customer_prices.map((cp) => (
-                  <div
-                    key={cp.customer_id}
-                    className="flex justify-between items-center text-sm"
-                  >
-                    <span>{cp.customer_name}</span>
-                    {editingCustomerPriceId === cp.customer_id ? (
-                      <div className="flex items-center gap-2">
-                        <span>{"\u20AC"}</span>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={customerPriceValue}
-                          onChange={(e) => setCustomerPriceValue(e.target.value)}
-                          className="w-24 h-8 text-sm"
-                          autoFocus
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") saveCustomerPrice(cp.customer_id);
-                            if (e.key === "Escape") setEditingCustomerPriceId(null);
+                  <div key={cp.customer_id} className="border border-border rounded-md p-2 space-y-1">
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="font-medium">{cp.customer_name}</span>
+                      {cp.effective_price != null && (
+                        <span className="text-sm font-semibold">
+                          {"\u20AC"}{cp.effective_price.toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Vaste prijs */}
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-muted-foreground">Vaste prijs</span>
+                      {editingCustomerPriceId === cp.customer_id ? (
+                        <div className="flex items-center gap-2">
+                          <span>{"\u20AC"}</span>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={customerPriceValue}
+                            onChange={(e) => setCustomerPriceValue(e.target.value)}
+                            className="w-24 h-8 text-sm"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveCustomerPrice(cp.customer_id);
+                              if (e.key === "Escape") setEditingCustomerPriceId(null);
+                            }}
+                          />
+                          <button
+                            onClick={() => saveCustomerPrice(cp.customer_id)}
+                            className="text-primary hover:underline"
+                          >
+                            Opslaan
+                          </button>
+                          <button
+                            onClick={() => setEditingCustomerPriceId(null)}
+                            className="text-muted-foreground hover:underline"
+                          >
+                            Annuleren
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setCustomerPriceValue(
+                              cp.unit_price != null ? cp.unit_price.toFixed(2) : ""
+                            );
+                            setEditingCustomerPriceId(cp.customer_id);
                           }}
-                        />
-                        <button
-                          onClick={() => saveCustomerPrice(cp.customer_id)}
-                          className="text-primary hover:underline"
+                          className="hover:underline"
                         >
-                          Opslaan
+                          {cp.unit_price != null
+                            ? `\u20AC${cp.unit_price.toFixed(2)}`
+                            : "Niet ingesteld"}
                         </button>
+                      )}
+                    </div>
+
+                    {/* Korting */}
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-muted-foreground">Korting</span>
+                      {editingDiscountId === cp.customer_id ? (
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={discountType}
+                            onChange={(e) => {
+                              setDiscountType(e.target.value);
+                              if (!e.target.value) setDiscountValue("");
+                            }}
+                            className="h-8 text-sm rounded-md border border-input bg-background px-2"
+                          >
+                            <option value="">Geen</option>
+                            <option value="percentage">%</option>
+                            <option value="fixed">{"\u20AC"}</option>
+                          </select>
+                          {discountType && (
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={discountValue}
+                              onChange={(e) => setDiscountValue(e.target.value)}
+                              className="w-20 h-8 text-sm"
+                              placeholder={discountType === "percentage" ? "0-100" : "0.00"}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") saveDiscount(cp.customer_id);
+                                if (e.key === "Escape") setEditingDiscountId(null);
+                              }}
+                            />
+                          )}
+                          <button
+                            onClick={() => saveDiscount(cp.customer_id)}
+                            className="text-primary hover:underline"
+                          >
+                            Opslaan
+                          </button>
+                          <button
+                            onClick={() => setEditingDiscountId(null)}
+                            className="text-muted-foreground hover:underline"
+                          >
+                            Annuleren
+                          </button>
+                        </div>
+                      ) : (
                         <button
-                          onClick={() => setEditingCustomerPriceId(null)}
-                          className="text-muted-foreground hover:underline"
+                          onClick={() => {
+                            setDiscountType(cp.discount_type || "");
+                            setDiscountValue(
+                              cp.discount_value != null ? cp.discount_value.toString() : ""
+                            );
+                            setEditingDiscountId(cp.customer_id);
+                          }}
+                          className="hover:underline"
                         >
-                          Annuleren
+                          {cp.discount_type === "percentage" && cp.discount_value != null
+                            ? `-${cp.discount_value}%`
+                            : cp.discount_type === "fixed" && cp.discount_value != null
+                              ? `-\u20AC${cp.discount_value.toFixed(2)}`
+                              : "Geen"}
                         </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setCustomerPriceValue(
-                            cp.unit_price != null ? cp.unit_price.toFixed(2) : ""
-                          );
-                          setEditingCustomerPriceId(cp.customer_id);
-                        }}
-                        className="hover:underline"
-                      >
-                        {cp.unit_price != null
-                          ? `\u20AC${cp.unit_price.toFixed(2)}`
-                          : "Niet ingesteld"}
-                      </button>
-                    )}
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>

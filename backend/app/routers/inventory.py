@@ -30,6 +30,7 @@ from app.schemas import (
     ShipmentResponse,
     StockMovementResponse,
     UpdateCustomerPriceRequest,
+    UpdateCustomerSKUDiscountRequest,
     UpdateDefaultPriceRequest,
 )
 
@@ -304,6 +305,23 @@ def list_inventory(
     ]
 
 
+def _calc_effective_price(
+    unit_price: float | None,
+    discount_type: str | None,
+    discount_value: float | None,
+    default_price: float | None,
+) -> float | None:
+    """Calculate effective price using the waterfall: unit_price > discount > default_price."""
+    if unit_price is not None:
+        return unit_price
+    if default_price is not None and discount_type and discount_value is not None:
+        if discount_type == "percentage":
+            return round(default_price * (1 - discount_value / 100), 2)
+        elif discount_type == "fixed":
+            return round(max(0, default_price - discount_value), 2)
+    return default_price
+
+
 @router.get("/inventory/overview", response_model=list[InventoryOverviewItem])
 def inventory_overview(
     search: str | None = None,
@@ -373,14 +391,26 @@ def inventory_overview(
         .all()
     ) if sku_ids else []
 
+    # Build a lookup of default_price per sku for effective price calculation
+    sku_default_prices: dict[int, float | None] = {}
+    for sku, _ in rows:
+        sku_default_prices[sku.id] = float(sku.default_price) if sku.default_price is not None else None
+
     # Group by sku_id
     prices_by_sku: dict[int, list[CustomerPriceResponse]] = {}
     for cs, cname in customer_prices_rows:
+        unit = float(cs.unit_price) if cs.unit_price is not None else None
+        dt = cs.discount_type
+        dv = float(cs.discount_value) if cs.discount_value is not None else None
+        effective = _calc_effective_price(unit, dt, dv, sku_default_prices.get(cs.sku_id))
         prices_by_sku.setdefault(cs.sku_id, []).append(
             CustomerPriceResponse(
                 customer_id=cs.customer_id,
                 customer_name=cname,
-                unit_price=float(cs.unit_price) if cs.unit_price is not None else None,
+                unit_price=unit,
+                discount_type=dt,
+                discount_value=dv,
+                effective_price=effective,
             )
         )
 
@@ -473,6 +503,47 @@ def update_customer_price(
     db.commit()
 
     return {"ok": True}
+
+
+@router.put("/customers/{customer_id}/skus/{sku_id}/discount")
+def update_customer_sku_discount(
+    customer_id: int,
+    sku_id: int,
+    data: UpdateCustomerSKUDiscountRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    customer = db.get(Customer, customer_id)
+    if not customer:
+        raise HTTPException(404, "Klant niet gevonden")
+    if not user.is_platform_admin and customer.organization_id != user.organization_id:
+        raise HTTPException(403, "Geen toegang")
+
+    link = (
+        db.query(CustomerSKU)
+        .filter(CustomerSKU.customer_id == customer_id, CustomerSKU.sku_id == sku_id)
+        .first()
+    )
+    if not link:
+        raise HTTPException(404, "Klant-SKU koppeling niet gevonden")
+
+    link.discount_type = data.discount_type
+    link.discount_value = data.discount_value
+    db.commit()
+
+    # Return effective price info
+    sku = db.get(SKU, sku_id)
+    default_price = float(sku.default_price) if sku and sku.default_price is not None else None
+    unit = float(link.unit_price) if link.unit_price is not None else None
+    dt = link.discount_type
+    dv = float(link.discount_value) if link.discount_value is not None else None
+
+    return {
+        "ok": True,
+        "discount_type": dt,
+        "discount_value": dv,
+        "effective_price": _calc_effective_price(unit, dt, dv, default_price),
+    }
 
 
 @router.get("/inventory/{sku_id}/movements", response_model=list[StockMovementResponse])

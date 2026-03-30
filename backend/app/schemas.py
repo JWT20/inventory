@@ -215,11 +215,18 @@ class MatchResult(BaseModel):
 class CustomerCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=150)
     organization_id: int | None = None
+    show_prices: bool = True
+
+
+class CustomerUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=150)
+    show_prices: bool | None = None
 
 
 class CustomerResponse(BaseModel):
     id: int
     name: str
+    show_prices: bool = True
     sku_ids: list[int] = []
     created_at: datetime
 
@@ -352,6 +359,9 @@ class CustomerPriceResponse(BaseModel):
     customer_id: int
     customer_name: str
     unit_price: float | None = None
+    discount_type: str | None = None
+    discount_value: float | None = None
+    effective_price: float | None = None
 
     model_config = {"from_attributes": True}
 
@@ -414,3 +424,29 @@ class UpdateDefaultPriceRequest(BaseModel):
 
 class UpdateCustomerPriceRequest(BaseModel):
     unit_price: float | None = None
+
+
+class UpdateCustomerSKUDiscountRequest(BaseModel):
+    discount_type: str | None = None
+    discount_value: float | None = None
+
+    @field_validator("discount_type")
+    @classmethod
+    def validate_discount_type(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("percentage", "fixed"):
+            raise ValueError("discount_type moet 'percentage' of 'fixed' zijn")
+        return v
+
+    @field_validator("discount_value")
+    @classmethod
+    def validate_discount_value(cls, v: float | None, info) -> float | None:
+        dtype = info.data.get("discount_type")
+        if dtype is not None and v is None:
+            raise ValueError("discount_value is verplicht als discount_type is ingesteld")
+        if v is not None and dtype is None:
+            raise ValueError("discount_type is verplicht als discount_value is ingesteld")
+        if v is not None and v < 0:
+            raise ValueError("discount_value moet positief zijn")
+        if dtype == "percentage" and v is not None and v > 100:
+            raise ValueError("Percentage korting mag niet hoger dan 100 zijn")
+        return v

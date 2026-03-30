@@ -10,7 +10,7 @@ from app.database import get_db
 from sqlalchemy.exc import IntegrityError
 
 from app.models import Customer, CustomerSKU, OrderLine, Organization, User
-from app.schemas import CustomerCreate, CustomerResponse
+from app.schemas import CustomerCreate, CustomerResponse, CustomerUpdate
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/customers", tags=["customers"])
@@ -29,6 +29,7 @@ def _customer_to_response(customer: Customer) -> CustomerResponse:
     return CustomerResponse(
         id=customer.id,
         name=customer.name,
+        show_prices=customer.show_prices,
         sku_ids=[link.sku_id for link in customer.sku_links],
         created_at=customer.created_at,
     )
@@ -70,7 +71,7 @@ def create_customer(
     )
     if existing:
         raise HTTPException(409, f"Klant '{name}' bestaat al")
-    customer = Customer(name=name, organization_id=org_id)
+    customer = Customer(name=name, organization_id=org_id, show_prices=body.show_prices)
     db.add(customer)
     db.commit()
     db.refresh(customer)
@@ -105,3 +106,41 @@ def delete_customer(
         raise HTTPException(
             409, "Klant kan niet verwijderd worden: er zijn nog gekoppelde gegevens"
         )
+
+
+@router.patch("/{customer_id}", response_model=CustomerResponse)
+def update_customer(
+    customer_id: int,
+    body: CustomerUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    customer = db.get(Customer, customer_id)
+    if not customer:
+        raise HTTPException(404, "Klant niet gevonden")
+    if not user.is_platform_admin and customer.organization_id != user.organization_id:
+        raise HTTPException(403, "Geen toegang")
+
+    if body.name is not None:
+        name = body.name.strip().lower()
+        if not name:
+            raise HTTPException(400, "Naam mag niet leeg zijn")
+        existing = (
+            db.query(Customer)
+            .filter(
+                Customer.name == name,
+                Customer.organization_id == customer.organization_id,
+                Customer.id != customer_id,
+            )
+            .first()
+        )
+        if existing:
+            raise HTTPException(409, f"Klant '{name}' bestaat al")
+        customer.name = name
+
+    if body.show_prices is not None:
+        customer.show_prices = body.show_prices
+
+    db.commit()
+    db.refresh(customer)
+    return _customer_to_response(customer)
