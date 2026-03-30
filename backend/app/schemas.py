@@ -22,6 +22,7 @@ class TokenResponse(BaseModel):
     is_platform_admin: bool = False
     organization_id: int | None = None
     organization_name: str | None = None
+    customer_id: int | None = None
 
 
 class RefreshRequest(BaseModel):
@@ -51,6 +52,7 @@ class UserCreate(BaseModel):
     password: str = Field(..., min_length=8, max_length=128)
     role: Literal["owner", "member", "courier", "customer"] = "courier"
     organization_id: int | None = None
+    customer_id: int | None = None
 
     @field_validator("password")
     @classmethod
@@ -84,6 +86,8 @@ class UserResponse(BaseModel):
     is_platform_admin: bool = False
     organization_id: int | None = None
     organization_name: str | None = None
+    customer_id: int | None = None
+    customer_name: str | None = None
     is_active: bool
     created_at: datetime
 

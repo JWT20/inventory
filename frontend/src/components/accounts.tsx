@@ -22,6 +22,8 @@ interface User {
   is_platform_admin: boolean;
   organization_id: number | null;
   organization_name: string | null;
+  customer_id: number | null;
+  customer_name: string | null;
   is_active: boolean;
   created_at: string;
 }
@@ -151,6 +153,9 @@ export function AccountsPage() {
                   {u.organization_name && (
                     <Badge variant="outline">{u.organization_name}</Badge>
                   )}
+                  {u.customer_name && (
+                    <Badge variant="outline">Klant: {u.customer_name}</Badge>
+                  )}
                 </div>
               </div>
               <div className="flex gap-1">
@@ -213,6 +218,8 @@ function NewUserDialog({
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("courier");
   const [orgId, setOrgId] = useState<number | "">("");
+  const [customerId, setCustomerId] = useState<number | "">("");
+  const [customers, setCustomers] = useState<{ id: number; name: string }[]>([]);
 
   useEffect(() => {
     if (open) {
@@ -220,8 +227,20 @@ function NewUserDialog({
       setPassword("");
       setRole("courier");
       setOrgId("");
+      setCustomerId("");
+      setCustomers([]);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (role === "customer" && orgId) {
+      api.listCustomers().then((c: { id: number; name: string; organization_id?: number }[]) => {
+        setCustomers(c);
+      }).catch(() => setCustomers([]));
+    } else {
+      setCustomerId("");
+    }
+  }, [role, orgId]);
 
   const needsOrg = role === "owner" || role === "member" || role === "customer";
 
@@ -233,6 +252,7 @@ function NewUserDialog({
         password,
         role,
         organization_id: needsOrg ? (orgId as number) : null,
+        customer_id: role === "customer" && customerId ? (customerId as number) : null,
       });
       toast.success(`Gebruiker '${username}' aangemaakt`);
       onClose();
@@ -303,6 +323,28 @@ function NewUserDialog({
                   </option>
                 ))}
               </select>
+            </div>
+          )}
+          {role === "customer" && orgId && (
+            <div className="space-y-2">
+              <Label>Koppel aan klant</Label>
+              <select
+                value={customerId}
+                onChange={(e) =>
+                  setCustomerId(e.target.value ? Number(e.target.value) : "")
+                }
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                <option value="">Selecteer klant...</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                De gebruiker kan alleen orders plaatsen voor deze klant
+              </p>
             </div>
           )}
           <Button type="submit" className="w-full">

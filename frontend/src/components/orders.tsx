@@ -180,10 +180,25 @@ function ManualOrderDialog({
   const [newCustomerName, setNewCustomerName] = useState("");
   const [creatingCustomer, setCreatingCustomer] = useState(false);
 
+  const isLinkedCustomer = user?.role === "customer" && !!user?.customer_id;
+
   useEffect(() => {
     if (!open) return;
     api.listSKUs().then((s: SKUOption[]) => setAllSkus(s));
-    api.listCustomers().then((c: CustomerOption[]) => setAllCustomers(c));
+    api.listCustomers().then((c: CustomerOption[]) => {
+      setAllCustomers(c);
+      // Auto-select linked customer for customer-role users
+      if (isLinkedCustomer && user.customer_id) {
+        const linked = c.find((cust) => cust.id === user.customer_id);
+        if (linked) {
+          setSelectedCustomerIds([linked.id]);
+          const lines: CustomerSkuLine[] = (linked.sku_ids || []).map(
+            (skuId) => ({ sku_id: skuId, checked: false, quantity: 1 }),
+          );
+          setCustomerLines({ [linked.id]: lines });
+        }
+      }
+    });
   }, [open]);
 
   function toggleCustomer(customerId: number) {
@@ -316,6 +331,14 @@ function ManualOrderDialog({
 
         <div className="space-y-4">
           {/* Customer selection */}
+          {isLinkedCustomer ? (
+            <div>
+              <Label className="mb-1 block text-sm">Bestellen als</Label>
+              <p className="text-sm font-medium px-2 py-1.5 border border-border rounded-md bg-muted">
+                {allCustomers.find((c) => c.id === user.customer_id)?.name ?? "..."}
+              </p>
+            </div>
+          ) : (
           <div>
             <Label className="mb-1 block text-sm">Klanten</Label>
             <div className="flex gap-2 mb-2">
@@ -372,6 +395,7 @@ function ManualOrderDialog({
               </Button>
             </div>
           </div>
+          )}
 
           {/* Per-customer SKU selection */}
           {selectedCustomerIds.map((customerId) => {

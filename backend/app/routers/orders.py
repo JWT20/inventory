@@ -84,6 +84,15 @@ def create_order(
     """Create an order by picking existing customers and SKUs."""
     org_id = _resolve_organization_id(user, body.organization_id, db)
 
+    # Customer-role users can only order for their linked customer
+    if user.role == "customer" and user.customer_id:
+        for line in body.lines:
+            if line.customer_id != user.customer_id:
+                raise HTTPException(
+                    403,
+                    "Klantgebruikers kunnen alleen orders plaatsen voor hun eigen klant",
+                )
+
     ref = f"ORD-{uuid.uuid4().hex[:8].upper()}"
     order = Order(
         organization_id=org_id,
