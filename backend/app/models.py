@@ -73,6 +73,9 @@ class User(Base):
     organization_id: Mapped[int | None] = mapped_column(
         ForeignKey("organizations.id"), nullable=True
     )
+    customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id", ondelete="SET NULL"), nullable=True
+    )
     is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -82,6 +85,7 @@ class User(Base):
     )
 
     organization: Mapped["Organization | None"] = relationship(back_populates="users")
+    customer: Mapped["Customer | None"] = relationship()
 
     @property
     def is_admin(self) -> bool:

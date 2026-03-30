@@ -27,7 +27,7 @@ from app.auth import (
 )
 from app.database import get_db
 from app.events import publish_event
-from app.models import Organization, User
+from app.models import Customer, Organization, User
 from app.schemas import (
     AdminResetPassword,
     ChangeOwnPassword,
@@ -64,6 +64,15 @@ def _user_to_response(user: User, db: Session | None = None) -> UserResponse:
             if db:
                 org = db.get(Organization, user.organization_id)
                 org_name = org.name if org else None
+    # Resolve customer name
+    customer_name = None
+    if user.customer_id:
+        try:
+            customer_name = user.customer.name if user.customer else None
+        except Exception:
+            if db:
+                cust = db.get(Customer, user.customer_id)
+                customer_name = cust.name if cust else None
     return UserResponse(
         id=user.id,
         username=user.username,
@@ -71,6 +80,8 @@ def _user_to_response(user: User, db: Session | None = None) -> UserResponse:
         is_platform_admin=user.is_platform_admin,
         organization_id=user.organization_id,
         organization_name=org_name,
+        customer_id=user.customer_id,
+        customer_name=customer_name,
         is_active=user.is_active,
         created_at=user.created_at,
     )
@@ -129,6 +140,7 @@ async def login(
         is_platform_admin=user.is_platform_admin,
         organization_id=user.organization_id,
         organization_name=org_name,
+        customer_id=user.customer_id,
     )
 
 
@@ -179,12 +191,25 @@ def create_user(
         if data.organization_id:
             raise HTTPException(400, "Couriers cannot be linked to an organization")
 
+    # Validate customer_id for customer role
+    customer_id = None
+    if data.role == "customer" and data.customer_id:
+        cust = db.get(Customer, data.customer_id)
+        if not cust:
+            raise HTTPException(404, f"Klant met id {data.customer_id} niet gevonden")
+        if cust.organization_id != data.organization_id:
+            raise HTTPException(400, "Klant hoort niet bij de geselecteerde organisatie")
+        customer_id = data.customer_id
+    elif data.role != "customer" and data.customer_id:
+        raise HTTPException(400, "Alleen gebruikers met rol 'customer' kunnen aan een klant gekoppeld worden")
+
     user = User(
         username=data.username,
         email=f"{data.username}@local",
         hashed_password=hash_password(data.password),
         role=data.role,
         organization_id=data.organization_id,
+        customer_id=customer_id,
         is_platform_admin=False,
         is_superuser=False,
     )

@@ -142,7 +142,7 @@ export const api = {
     json("/auth/login", "POST", { username, password }),
   me: () => request("/auth/me"),
   listUsers: () => request("/auth/users"),
-  createUser: (data: { username: string; password: string; role: string; organization_id?: number | null }) =>
+  createUser: (data: { username: string; password: string; role: string; organization_id?: number | null; customer_id?: number | null }) =>
     json("/auth/users", "POST", data),
   deleteUser: (id: number) => request(`/auth/users/${id}`, { method: "DELETE" }),
   resetUserPassword: (userId: number, newPassword: string) =>
