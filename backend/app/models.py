@@ -251,7 +251,7 @@ class OrderLine(Base):
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
     klant: Mapped[str] = mapped_column(String(150), default="")
     customer_id: Mapped[int | None] = mapped_column(
-        ForeignKey("customers.id"), nullable=True
+        ForeignKey("customers.id", ondelete="SET NULL"), nullable=True
     )
     quantity: Mapped[int] = mapped_column(Integer)
     booked_count: Mapped[int] = mapped_column(Integer, default=0)
