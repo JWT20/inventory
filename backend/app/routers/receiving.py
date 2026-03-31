@@ -387,13 +387,14 @@ async def book_box(
                 f"SKU {matched_sku.sku_code} is al volledig geboekt in deze order",
             )
 
-        # Pre-check stock availability
+        # Pre-check stock availability (with row lock to prevent race conditions)
         balance = (
             db.query(InventoryBalance)
             .filter(
                 InventoryBalance.sku_id == matched_sku.id,
                 InventoryBalance.organization_id == order.organization_id,
             )
+            .with_for_update()
             .first()
         )
         if not balance or balance.quantity_on_hand < 1:

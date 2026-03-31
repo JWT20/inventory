@@ -79,15 +79,21 @@ def _sku_to_response(sku: SKU) -> SKUResponse:
 @router.get("", response_model=list[SKUResponse])
 def list_skus(
     active_only: bool = False,
+    limit: int = 100,
+    offset: int = 0,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     query = db.query(SKU).options(selectinload(SKU.reference_images), selectinload(SKU.attributes))
     if active_only:
         query = query.filter(SKU.active.is_(True))
-    if not user.is_platform_admin and user.organization_id:
-        query = query.filter(SKU.organization_id == user.organization_id)
-    skus = query.order_by(SKU.name).all()
+    if not user.is_platform_admin:
+        if user.organization_id:
+            query = query.filter(SKU.organization_id == user.organization_id)
+        else:
+            # Users without an org (e.g. couriers) must not see all SKUs
+            query = query.filter(SKU.organization_id.is_(None))
+    skus = query.order_by(SKU.name).offset(offset).limit(limit).all()
     return [_sku_to_response(s) for s in skus]
 
 
