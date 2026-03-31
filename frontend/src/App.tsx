@@ -54,7 +54,7 @@ function Main() {
     {
       id: "accounts",
       label: "Accounts",
-      show: isAdmin,
+      show: isAdmin || user.role === "owner" || user.role === "member",
     },
   ];
 
