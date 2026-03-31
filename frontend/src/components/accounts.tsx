@@ -64,18 +64,23 @@ export function AccountsPage() {
 
   const load = useCallback(async () => {
     try {
-      const [u, o, c] = await Promise.all([
-        api.listUsers(),
-        api.listOrganizations(),
-        api.listCustomers(),
-      ]);
-      setUsers(u);
-      setOrganizations(o);
-      setCustomers(c);
+      const customerPromise = api.listCustomers();
+      if (me?.is_platform_admin) {
+        const [u, o, c] = await Promise.all([
+          api.listUsers(),
+          api.listOrganizations(),
+          customerPromise,
+        ]);
+        setUsers(u);
+        setOrganizations(o);
+        setCustomers(c);
+      } else {
+        setCustomers(await customerPromise);
+      }
     } catch {
       toast.error("Kan gegevens niet laden");
     }
-  }, []);
+  }, [me]);
 
   useEffect(() => {
     load();
@@ -120,7 +125,9 @@ export function AccountsPage() {
 
   return (
     <>
-      {/* Organizations section */}
+      {/* Organizations section - admin only */}
+      {me?.is_platform_admin && (
+      <>
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Organisaties</h2>
         <Button size="sm" onClick={() => setShowNewOrg(true)}>
@@ -152,6 +159,8 @@ export function AccountsPage() {
           </p>
         )}
       </div>
+      </>
+      )}
 
       {/* Customers section */}
       <div className="flex justify-between items-center mb-4">
@@ -203,7 +212,9 @@ export function AccountsPage() {
         )}
       </div>
 
-      {/* Users section */}
+      {/* Users section - admin only */}
+      {me?.is_platform_admin && (
+      <>
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Gebruikers</h2>
         <Button size="sm" onClick={() => setShowNew(true)}>
@@ -211,7 +222,7 @@ export function AccountsPage() {
         </Button>
       </div>
 
-      <div className="space-y-3">
+      <div className="space-y-3 mb-8">
         {users.map((u) => (
           <Card key={u.id} className="p-4">
             <div className="flex justify-between items-center">
@@ -255,6 +266,8 @@ export function AccountsPage() {
           </Card>
         ))}
       </div>
+      </>
+      )}
 
       <NewUserDialog
         open={showNew}
