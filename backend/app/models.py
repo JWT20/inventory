@@ -25,6 +25,7 @@ EMBEDDING_DIM = 3072
 VALID_ROLES = ("owner", "member", "courier", "customer")
 VALID_SHIPMENT_STATUSES = ("draft", "booked")
 VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count")
+VALID_DISCOUNT_TYPES = ("percentage", "fixed")
 
 
 class Organization(Base):
@@ -186,6 +187,7 @@ class Customer(Base):
     organization_id: Mapped[int | None] = mapped_column(
         ForeignKey("organizations.id"), nullable=True
     )
+    show_prices: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -204,6 +206,10 @@ class CustomerSKU(Base):
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"))
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="CASCADE"))
     unit_price: Mapped[float | None] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+    discount_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    discount_value: Mapped[float | None] = mapped_column(
         Numeric(10, 2), nullable=True
     )
 

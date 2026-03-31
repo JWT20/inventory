@@ -206,8 +206,10 @@ export const api = {
 
   // Customers
   listCustomers: () => request("/customers"),
-  createCustomer: (name: string, organizationId?: number | null) =>
-    json("/customers", "POST", { name, organization_id: organizationId ?? undefined }),
+  createCustomer: (data: { name: string; organization_id?: number | null; show_prices?: boolean }) =>
+    json("/customers", "POST", data),
+  updateCustomer: (id: number, data: { name?: string; show_prices?: boolean }) =>
+    json(`/customers/${id}`, "PATCH", data),
   deleteCustomer: (id: number) => request(`/customers/${id}`, { method: "DELETE" }),
 
   // Orders
@@ -256,6 +258,8 @@ export const api = {
     json(`/skus/${skuId}/price`, "PUT", { default_price: defaultPrice }),
   updateCustomerPrice: (customerId: number, skuId: number, unitPrice: number | null) =>
     json(`/customers/${customerId}/skus/${skuId}/price`, "PUT", { unit_price: unitPrice }),
+  updateCustomerSKUDiscount: (customerId: number, skuId: number, discountType: string | null, discountValue: number | null) =>
+    json(`/customers/${customerId}/skus/${skuId}/discount`, "PUT", { discount_type: discountType, discount_value: discountValue }),
 
   // Vision (ad-hoc)
   identify: (blob: Blob) => upload("/vision/identify", blob, "scan.jpg"),
