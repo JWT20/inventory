@@ -198,6 +198,8 @@ def get_order(
     if not user.is_platform_admin:
         if user.role == "customer" and order.created_by != user.id:
             raise HTTPException(403, "Geen toegang tot deze order")
+        elif user.role == "courier" and order.status != "active":
+            raise HTTPException(403, "Geen toegang tot deze order")
         elif user.organization_id and order.organization_id != user.organization_id:
             if user.role != "courier":
                 raise HTTPException(403, "Geen toegang tot deze order")
@@ -280,13 +282,23 @@ def delete_order(
 def list_bookings(
     order_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     from app.models import Booking
 
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, "Order niet gevonden")
+
+    # Access control: same rules as get_order
+    if not user.is_platform_admin:
+        if user.role == "customer" and order.created_by != user.id:
+            raise HTTPException(403, "Geen toegang tot deze order")
+        elif user.role == "courier" and order.status != "active":
+            raise HTTPException(403, "Geen toegang tot deze order")
+        elif user.organization_id and order.organization_id != user.organization_id:
+            if user.role != "courier":
+                raise HTTPException(403, "Geen toegang tot deze order")
 
     bookings = (
         db.query(Booking)

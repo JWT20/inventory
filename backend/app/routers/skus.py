@@ -147,11 +147,17 @@ def create_sku(
 def get_sku(
     sku_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU not found")
+    if not user.is_platform_admin:
+        if user.organization_id:
+            if sku.organization_id != user.organization_id:
+                raise HTTPException(404, "SKU not found")
+        elif sku.organization_id is not None:
+            raise HTTPException(404, "SKU not found")
     return _sku_to_response(sku)
 
 
@@ -287,11 +293,17 @@ async def upload_reference_image(
 def list_reference_images(
     sku_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU not found")
+    if not user.is_platform_admin:
+        if user.organization_id:
+            if sku.organization_id != user.organization_id:
+                raise HTTPException(404, "SKU not found")
+        elif sku.organization_id is not None:
+            raise HTTPException(404, "SKU not found")
     return sku.reference_images
 
 
