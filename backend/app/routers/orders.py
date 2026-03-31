@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -21,7 +22,56 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
 
 
-def _order_line_to_response(line: OrderLine) -> OrderLineResponse:
+def _calc_effective_price(
+    unit_price: float | None,
+    discount_type: str | None,
+    discount_value: float | None,
+    default_price: float | None,
+) -> float | None:
+    if unit_price is not None:
+        return unit_price
+    if default_price is not None and discount_type and discount_value is not None:
+        if discount_type == "percentage":
+            return round(default_price * (1 - discount_value / 100), 2)
+        if discount_type == "fixed":
+            return round(max(0, default_price - discount_value), 2)
+    return default_price
+
+
+def _as_float(value: Decimal | float | None) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _order_line_to_response(
+    line: OrderLine,
+    sku_default_prices: dict[int, float | None],
+    customer_price_map: dict[tuple[int, int], CustomerSKU],
+) -> OrderLineResponse:
+    customer_show_prices = True
+    if line.customer is not None:
+        customer_show_prices = line.customer.show_prices
+
+    link = None
+    if line.customer_id is not None:
+        link = customer_price_map.get((line.customer_id, line.sku_id))
+
+    unit_price = _as_float(link.unit_price) if link else None
+    discount_type = link.discount_type if link else None
+    discount_value = _as_float(link.discount_value) if link else None
+    effective_price = _calc_effective_price(
+        unit_price,
+        discount_type,
+        discount_value,
+        sku_default_prices.get(line.sku_id),
+    )
+    line_total = (
+        round(effective_price * line.quantity, 2)
+        if customer_show_prices and effective_price is not None
+        else None
+    )
+
     return OrderLineResponse(
         id=line.id,
         sku_id=line.sku_id,
@@ -33,11 +83,51 @@ def _order_line_to_response(line: OrderLine) -> OrderLineResponse:
         quantity=line.quantity,
         booked_count=line.booked_count,
         has_image=len(line.sku.reference_images) > 0,
+        show_prices=customer_show_prices,
+        unit_price=unit_price if customer_show_prices else None,
+        discount_type=discount_type if customer_show_prices else None,
+        discount_value=discount_value if customer_show_prices else None,
+        effective_price=effective_price if customer_show_prices else None,
+        line_total=line_total,
     )
 
 
-def _order_to_response(order: Order) -> OrderResponse:
-    lines = [_order_line_to_response(l) for l in order.lines]
+def _order_to_response(order: Order, db: Session) -> OrderResponse:
+    customer_sku_keys = {
+        (line.customer_id, line.sku_id)
+        for line in order.lines
+        if line.customer_id is not None
+    }
+    customer_price_map: dict[tuple[int, int], CustomerSKU] = {}
+    if customer_sku_keys:
+        customer_ids = sorted({customer_id for customer_id, _ in customer_sku_keys})
+        sku_ids = sorted({sku_id for _, sku_id in customer_sku_keys})
+        links = (
+            db.query(CustomerSKU)
+            .filter(
+                CustomerSKU.customer_id.in_(customer_ids),
+                CustomerSKU.sku_id.in_(sku_ids),
+            )
+            .all()
+        )
+        customer_price_map = {
+            (link.customer_id, link.sku_id): link
+            for link in links
+            if (link.customer_id, link.sku_id) in customer_sku_keys
+        }
+
+    sku_default_prices = {
+        line.sku_id: _as_float(line.sku.default_price)
+        for line in order.lines
+    }
+    lines = [
+        _order_line_to_response(line, sku_default_prices, customer_price_map)
+        for line in order.lines
+    ]
+    visible_line_totals = [line.line_total for line in lines if line.line_total is not None]
+    visible_total = round(sum(visible_line_totals), 2) if visible_line_totals else None
+    hidden_lines_count = len([line for line in lines if not line.show_prices])
+
     return OrderResponse(
         id=order.id,
         reference=order.reference,
@@ -49,6 +139,8 @@ def _order_to_response(order: Order) -> OrderResponse:
         lines=lines,
         total_boxes=sum(l.quantity for l in order.lines),
         booked_boxes=sum(l.booked_count for l in order.lines),
+        visible_total=visible_total,
+        hidden_lines_count=hidden_lines_count,
     )
 
 
@@ -150,7 +242,7 @@ def create_order(
         resource_id=order.id,
     )
 
-    return _order_to_response(order)
+    return _order_to_response(order, db)
 
 
 @router.get("", response_model=list[OrderResponse])
@@ -181,7 +273,7 @@ def list_orders(
         return []
 
     orders = query.order_by(Order.created_at.desc()).offset(offset).limit(limit).all()
-    return [_order_to_response(o) for o in orders]
+    return [_order_to_response(o, db) for o in orders]
 
 
 @router.get("/{order_id}", response_model=OrderResponse)
@@ -204,7 +296,7 @@ def get_order(
             if user.role != "courier":
                 raise HTTPException(403, "Geen toegang tot deze order")
 
-    return _order_to_response(order)
+    return _order_to_response(order, db)
 
 
 @router.post("/{order_id}/activate", response_model=OrderResponse)
@@ -251,7 +343,7 @@ def activate_order(
         resource_id=order.id,
     )
 
-    return _order_to_response(order)
+    return _order_to_response(order, db)
 
 
 @router.delete("/{order_id}", status_code=204)

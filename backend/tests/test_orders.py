@@ -1,7 +1,7 @@
 """Tests for order management."""
 
 from tests.conftest import auth_header
-from app.models import Customer, SKU, ReferenceImage
+from app.models import Customer, CustomerSKU, SKU, ReferenceImage
 
 
 class TestCreateOrder:
@@ -50,6 +50,56 @@ class TestCreateOrder:
             headers=auth_header(courier_token),
         )
         assert resp.status_code == 403
+
+    def test_order_response_hides_prices_when_customer_disables_them(
+        self, client, db, owner_user, owner_token, sample_org
+    ):
+        hidden_customer = Customer(
+            name="verborgen klant",
+            organization_id=sample_org.id,
+            show_prices=False,
+        )
+        visible_customer = Customer(
+            name="zichtbare klant",
+            organization_id=sample_org.id,
+            show_prices=True,
+        )
+        sku = SKU(sku_code="WINE-200", name="Prijs Test", default_price=10)
+        db.add_all([hidden_customer, visible_customer, sku])
+        db.commit()
+
+        db.add_all([
+            CustomerSKU(customer_id=hidden_customer.id, sku_id=sku.id, unit_price=12),
+            CustomerSKU(customer_id=visible_customer.id, sku_id=sku.id, unit_price=11),
+        ])
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [
+                    {"customer_id": hidden_customer.id, "sku_id": sku.id, "quantity": 2},
+                    {"customer_id": visible_customer.id, "sku_id": sku.id, "quantity": 3},
+                ],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        hidden_line = next(l for l in data["lines"] if l["customer_id"] == hidden_customer.id)
+        visible_line = next(l for l in data["lines"] if l["customer_id"] == visible_customer.id)
+
+        assert hidden_line["show_prices"] is False
+        assert hidden_line["effective_price"] is None
+        assert hidden_line["line_total"] is None
+
+        assert visible_line["show_prices"] is True
+        assert visible_line["effective_price"] == 11.0
+        assert visible_line["line_total"] == 33.0
+
+        assert data["visible_total"] == 33.0
+        assert data["hidden_lines_count"] == 1
 
 
 class TestListOrders:

@@ -39,6 +39,12 @@ interface OrderLine {
   quantity: number;
   booked_count: number;
   has_image: boolean;
+  show_prices: boolean;
+  unit_price: number | null;
+  discount_type: string | null;
+  discount_value: number | null;
+  effective_price: number | null;
+  line_total: number | null;
 }
 
 interface Order {
@@ -51,6 +57,8 @@ interface Order {
   lines: OrderLine[];
   total_boxes: number;
   booked_boxes: number;
+  visible_total: number | null;
+  hidden_lines_count: number;
 }
 
 interface CustomerSkuLine {
@@ -74,6 +82,11 @@ const STATUS_VARIANT: Record<string, "active" | "inactive"> = {
   completed: "active",
   cancelled: "inactive",
 };
+
+const money = new Intl.NumberFormat("nl-NL", {
+  style: "currency",
+  currency: "EUR",
+});
 
 export function OrdersPage() {
   const { user } = useAuth();
@@ -621,9 +634,24 @@ function OrderDetailDialog({
                     </p>
                   </div>
                   <div className="text-right flex items-center gap-2">
-                    <p>
-                      {line.booked_count}/{line.quantity} dozen
-                    </p>
+                    <div>
+                      <p>
+                        {line.booked_count}/{line.quantity} dozen
+                      </p>
+                      {line.show_prices && line.effective_price != null && (
+                        <p className="text-xs text-muted-foreground">
+                          {money.format(line.effective_price)} p/st ·{" "}
+                          {line.line_total != null
+                            ? money.format(line.line_total)
+                            : "—"}
+                        </p>
+                      )}
+                      {!line.show_prices && (
+                        <p className="text-xs text-muted-foreground">
+                          Prijs verborgen
+                        </p>
+                      )}
+                    </div>
                     {!line.has_image && canManage && (
                       <>
                         <Button
@@ -669,6 +697,18 @@ function OrderDetailDialog({
                 Upload een foto per SKU hierboven.
               </p>
             </div>
+          )}
+
+          {order.visible_total != null && (
+            <div className="p-3 rounded border border-border bg-card flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Totaal zichtbaar</span>
+              <span className="font-semibold">{money.format(order.visible_total)}</span>
+            </div>
+          )}
+          {order.hidden_lines_count > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {order.hidden_lines_count} orderregel(s) hebben verborgen prijzen.
+            </p>
           )}
 
           {canActivate && (
