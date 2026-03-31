@@ -155,6 +155,8 @@ def create_order(
 
 @router.get("", response_model=list[OrderResponse])
 def list_orders(
+    limit: int = 100,
+    offset: int = 0,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -178,7 +180,7 @@ def list_orders(
     else:
         return []
 
-    orders = query.order_by(Order.created_at.desc()).all()
+    orders = query.order_by(Order.created_at.desc()).offset(offset).limit(limit).all()
     return [_order_to_response(o) for o in orders]
 
 
