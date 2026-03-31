@@ -11,7 +11,12 @@ class Settings(BaseSettings):
     gemini_vision_model: str = "gemini-2.5-flash"
     gemini_embedding_model: str = "gemini-embedding-001"
     match_threshold: float = 0.80
+    confirm_threshold: float = 0.84
     ambiguity_margin: float = 0.05
+    duplicate_similarity_threshold: float = 0.90
+    max_image_size: int = 10 * 1024 * 1024  # 10 MB
+    confirmation_token_max_age: int = 120  # seconds
+    gemini_request_timeout: int = 60  # seconds
     upload_dir: str = "/app/uploads"
 
     # Kafka

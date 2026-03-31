@@ -294,6 +294,8 @@ class TestIdentifyPackageFilter:
              patch("app.routers.receiving.find_best_matches") as mock_match:
             mock_settings.upload_dir = str(tmp_path)
             mock_settings.match_threshold = 0.85
+            mock_settings.confirm_threshold = 0.84
+            mock_settings.ambiguity_margin = 0.05
             mock_match.return_value = [(sample_sku, 0.95, "/app/uploads/ref/1/img.jpg", "White box with bull logo, Rioja")]
 
             resp = client.post(

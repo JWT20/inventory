@@ -13,7 +13,7 @@ from app.config import settings
 from app.database import get_db
 from app.events import publish_event
 from app.models import SKU, Booking, Order, OrderLine, ReferenceImage, User
-from app.routers.skus import _check_duplicate_embedding, _sku_to_response
+from app.services.sku_helpers import check_duplicate_embedding, sku_to_response
 from app.schemas import AlternativeMatch, BookingConfirmation, BookingResponse, ConfirmBookingRequest, MatchResult, SKUResponse
 from langfuse import observe, propagate_attributes
 
@@ -22,8 +22,8 @@ from app.services.matching import find_best_matches
 
 logger = logging.getLogger(__name__)
 
-MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
-CONFIRMATION_TOKEN_MAX_AGE = 120  # seconds
+MAX_IMAGE_SIZE = settings.max_image_size
+CONFIRMATION_TOKEN_MAX_AGE = settings.confirmation_token_max_age
 
 _signer = URLSafeTimedSerializer(settings.secret_key, salt="booking-confirm")
 
@@ -170,7 +170,7 @@ async def identify_box(
 
         # Flag for human confirmation if description quality is low, confidence is low,
         # or there are close rival matches (ambiguity).
-        CONFIRM_THRESHOLD = 0.84
+        CONFIRM_THRESHOLD = settings.confirm_threshold
         quality = assess_description_quality(description)
         reasons = []
         alternatives: list[AlternativeMatch] = []
@@ -312,7 +312,7 @@ async def book_box(
 
         # Gate: require human confirmation if description quality is low,
         # confidence is low, or there are close rival matches (ambiguity).
-        CONFIRM_THRESHOLD = 0.84
+        CONFIRM_THRESHOLD = settings.confirm_threshold
         quality = assess_description_quality(description)
         reason: list[str] = []
         alternatives: list[AlternativeMatch] = []
@@ -735,7 +735,7 @@ async def create_product_inline(
         raise HTTPException(400, "Dit is geen doos of verpakking — upload alleen foto's van dozen")
 
     # Duplicate detection via embedding similarity (check against all existing SKUs)
-    dup_sku, similarity = _check_duplicate_embedding(db, embedding, exclude_sku_id=sku.id)
+    dup_sku, similarity = check_duplicate_embedding(db, embedding, exclude_sku_id=sku.id)
     if dup_sku:
         db.rollback()
         raise HTTPException(
@@ -773,4 +773,4 @@ async def create_product_inline(
         resource_id=sku.id,
     )
 
-    return _sku_to_response(sku)
+    return sku_to_response(sku)

@@ -3,7 +3,6 @@ import os
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
-from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth import get_current_user, require_admin, require_product_manager
@@ -27,55 +26,14 @@ from app.services.embedding import (
     describe_and_embed,
     generate_embedding,
 )
+from app.services.sku_helpers import check_duplicate_embedding, sku_to_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/skus", tags=["skus"])
 
-# Threshold for considering two images as duplicates (cosine similarity)
-DUPLICATE_SIMILARITY_THRESHOLD = 0.90
-
-
-def _check_duplicate_embedding(
-    db: Session, embedding: list[float], exclude_sku_id: int,
-) -> tuple[SKU | None, float]:
-    """Check if a similar image already exists on a different SKU.
-
-    Returns (matching_sku, similarity) or (None, 0.0).
-    """
-    embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
-    row = db.execute(
-        text("""
-            SELECT ri.sku_id, 1 - (ri.embedding <=> :embedding) AS similarity
-            FROM reference_images ri
-            WHERE ri.embedding IS NOT NULL
-              AND ri.sku_id != :exclude_sku_id
-            ORDER BY ri.embedding <=> :embedding
-            LIMIT 1
-        """),
-        {"embedding": embedding_str, "exclude_sku_id": exclude_sku_id},
-    ).first()
-    if row and row[1] >= DUPLICATE_SIMILARITY_THRESHOLD:
-        sku = db.get(SKU, row[0])
-        return sku, float(row[1])
-    return None, 0.0
-
-
-def _sku_to_response(sku: SKU) -> SKUResponse:
-    return SKUResponse(
-        id=sku.id,
-        sku_code=sku.sku_code,
-        name=sku.name,
-        description=sku.description,
-        active=sku.active,
-        producent=sku.producent,
-        wijnaam=sku.wijnaam,
-        wijntype=sku.wijntype,
-        jaargang=sku.jaargang,
-        volume=sku.volume,
-        created_at=sku.created_at,
-        updated_at=sku.updated_at,
-        image_count=len(sku.reference_images),
-    )
+# Backward-compatible aliases for any remaining internal references
+_check_duplicate_embedding = check_duplicate_embedding
+_sku_to_response = sku_to_response
 
 
 @router.get("", response_model=list[SKUResponse])

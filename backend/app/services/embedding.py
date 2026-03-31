@@ -150,7 +150,10 @@ def _get_client() -> genai.Client:
     """Shared Gemini API client (default v1beta endpoint)."""
     global _client
     if _client is None:
-        _client = genai.Client(api_key=settings.gemini_api_key)
+        _client = genai.Client(
+            api_key=settings.gemini_api_key,
+            http_options=types.HttpOptions(timeout=settings.gemini_request_timeout * 1000),
+        )
     return _client
 
 

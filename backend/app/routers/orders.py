@@ -23,7 +23,7 @@ from app.schemas import (
     generate_display_name,
     generate_sku_code,
 )
-from app.routers.skus import _sku_to_response
+from app.services.sku_helpers import sku_to_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -216,8 +216,8 @@ def upload_csv(
     )
 
     return CSVValidationResult(
-        matched_skus=[_sku_to_response(s) for s in matched_skus],
-        new_skus=[_sku_to_response(s) for s in new_skus],
+        matched_skus=[sku_to_response(s) for s in matched_skus],
+        new_skus=[sku_to_response(s) for s in new_skus],
         errors=errors,
     )
 

@@ -9,7 +9,13 @@ from app.config import settings
 # ---------------------------------------------------------------------------
 # Sync engine (used by existing routers, migrations, etc.)
 # ---------------------------------------------------------------------------
-engine = create_engine(settings.database_url)
+engine = create_engine(
+    settings.database_url,
+    pool_size=5,
+    max_overflow=10,
+    pool_pre_ping=True,
+    pool_recycle=300,
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -34,7 +40,13 @@ _async_url = settings.database_url.replace(
     "postgresql+psycopg2://", "postgresql+asyncpg://"
 )
 
-async_engine = create_async_engine(_async_url)
+async_engine = create_async_engine(
+    _async_url,
+    pool_size=5,
+    max_overflow=10,
+    pool_pre_ping=True,
+    pool_recycle=300,
+)
 async_session_maker = async_sessionmaker(
     async_engine, class_=AsyncSession, expire_on_commit=False
 )

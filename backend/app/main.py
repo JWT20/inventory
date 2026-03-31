@@ -290,6 +290,27 @@ def _migrate_reference_image_description_quality():
             ))
 
 
+def _migrate_hnsw_index():
+    """Create HNSW index on reference_images.embedding for fast vector search."""
+    inspector = inspect(engine)
+    if "reference_images" not in inspector.get_table_names():
+        return
+    # Check if index already exists
+    indexes = {idx["name"] for idx in inspector.get_indexes("reference_images")}
+    if "ix_reference_images_embedding_hnsw" in indexes:
+        return
+    columns = {c["name"] for c in inspector.get_columns("reference_images")}
+    if "embedding" not in columns:
+        return
+    logger.info("Creating HNSW index on reference_images.embedding (cosine distance)...")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE INDEX ix_reference_images_embedding_hnsw "
+            "ON reference_images USING hnsw (embedding vector_cosine_ops)"
+        ))
+    logger.info("HNSW index created")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- startup ---
@@ -302,6 +323,7 @@ async def lifespan(app: FastAPI):
     _migrate_reference_image_processing_status()
     _migrate_reference_image_wine_override()
     _migrate_reference_image_description_quality()
+    _migrate_hnsw_index()
 
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)
