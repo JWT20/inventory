@@ -53,7 +53,7 @@ function Main() {
     },
     {
       id: "accounts",
-      label: "Accounts",
+      label: isAdmin ? "Accounts" : "Klanten",
       show: isAdmin || user.role === "owner" || user.role === "member",
     },
   ];
@@ -95,7 +95,7 @@ function Main() {
         {page === "receive" && <ReceivePage />}
         {page === "skus" && <SKUsPage />}
         {page === "inventory" && <InventoryPage />}
-        {page === "accounts" && isAdmin && <AccountsPage />}
+        {page === "accounts" && <AccountsPage />}
       </main>
     </div>
   );
