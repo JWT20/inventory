@@ -245,6 +245,12 @@ class OrderLineResponse(BaseModel):
     quantity: int
     booked_count: int
     has_image: bool
+    show_prices: bool = True
+    unit_price: float | None = None
+    discount_type: str | None = None
+    discount_value: float | None = None
+    effective_price: float | None = None
+    line_total: float | None = None
 
     model_config = {"from_attributes": True}
 
@@ -260,6 +266,8 @@ class OrderResponse(BaseModel):
     lines: list[OrderLineResponse] = []
     total_boxes: int = 0
     booked_boxes: int = 0
+    visible_total: float | None = None
+    hidden_lines_count: int = 0
 
     model_config = {"from_attributes": True}
 
