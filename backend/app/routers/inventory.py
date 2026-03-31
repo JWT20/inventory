@@ -187,14 +187,18 @@ def create_shipment(
 @router.get("/shipments", response_model=list[ShipmentResponse])
 def list_shipments(
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    shipments = (
+    query = (
         db.query(InboundShipment)
         .options(joinedload(InboundShipment.lines).joinedload(InboundShipmentLine.sku))
-        .order_by(InboundShipment.created_at.desc())
-        .all()
     )
+    if not user.is_platform_admin:
+        if user.organization_id:
+            query = query.filter(InboundShipment.organization_id == user.organization_id)
+        else:
+            return []
+    shipments = query.order_by(InboundShipment.created_at.desc()).all()
     return [_shipment_to_response(s) for s in shipments]
 
 

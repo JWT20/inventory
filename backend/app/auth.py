@@ -148,13 +148,32 @@ def _clear_failed_attempts(key: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Refresh token revocation (in-memory blocklist with TTL)
+# Refresh token revocation (Redis-backed with in-memory fallback)
 # ---------------------------------------------------------------------------
-_revoked_tokens: dict[str, float] = {}  # jti → expiry timestamp
+_revoked_tokens: dict[str, float] = {}  # in-memory fallback: jti → expiry timestamp
+_revocation_redis = None  # type: ignore[assignment]
+
+
+def _get_revocation_redis():
+    """Lazily connect to Redis for token revocation. Returns None if unavailable."""
+    global _revocation_redis
+    if _revocation_redis is not None:
+        return _revocation_redis
+    if settings.redis_url:
+        try:
+            import redis as redis_lib
+            _revocation_redis = redis_lib.from_url(settings.redis_url)
+            _revocation_redis.ping()
+            logger.info("Using Redis-backed token revocation")
+            return _revocation_redis
+        except Exception:
+            logger.warning("Redis unavailable for token revocation, using in-memory fallback")
+            _revocation_redis = False  # sentinel: don't retry
+    return None
 
 
 def _prune_revoked() -> None:
-    """Remove expired entries from the blocklist."""
+    """Remove expired entries from the in-memory blocklist."""
     now = datetime.now(timezone.utc).timestamp()
     expired = [jti for jti, exp in _revoked_tokens.items() if exp < now]
     for jti in expired:
@@ -163,11 +182,25 @@ def _prune_revoked() -> None:
 
 def revoke_refresh_token(jti: str, exp: float) -> None:
     """Add a token's jti to the blocklist until its expiry."""
+    r = _get_revocation_redis()
+    if r:
+        ttl = max(int(exp - datetime.now(timezone.utc).timestamp()), 1)
+        try:
+            r.setex(f"revoked_token:{jti}", ttl, "1")
+            return
+        except Exception:
+            logger.warning("Redis revocation write failed, falling back to in-memory")
     _prune_revoked()
     _revoked_tokens[jti] = exp
 
 
 def _is_token_revoked(jti: str) -> bool:
+    r = _get_revocation_redis()
+    if r:
+        try:
+            return r.exists(f"revoked_token:{jti}") > 0
+        except Exception:
+            logger.warning("Redis revocation check failed, falling back to in-memory")
     _prune_revoked()
     return jti in _revoked_tokens
 

@@ -164,9 +164,12 @@ def serve_file(file_path: str):
     if isinstance(storage, LocalStorage):
         import os as _os
         from fastapi.responses import FileResponse
-        full_path = _os.path.join(settings.upload_dir, file_path)
+        from fastapi import HTTPException
+        full_path = _os.path.realpath(_os.path.join(settings.upload_dir, file_path))
+        base_dir = _os.path.realpath(settings.upload_dir)
+        if not full_path.startswith(base_dir + _os.sep) and full_path != base_dir:
+            raise HTTPException(403, "Access denied")
         if not _os.path.isfile(full_path):
-            from fastapi import HTTPException
             raise HTTPException(404, "File not found")
         return FileResponse(full_path)
 
