@@ -275,6 +275,7 @@ export const api = {
     return request("/shipments/extract-preview", { method: "POST", body: form });
   },
   createShipment: (data: {
+    organization_id?: number | null;
     supplier_name?: string | null;
     reference?: string | null;
     lines: { sku_id: number; quantity: number; supplier_code?: string | null }[];

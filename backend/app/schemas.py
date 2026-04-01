@@ -333,6 +333,7 @@ class ShipmentLineCreate(BaseModel):
 
 
 class ShipmentCreate(BaseModel):
+    organization_id: int | None = None
     supplier_name: str | None = None
     reference: str | None = None
     lines: list[ShipmentLineCreate] = Field(..., min_length=1)
