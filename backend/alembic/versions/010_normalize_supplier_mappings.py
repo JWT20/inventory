@@ -21,7 +21,7 @@ def upgrade() -> None:
         sa.text(
             """
             UPDATE supplier_sku_mappings
-            SET supplier_name = UPPER(TRIM(supplier_name)),
+            SET supplier_name = UPPER(REGEXP_REPLACE(TRIM(supplier_name), '\s+', ' ', 'g')),
                 supplier_code = UPPER(TRIM(supplier_code))
             """
         )
