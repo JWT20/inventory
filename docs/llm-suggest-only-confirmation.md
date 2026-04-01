@@ -26,14 +26,16 @@ For extracted lines, add fields:
 - `needs_confirmation: bool`
 - `candidate_matches: [{sku_id, sku_code, sku_name, confidence}]`
 - `match_source: "supplier_mapping" | "llm_suggestion" | "unresolved"`
-- `confirmed_sku_id: int | null`
 
 Add a confirmation endpoint:
-- `POST /shipments/{id}/confirm-line-match`
-- body: `{line_index, chosen_sku_id, persist_mapping: bool}`
+- `POST /api/shipments/confirm-line-match`
+- body: `{supplier_name, supplier_code, chosen_sku_id, persist_mapping: bool}`
 
 ## Why this is safer
+- `POST /api/shipments/confirm-line-match`
+- body: `{supplier_name, supplier_code, chosen_sku_id, persist_mapping: bool}`
 
+## Why this is safer
 - Prevents inventory drift from LLM hallucinations on ambiguous names/vintages.
 - Keeps operator in control on exactly the cases where deterministic keys are missing.
 - Creates an audit trail of why a no-code line was linked to a SKU.
