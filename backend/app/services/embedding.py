@@ -409,3 +409,60 @@ async def process_image(image_bytes: bytes) -> tuple[str, list[float] | None, bo
     total_ms = (time.perf_counter() - t_start) * 1000
     logger.info("[TIMING] process_image_total=%.0fms", total_ms)
     return description, embedding, True
+
+
+EXTRACT_SHIPMENT_DEFAULT = """Analyze this delivery note or invoice image and extract data for inbound shipment receiving.
+Return ONLY valid JSON in this exact structure:
+{
+  "supplier_name": "string",
+  "reference": "string",
+  "document_type": "pakbon|invoice|unknown",
+  "raw_text": "short transcription summary",
+  "lines": [
+    {
+      "supplier_code": "string",
+      "description": "string",
+      "quantity_boxes": 12,
+      "confidence": 0.91,
+      "bbox": {"x": 0.1, "y": 0.2, "width": 0.6, "height": 0.04, "page": 1}
+    }
+  ]
+}
+
+Rules:
+- quantity_boxes is number of full boxes/cases/colli. If only bottles are present, convert to box-equivalent only when explicit per-case info is visible, otherwise use 0.
+- bbox values are normalized between 0 and 1.
+- Include only product lines, ignore totals, pallet costs, transport and signature fields.
+- If uncertain, still include best guess with lower confidence.
+"""
+
+
+@observe()
+async def extract_shipment_document(image_bytes: bytes) -> dict:
+    """Extract structured shipment data (with bboxes) from a pakbon/factuur photo."""
+    image = await asyncio.to_thread(optimize_for_vision, image_bytes)
+    prompt = get_prompt("extract-shipment-document", fallback=EXTRACT_SHIPMENT_DEFAULT)
+    raw_text = await _call_vision(image, prompt)
+    cleaned = _strip_markdown_fences(raw_text)
+    import json as _json
+    try:
+        parsed = _json.loads(cleaned)
+        if not isinstance(parsed, dict):
+            raise ValueError("Parsed payload is not an object")
+        parsed.setdefault("supplier_name", "")
+        parsed.setdefault("reference", "")
+        parsed.setdefault("document_type", "unknown")
+        parsed.setdefault("raw_text", cleaned[:500])
+        parsed.setdefault("lines", [])
+        if not isinstance(parsed["lines"], list):
+            parsed["lines"] = []
+        return parsed
+    except Exception:
+        logger.warning("Shipment extraction not valid JSON; returning empty fallback")
+        return {
+            "supplier_name": "",
+            "reference": "",
+            "document_type": "unknown",
+            "raw_text": cleaned[:1000],
+            "lines": [],
+        }

@@ -7,11 +7,12 @@ import { SKUsPage } from "@/components/skus";
 import { OrdersPage } from "@/components/orders";
 import { AccountsPage } from "@/components/accounts";
 import { InventoryPage } from "@/components/inventory";
+import { InboundPage } from "@/components/inbound";
 import { LogOut } from "lucide-react";
 
 export { toast };
 
-type Page = "orders" | "receive" | "skus" | "inventory" | "accounts";
+type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "accounts";
 
 function Main() {
   const { user, loading, logout } = useAuth();
@@ -40,6 +41,11 @@ function Main() {
       id: "receive",
       label: "Scan & Boek",
       show: isAdmin || user.role === "courier",
+    },
+    {
+      id: "inbound",
+      label: "Inbound",
+      show: isAdmin || user.role === "courier" || user.role === "owner" || user.role === "member",
     },
     {
       id: "skus",
@@ -93,6 +99,7 @@ function Main() {
       <main className="flex-1 p-4 pb-20">
         {page === "orders" && <OrdersPage />}
         {page === "receive" && <ReceivePage />}
+        {page === "inbound" && <InboundPage />}
         {page === "skus" && <SKUsPage />}
         {page === "inventory" && <InventoryPage />}
         {page === "accounts" && <AccountsPage />}
