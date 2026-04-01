@@ -364,7 +364,6 @@ def book_shipment(
     """Book a shipment: create stock movements for all lines and update balances."""
     shipment = (
         db.query(InboundShipment)
-        .options(joinedload(InboundShipment.lines).joinedload(InboundShipmentLine.sku))
         .filter(InboundShipment.id == shipment_id)
         .with_for_update()
         .first()
