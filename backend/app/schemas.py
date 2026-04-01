@@ -382,7 +382,7 @@ class ShipmentExtractedLine(BaseModel):
     matched_sku_code: str | None = None
     matched_sku_name: str | None = None
     needs_confirmation: bool = False
-    match_source: str = "unresolved"
+    match_source: Literal["supplier_mapping", "llm_suggestion", "unresolved"] = "unresolved"
     candidate_matches: list["ShipmentMatchCandidate"] = []
 
 
