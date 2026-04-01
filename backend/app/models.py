@@ -7,12 +7,14 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -344,6 +346,14 @@ class SupplierSKUMapping(Base):
             "supplier_name",
             "supplier_code",
             name="uq_supplier_sku_mapping_org_supplier_code",
+        ),
+        Index(
+            "uq_supplier_sku_mapping_global_supplier_code",
+            "supplier_name",
+            "supplier_code",
+            unique=True,
+            postgresql_where=text("organization_id IS NULL"),
+            sqlite_where=text("organization_id IS NULL"),
         ),
     )
 

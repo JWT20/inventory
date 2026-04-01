@@ -40,8 +40,18 @@ def upgrade() -> None:
             name="uq_supplier_sku_mapping_org_supplier_code",
         ),
     )
+    # Enforce uniqueness for global mappings where organization_id IS NULL
+    op.create_index(
+        "uq_supplier_sku_mapping_global_supplier_code",
+        "supplier_sku_mappings",
+        ["supplier_name", "supplier_code"],
+        unique=True,
+        postgresql_where=sa.text("organization_id IS NULL"),
+        sqlite_where=sa.text("organization_id IS NULL"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("uq_supplier_sku_mapping_global_supplier_code", table_name="supplier_sku_mappings")
     op.drop_table("supplier_sku_mappings")
     op.drop_column("inbound_shipment_lines", "supplier_code")

@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth import get_current_user, require_product_manager, require_warehouse
@@ -165,7 +166,8 @@ async def extract_shipment_preview(
         detected_type = document_type
 
     lines: list[ShipmentExtractedLine] = []
-    normalized_supplier = supplier_name.strip()
+    extracted_supplier = str(extracted.get("supplier_name", "") or "")
+    normalized_supplier = supplier_name.strip() or extracted_supplier
     sku_lookup: dict[str, tuple[int, str, str]] = {}
     mapping_lookup: dict[tuple[str, str], tuple[int, str, str]] = {}
     sku_query = db.query(SKU)
@@ -186,7 +188,7 @@ async def extract_shipment_preview(
                 SupplierSKUMapping.organization_id == user.organization_id
             )
         for mapping, sku in mappings.filter(
-            SupplierSKUMapping.supplier_name == normalized_supplier
+            func.upper(SupplierSKUMapping.supplier_name) == normalized_supplier.upper()
         ).all():
             mapping_lookup[
                 (mapping.supplier_name.strip().upper(), mapping.supplier_code.strip().upper())
@@ -279,12 +281,27 @@ def create_shipment(
                 if existing_mapping:
                     existing_mapping.sku_id = line.sku_id
                 else:
-                    db.add(SupplierSKUMapping(
-                        organization_id=org_id,
-                        supplier_name=normalized_supplier_name,
-                        supplier_code=normalized_code,
-                        sku_id=line.sku_id,
-                    ))
+                    try:
+                        with db.begin_nested():
+                            db.add(SupplierSKUMapping(
+                                organization_id=org_id,
+                                supplier_name=normalized_supplier_name,
+                                supplier_code=normalized_code,
+                                sku_id=line.sku_id,
+                            ))
+                    except IntegrityError:
+                        # Concurrent insert won; find and update the existing row
+                        concurrent_mapping = (
+                            db.query(SupplierSKUMapping)
+                            .filter(
+                                SupplierSKUMapping.organization_id == org_id,
+                                func.upper(SupplierSKUMapping.supplier_name) == normalized_supplier_name.upper(),
+                                SupplierSKUMapping.supplier_code == normalized_code,
+                            )
+                            .first()
+                        )
+                        if concurrent_mapping:
+                            concurrent_mapping.sku_id = line.sku_id
     db.commit()
     db.refresh(shipment)
 
