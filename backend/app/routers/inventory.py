@@ -52,6 +52,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["inventory"])
 
 
+def _clamp_bbox(raw: dict) -> dict | None:
+    """Clamp bbox coordinate values to valid ranges (0..1) to avoid response validation errors."""
+    try:
+        return {
+            "x": max(0.0, min(1.0, float(raw.get("x", 0)))),
+            "y": max(0.0, min(1.0, float(raw.get("y", 0)))),
+            "width": max(0.0, min(1.0, float(raw.get("width", 0)))),
+            "height": max(0.0, min(1.0, float(raw.get("height", 0)))),
+            "page": max(1, int(raw.get("page", 1))),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Shared helper — used by this router AND by receiving.py
 # ---------------------------------------------------------------------------
@@ -171,7 +185,10 @@ async def extract_shipment_preview(
     user: User = Depends(require_warehouse),
 ):
     """Camera-first extraction preview for pakbon/factuur with bbox hints."""
-    image_bytes = file.file.read()
+    try:
+        image_bytes = await file.read()
+    finally:
+        await file.close()
     if not image_bytes:
         raise HTTPException(400, "Leeg bestand")
     if len(image_bytes) > 10 * 1024 * 1024:
@@ -186,40 +203,64 @@ async def extract_shipment_preview(
         detected_type = document_type
 
     lines: list[ShipmentExtractedLine] = []
-    sku_lookup: dict[str, tuple[int, str, str]] = {}
-    sku_query = db.query(SKU)
-    if not user.is_platform_admin:
-        if user.organization_id:
-            sku_query = sku_query.filter(SKU.organization_id == user.organization_id)
-        else:
-            sku_query = sku_query.filter(SKU.organization_id.is_(None))
-    for sku in sku_query.all():
-        sku_lookup[sku.sku_code.strip().upper()] = (sku.id, sku.sku_code, sku.name)
+    raw_lines = extracted.get("lines", [])
+    # Collect unique normalized supplier codes for batch DB queries
+    unique_codes = {
+        str(row.get("supplier_code", "")).strip().upper()
+        for row in raw_lines
+        if str(row.get("supplier_code", "")).strip()
+    }
 
-    for row in extracted.get("lines", []):
+    # Determine effective supplier name upfront
+    supplier = (supplier_name.strip() or extracted.get("supplier_name", "") or "").strip()
+
+    # Query only the SKUs whose code matches one of the extracted codes
+    sku_lookup: dict[str, tuple[int, str, str]] = {}
+    if unique_codes:
+        sku_q = db.query(SKU).filter(func.upper(func.trim(SKU.sku_code)).in_(unique_codes))
+        if not user.is_platform_admin:
+            if user.organization_id:
+                sku_q = sku_q.filter(SKU.organization_id == user.organization_id)
+            else:
+                sku_q = sku_q.filter(SKU.organization_id.is_(None))
+        for sku in sku_q.all():
+            sku_lookup[sku.sku_code.strip().upper()] = (sku.id, sku.sku_code, sku.name)
+
+    # Batch-load all relevant supplier mappings in one query
+    mapping_lookup: dict[str, SupplierSKUMapping] = {}
+    if supplier and unique_codes:
+        batch_maps = (
+            db.query(SupplierSKUMapping)
+            .filter(
+                SupplierSKUMapping.organization_id == user.organization_id,
+                SupplierSKUMapping.supplier_name == supplier,
+                SupplierSKUMapping.supplier_code.in_(unique_codes),
+            )
+            .all()
+        )
+        mapping_lookup = {m.supplier_code: m for m in batch_maps}
+
+    # Batch-load SKUs referenced by mappings
+    mapped_sku_ids = {m.sku_id for m in mapping_lookup.values()}
+    mapped_skus: dict[int, SKU] = {}
+    if mapped_sku_ids:
+        for sku in db.query(SKU).filter(SKU.id.in_(mapped_sku_ids)).all():
+            mapped_skus[sku.id] = sku
+
+    for row in raw_lines:
         code = str(row.get("supplier_code", "")).strip()
         qty = int(row.get("quantity_boxes", 0) or 0)
         confidence = float(row.get("confidence", 0.0) or 0.0)
-        bbox = row.get("bbox") if isinstance(row.get("bbox"), dict) else None
+        raw_bbox = row.get("bbox") if isinstance(row.get("bbox"), dict) else None
+        bbox = _clamp_bbox(raw_bbox) if raw_bbox else None
 
         matched_id = None
         matched_code = None
         matched_name = None
         if code:
-            supplier = (supplier_name.strip() or extracted.get("supplier_name", "") or "").strip()
-            mapping = None
-            if supplier:
-                mapping = (
-                    db.query(SupplierSKUMapping)
-                    .filter(
-                        SupplierSKUMapping.organization_id == user.organization_id,
-                        SupplierSKUMapping.supplier_name == supplier,
-                        SupplierSKUMapping.supplier_code == code.upper(),
-                    )
-                    .first()
-                )
+            mapping = mapping_lookup.get(code.upper())
             if mapping:
-                hit = db.get(SKU, mapping.sku_id)
+                hit = mapped_skus.get(mapping.sku_id)
                 if hit:
                     matched_id, matched_code, matched_name = hit.id, hit.sku_code, hit.name
             else:
@@ -312,6 +353,8 @@ def resolve_unmatched_queue_item(
     sku = db.get(SKU, body.sku_id)
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
+    if not user.is_platform_admin and sku.organization_id != item.organization_id:
+        raise HTTPException(404, "SKU niet gevonden")
 
     item.status = "resolved"
     item.resolved_sku_id = body.sku_id
@@ -357,8 +400,10 @@ def confirm_shipment_from_preview(
     org_id = user.organization_id
 
     sku_ids = [line.sku_id for line in body.lines]
-    existing_skus = db.query(SKU.id).filter(SKU.id.in_(sku_ids)).all()
-    existing_ids = {row[0] for row in existing_skus}
+    sku_q = db.query(SKU.id).filter(SKU.id.in_(sku_ids))
+    if not user.is_platform_admin and org_id:
+        sku_q = sku_q.filter(SKU.organization_id == org_id)
+    existing_ids = {row[0] for row in sku_q.all()}
     missing = sorted(set(sku_ids) - existing_ids)
     if missing:
         raise HTTPException(400, f"SKU's niet gevonden: {missing}")

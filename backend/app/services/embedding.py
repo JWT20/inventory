@@ -458,7 +458,7 @@ async def extract_shipment_document(image_bytes: bytes) -> dict:
             parsed["lines"] = []
         return parsed
     except Exception:
-        logger.warning("Shipment extraction not valid JSON; returning empty fallback")
+        logger.exception("Shipment extraction not valid JSON; returning empty fallback")
         return {
             "supplier_name": "",
             "reference": "",

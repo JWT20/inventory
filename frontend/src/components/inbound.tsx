@@ -311,10 +311,13 @@ export function InboundPage() {
             ) : (
               <div className="space-y-2 max-h-[520px] overflow-auto">
                 {preview.lines.map((line, idx) => (
-                  <button
+                  <div
                     key={`${line.supplier_code}-${idx}`}
-                    className={`w-full text-left border rounded p-2 ${selectedLineIndex === idx ? "border-primary" : "border-border"}`}
+                    role="button"
+                    tabIndex={0}
+                    className={`w-full text-left border rounded p-2 cursor-pointer ${selectedLineIndex === idx ? "border-primary" : "border-border"}`}
                     onClick={() => setSelectedLineIndex(idx)}
+                    onKeyDown={(e) => e.key === "Enter" && setSelectedLineIndex(idx)}
                   >
                     <p className="text-sm font-medium">{line.supplier_code || "(geen code)"}</p>
                     <p className="text-sm">{line.description || "-"}</p>
@@ -326,7 +329,10 @@ export function InboundPage() {
                         ? `Match: ${line.matched_sku_code} - ${line.matched_sku_name}`
                         : "Geen SKU-match"}
                     </p>
-                    <div className="mt-2">
+                    <div
+                      className="mt-2"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <select
                         className="w-full border border-border rounded px-2 py-1 text-xs"
                         value={lineSkuSelections[idx] ?? ""}
@@ -345,7 +351,7 @@ export function InboundPage() {
                         ))}
                       </select>
                     </div>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}
