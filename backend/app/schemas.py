@@ -361,6 +361,85 @@ class ShipmentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ExtractionBBox(BaseModel):
+    x: float = Field(..., ge=0, le=1)
+    y: float = Field(..., ge=0, le=1)
+    width: float = Field(..., ge=0, le=1)
+    height: float = Field(..., ge=0, le=1)
+    page: int = Field(1, ge=1)
+
+
+class ShipmentExtractedLine(BaseModel):
+    supplier_code: str = ""
+    description: str = ""
+    quantity_boxes: int = Field(0, ge=0)
+    confidence: float = Field(0.0, ge=0, le=1)
+    bbox: ExtractionBBox | None = None
+    matched_sku_id: int | None = None
+    matched_sku_code: str | None = None
+    matched_sku_name: str | None = None
+
+
+class ShipmentExtractPreviewResponse(BaseModel):
+    supplier_name: str = ""
+    reference: str = ""
+    document_type: str = ""
+    lines: list[ShipmentExtractedLine] = []
+    image_url: str = ""
+    raw_text: str = ""
+
+
+class ShipmentConfirmLine(BaseModel):
+    supplier_code: str = ""
+    sku_id: int = Field(..., gt=0)
+    quantity_boxes: int = Field(..., gt=0)
+    description: str = ""
+
+
+class ShipmentConfirmFromPreviewRequest(BaseModel):
+    supplier_name: str = Field(..., min_length=1, max_length=255)
+    reference: str | None = None
+    lines: list[ShipmentConfirmLine] = Field(..., min_length=1)
+    save_mappings: bool = True
+    auto_book: bool = True
+
+
+class UnmatchedQueueLineCreate(BaseModel):
+    supplier_code: str = ""
+    description: str = ""
+    quantity_boxes: int = Field(..., gt=0)
+    bbox: ExtractionBBox | None = None
+
+
+class UnmatchedQueueCreateRequest(BaseModel):
+    supplier_name: str | None = None
+    reference: str | None = None
+    document_type: str | None = None
+    image_key: str | None = None
+    lines: list[UnmatchedQueueLineCreate] = Field(..., min_length=1)
+
+
+class UnmatchedQueueItemResponse(BaseModel):
+    id: int
+    supplier_name: str | None = None
+    reference: str | None = None
+    document_type: str | None = None
+    image_key: str | None = None
+    supplier_code: str | None = None
+    description: str | None = None
+    quantity_boxes: int
+    status: str
+    resolved_sku_id: int | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ResolveUnmatchedQueueRequest(BaseModel):
+    sku_id: int = Field(..., gt=0)
+    save_mapping: bool = True
+
+
 # --- Inventory ---
 
 class CustomerPriceResponse(BaseModel):

@@ -254,6 +254,35 @@ export const api = {
 
   // Inventory
   listInventoryOverview: (qs = "") => request(`/inventory/overview${qs}`),
+  extractShipmentPreview: (
+    blob: Blob,
+    supplierName = "",
+    documentType: "pakbon" | "invoice" | "unknown" = "unknown",
+  ) => {
+    const form = new FormData();
+    form.append("file", blob, "shipment.jpg");
+    if (supplierName) form.append("supplier_name", supplierName);
+    form.append("document_type", documentType);
+    return request("/shipments/extract-preview", { method: "POST", body: form });
+  },
+  confirmInboundFromPreview: (data: {
+    supplier_name: string;
+    reference?: string;
+    save_mappings: boolean;
+    auto_book: boolean;
+    lines: { supplier_code: string; sku_id: number; quantity_boxes: number; description?: string }[];
+  }) => json("/shipments/confirm-from-preview", "POST", data),
+  saveUnmatchedInbound: (data: {
+    supplier_name?: string;
+    reference?: string;
+    document_type?: string;
+    image_key?: string;
+    lines: { supplier_code: string; description: string; quantity_boxes: number; bbox?: { x: number; y: number; width: number; height: number; page: number } | null }[];
+  }) => json("/shipments/unmatched", "POST", data),
+  listUnmatchedInbound: (status = "open") =>
+    request(`/shipments/unmatched?status=${encodeURIComponent(status)}`),
+  resolveUnmatchedInbound: (itemId: number, skuId: number, saveMapping = true) =>
+    json(`/shipments/unmatched/${itemId}/resolve`, "POST", { sku_id: skuId, save_mapping: saveMapping }),
   updateDefaultPrice: (skuId: number, defaultPrice: number | null) =>
     json(`/skus/${skuId}/price`, "PUT", { default_price: defaultPrice }),
   updateCustomerPrice: (customerId: number, skuId: number, unitPrice: number | null) =>

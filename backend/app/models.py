@@ -335,6 +335,74 @@ class InboundShipmentLine(Base):
     sku: Mapped["SKU"] = relationship()
 
 
+class SupplierSKUMapping(Base):
+    """Organization-scoped mapping from supplier article codes to internal SKUs."""
+    __tablename__ = "supplier_sku_mappings"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "supplier_name", "supplier_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
+    supplier_name: Mapped[str] = mapped_column(String(255))
+    supplier_code: Mapped[str] = mapped_column(String(100))
+    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    organization: Mapped["Organization | None"] = relationship()
+    sku: Mapped["SKU"] = relationship()
+    creator: Mapped["User | None"] = relationship(foreign_keys=[created_by])
+
+
+class UnmatchedInboundLine(Base):
+    """Unresolved extracted inbound line for later manual mapping by handelaar."""
+    __tablename__ = "unmatched_inbound_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
+    supplier_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    document_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    image_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    supplier_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quantity_boxes: Mapped[int] = mapped_column(Integer, default=1)
+    bbox_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    resolved_sku_id: Mapped[int | None] = mapped_column(
+        ForeignKey("skus.id"), nullable=True
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    resolved_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    resolved_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+
+    organization: Mapped["Organization | None"] = relationship()
+    resolved_sku: Mapped["SKU | None"] = relationship(foreign_keys=[resolved_sku_id])
+    creator: Mapped["User | None"] = relationship(foreign_keys=[created_by])
+    resolver: Mapped["User | None"] = relationship(foreign_keys=[resolved_by])
+
+
 class InventoryBalance(Base):
     __tablename__ = "inventory_balances"
     __table_args__ = (UniqueConstraint("sku_id", "organization_id"),)

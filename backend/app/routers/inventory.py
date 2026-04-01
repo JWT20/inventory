@@ -1,10 +1,13 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+import uuid
+import json
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
-from app.auth import get_current_user, require_product_manager
+from app.auth import get_current_user, require_product_manager, require_warehouse
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
@@ -16,7 +19,9 @@ from app.models import (
     InboundShipmentLine,
     InventoryBalance,
     ReferenceImage,
+    SupplierSKUMapping,
     StockMovement,
+    UnmatchedInboundLine,
     User,
 )
 from app.schemas import (
@@ -26,13 +31,21 @@ from app.schemas import (
     InventoryCountRequest,
     InventoryOverviewItem,
     ShipmentCreate,
+    ShipmentConfirmFromPreviewRequest,
+    ShipmentExtractPreviewResponse,
+    ShipmentExtractedLine,
     ShipmentLineResponse,
     ShipmentResponse,
     StockMovementResponse,
+    UnmatchedQueueCreateRequest,
+    UnmatchedQueueItemResponse,
     UpdateCustomerPriceRequest,
     UpdateCustomerSKUDiscountRequest,
     UpdateDefaultPriceRequest,
+    ResolveUnmatchedQueueRequest,
 )
+from app.services.embedding import extract_shipment_document
+from app.services.storage import storage
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +144,301 @@ def _shipment_to_response(shipment: InboundShipment) -> ShipmentResponse:
             for line in shipment.lines
         ],
     )
+
+
+def _unmatched_to_response(item: UnmatchedInboundLine) -> UnmatchedQueueItemResponse:
+    return UnmatchedQueueItemResponse(
+        id=item.id,
+        supplier_name=item.supplier_name,
+        reference=item.reference,
+        document_type=item.document_type,
+        image_key=item.image_key,
+        supplier_code=item.supplier_code,
+        description=item.description,
+        quantity_boxes=item.quantity_boxes,
+        status=item.status,
+        resolved_sku_id=item.resolved_sku_id,
+        created_at=item.created_at,
+    )
+
+
+@router.post("/shipments/extract-preview", response_model=ShipmentExtractPreviewResponse)
+async def extract_shipment_preview(
+    file: UploadFile = File(...),
+    supplier_name: str = Form(""),
+    document_type: str = Form("unknown"),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_warehouse),
+):
+    """Camera-first extraction preview for pakbon/factuur with bbox hints."""
+    image_bytes = file.file.read()
+    if not image_bytes:
+        raise HTTPException(400, "Leeg bestand")
+    if len(image_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
+
+    image_key = f"shipment_docs/{uuid.uuid4().hex}.jpg"
+    storage.save(image_key, image_bytes)
+
+    extracted = await extract_shipment_document(image_bytes)
+    detected_type = extracted.get("document_type") or "unknown"
+    if document_type in {"pakbon", "invoice"}:
+        detected_type = document_type
+
+    lines: list[ShipmentExtractedLine] = []
+    sku_lookup: dict[str, tuple[int, str, str]] = {}
+    sku_query = db.query(SKU)
+    if not user.is_platform_admin:
+        if user.organization_id:
+            sku_query = sku_query.filter(SKU.organization_id == user.organization_id)
+        else:
+            sku_query = sku_query.filter(SKU.organization_id.is_(None))
+    for sku in sku_query.all():
+        sku_lookup[sku.sku_code.strip().upper()] = (sku.id, sku.sku_code, sku.name)
+
+    for row in extracted.get("lines", []):
+        code = str(row.get("supplier_code", "")).strip()
+        qty = int(row.get("quantity_boxes", 0) or 0)
+        confidence = float(row.get("confidence", 0.0) or 0.0)
+        bbox = row.get("bbox") if isinstance(row.get("bbox"), dict) else None
+
+        matched_id = None
+        matched_code = None
+        matched_name = None
+        if code:
+            supplier = (supplier_name.strip() or extracted.get("supplier_name", "") or "").strip()
+            mapping = None
+            if supplier:
+                mapping = (
+                    db.query(SupplierSKUMapping)
+                    .filter(
+                        SupplierSKUMapping.organization_id == user.organization_id,
+                        SupplierSKUMapping.supplier_name == supplier,
+                        SupplierSKUMapping.supplier_code == code.upper(),
+                    )
+                    .first()
+                )
+            if mapping:
+                hit = db.get(SKU, mapping.sku_id)
+                if hit:
+                    matched_id, matched_code, matched_name = hit.id, hit.sku_code, hit.name
+            else:
+                hit = sku_lookup.get(code.upper())
+                if hit:
+                    matched_id, matched_code, matched_name = hit
+
+        lines.append(ShipmentExtractedLine(
+            supplier_code=code,
+            description=str(row.get("description", "")).strip(),
+            quantity_boxes=max(0, qty),
+            confidence=max(0.0, min(confidence, 1.0)),
+            bbox=bbox,
+            matched_sku_id=matched_id,
+            matched_sku_code=matched_code,
+            matched_sku_name=matched_name,
+        ))
+
+    return ShipmentExtractPreviewResponse(
+        supplier_name=(supplier_name.strip() or extracted.get("supplier_name", "")),
+        reference=str(extracted.get("reference", "") or ""),
+        document_type=detected_type,
+        lines=lines,
+        image_url=storage.url(image_key),
+        raw_text=str(extracted.get("raw_text", "") or ""),
+    )
+
+
+@router.post("/shipments/unmatched", response_model=list[UnmatchedQueueItemResponse], status_code=201)
+def create_unmatched_queue_items(
+    body: UnmatchedQueueCreateRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_warehouse),
+):
+    if not user.is_platform_admin and not user.organization_id:
+        raise HTTPException(400, "User has no organization")
+    org_id = user.organization_id
+
+    created: list[UnmatchedInboundLine] = []
+    for line in body.lines:
+        item = UnmatchedInboundLine(
+            organization_id=org_id,
+            supplier_name=(body.supplier_name or "").strip() or None,
+            reference=(body.reference or "").strip() or None,
+            document_type=(body.document_type or "").strip() or None,
+            image_key=(body.image_key or "").strip() or None,
+            supplier_code=(line.supplier_code or "").strip().upper() or None,
+            description=(line.description or "").strip() or None,
+            quantity_boxes=line.quantity_boxes,
+            bbox_json=json.dumps(line.bbox.model_dump()) if line.bbox else None,
+            status="open",
+            created_by=user.id,
+        )
+        db.add(item)
+        created.append(item)
+    db.commit()
+    for item in created:
+        db.refresh(item)
+    return [_unmatched_to_response(i) for i in created]
+
+
+@router.get("/shipments/unmatched", response_model=list[UnmatchedQueueItemResponse])
+def list_unmatched_queue_items(
+    status: str = "open",
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    q = db.query(UnmatchedInboundLine)
+    if not user.is_platform_admin:
+        q = q.filter(UnmatchedInboundLine.organization_id == user.organization_id)
+    if status:
+        q = q.filter(UnmatchedInboundLine.status == status)
+    items = q.order_by(UnmatchedInboundLine.created_at.desc()).all()
+    return [_unmatched_to_response(i) for i in items]
+
+
+@router.post("/shipments/unmatched/{item_id}/resolve", response_model=UnmatchedQueueItemResponse)
+def resolve_unmatched_queue_item(
+    item_id: int,
+    body: ResolveUnmatchedQueueRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    item = db.get(UnmatchedInboundLine, item_id)
+    if not item:
+        raise HTTPException(404, "Unmatched regel niet gevonden")
+    if not user.is_platform_admin and item.organization_id != user.organization_id:
+        raise HTTPException(404, "Unmatched regel niet gevonden")
+
+    sku = db.get(SKU, body.sku_id)
+    if not sku:
+        raise HTTPException(404, "SKU niet gevonden")
+
+    item.status = "resolved"
+    item.resolved_sku_id = body.sku_id
+    item.resolved_by = user.id
+    item.resolved_at = func.now()
+
+    if body.save_mapping and item.supplier_name and item.supplier_code:
+        existing_map = (
+            db.query(SupplierSKUMapping)
+            .filter(
+                SupplierSKUMapping.organization_id == item.organization_id,
+                SupplierSKUMapping.supplier_name == item.supplier_name,
+                SupplierSKUMapping.supplier_code == item.supplier_code,
+            )
+            .first()
+        )
+        if existing_map:
+            existing_map.sku_id = body.sku_id
+            existing_map.created_by = user.id
+        else:
+            db.add(SupplierSKUMapping(
+                organization_id=item.organization_id,
+                supplier_name=item.supplier_name,
+                supplier_code=item.supplier_code,
+                sku_id=body.sku_id,
+                created_by=user.id,
+            ))
+    db.commit()
+    db.refresh(item)
+    return _unmatched_to_response(item)
+
+
+@router.post("/shipments/confirm-from-preview", response_model=ShipmentResponse, status_code=201)
+def confirm_shipment_from_preview(
+    body: ShipmentConfirmFromPreviewRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_warehouse),
+):
+    """Create (and optionally book) inbound shipment from extracted preview lines."""
+    if not user.is_platform_admin and not user.organization_id:
+        raise HTTPException(400, "User has no organization")
+
+    org_id = user.organization_id
+
+    sku_ids = [line.sku_id for line in body.lines]
+    existing_skus = db.query(SKU.id).filter(SKU.id.in_(sku_ids)).all()
+    existing_ids = {row[0] for row in existing_skus}
+    missing = sorted(set(sku_ids) - existing_ids)
+    if missing:
+        raise HTTPException(400, f"SKU's niet gevonden: {missing}")
+
+    shipment = InboundShipment(
+        organization_id=org_id,
+        supplier_name=body.supplier_name.strip(),
+        reference=(body.reference or "").strip() or None,
+        status="draft",
+    )
+    db.add(shipment)
+    db.flush()
+
+    for line in body.lines:
+        db.add(InboundShipmentLine(
+            shipment_id=shipment.id,
+            sku_id=line.sku_id,
+            quantity=line.quantity_boxes,
+        ))
+
+        if body.save_mappings and line.supplier_code.strip():
+            supplier_name = body.supplier_name.strip()
+            supplier_code = line.supplier_code.strip().upper()
+            existing_map = (
+                db.query(SupplierSKUMapping)
+                .filter(
+                    SupplierSKUMapping.organization_id == org_id,
+                    SupplierSKUMapping.supplier_name == supplier_name,
+                    SupplierSKUMapping.supplier_code == supplier_code,
+                )
+                .first()
+            )
+            if existing_map:
+                existing_map.sku_id = line.sku_id
+                existing_map.created_by = user.id
+            else:
+                db.add(SupplierSKUMapping(
+                    organization_id=org_id,
+                    supplier_name=supplier_name,
+                    supplier_code=supplier_code,
+                    sku_id=line.sku_id,
+                    created_by=user.id,
+                ))
+
+    db.flush()
+
+    if body.auto_book:
+        for line in shipment.lines:
+            apply_stock_movement(
+                db,
+                sku_id=line.sku_id,
+                organization_id=shipment.organization_id,
+                quantity=line.quantity,
+                movement_type="receive",
+                reference_type="shipment",
+                reference_id=shipment.id,
+                performed_by=user.id,
+            )
+        shipment.status = "booked"
+        shipment.booked_at = func.now()
+        shipment.booked_by = user.id
+
+    db.commit()
+    db.refresh(shipment)
+
+    publish_event(
+        "shipment_confirmed_from_preview",
+        details={
+            "shipment_id": shipment.id,
+            "reference": shipment.reference,
+            "line_count": len(body.lines),
+            "auto_book": body.auto_book,
+            "save_mappings": body.save_mappings,
+        },
+        user=user,
+        resource_type="shipment",
+        resource_id=shipment.id,
+    )
+
+    return _shipment_to_response(shipment)
 
 
 @router.post("/shipments", response_model=ShipmentResponse, status_code=201)
