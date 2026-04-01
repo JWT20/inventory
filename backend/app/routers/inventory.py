@@ -1,10 +1,12 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+import uuid
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
-from app.auth import get_current_user, require_product_manager
+from app.auth import get_current_user, require_product_manager, require_warehouse
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
@@ -26,6 +28,8 @@ from app.schemas import (
     InventoryCountRequest,
     InventoryOverviewItem,
     ShipmentCreate,
+    ShipmentExtractPreviewResponse,
+    ShipmentExtractedLine,
     ShipmentLineResponse,
     ShipmentResponse,
     StockMovementResponse,
@@ -33,6 +37,8 @@ from app.schemas import (
     UpdateCustomerSKUDiscountRequest,
     UpdateDefaultPriceRequest,
 )
+from app.services.embedding import extract_shipment_document
+from app.services.storage import storage
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +136,75 @@ def _shipment_to_response(shipment: InboundShipment) -> ShipmentResponse:
             )
             for line in shipment.lines
         ],
+    )
+
+
+@router.post("/shipments/extract-preview", response_model=ShipmentExtractPreviewResponse)
+async def extract_shipment_preview(
+    file: UploadFile = File(...),
+    supplier_name: str = Form(""),
+    document_type: str = Form("unknown"),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_warehouse),
+):
+    """Camera-first extraction preview for pakbon/factuur with bbox hints."""
+    image_bytes = file.file.read()
+    if not image_bytes:
+        raise HTTPException(400, "Leeg bestand")
+    if len(image_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
+
+    image_key = f"shipment_docs/{uuid.uuid4().hex}.jpg"
+    storage.save(image_key, image_bytes)
+
+    extracted = await extract_shipment_document(image_bytes)
+    detected_type = extracted.get("document_type") or "unknown"
+    if document_type in {"pakbon", "invoice"}:
+        detected_type = document_type
+
+    lines: list[ShipmentExtractedLine] = []
+    sku_lookup: dict[str, tuple[int, str, str]] = {}
+    sku_query = db.query(SKU)
+    if not user.is_platform_admin:
+        if user.organization_id:
+            sku_query = sku_query.filter(SKU.organization_id == user.organization_id)
+        else:
+            sku_query = sku_query.filter(SKU.organization_id.is_(None))
+    for sku in sku_query.all():
+        sku_lookup[sku.sku_code.strip().upper()] = (sku.id, sku.sku_code, sku.name)
+
+    for row in extracted.get("lines", []):
+        code = str(row.get("supplier_code", "")).strip()
+        qty = int(row.get("quantity_boxes", 0) or 0)
+        confidence = float(row.get("confidence", 0.0) or 0.0)
+        bbox = row.get("bbox") if isinstance(row.get("bbox"), dict) else None
+
+        matched_id = None
+        matched_code = None
+        matched_name = None
+        if code:
+            hit = sku_lookup.get(code.upper())
+            if hit:
+                matched_id, matched_code, matched_name = hit
+
+        lines.append(ShipmentExtractedLine(
+            supplier_code=code,
+            description=str(row.get("description", "")).strip(),
+            quantity_boxes=max(0, qty),
+            confidence=max(0.0, min(confidence, 1.0)),
+            bbox=bbox,
+            matched_sku_id=matched_id,
+            matched_sku_code=matched_code,
+            matched_sku_name=matched_name,
+        ))
+
+    return ShipmentExtractPreviewResponse(
+        supplier_name=(supplier_name.strip() or extracted.get("supplier_name", "")),
+        reference=str(extracted.get("reference", "") or ""),
+        document_type=detected_type,
+        lines=lines,
+        image_url=storage.url(image_key),
+        raw_text=str(extracted.get("raw_text", "") or ""),
     )
 
 

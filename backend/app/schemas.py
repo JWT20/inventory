@@ -361,6 +361,34 @@ class ShipmentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ExtractionBBox(BaseModel):
+    x: float = Field(..., ge=0, le=1)
+    y: float = Field(..., ge=0, le=1)
+    width: float = Field(..., ge=0, le=1)
+    height: float = Field(..., ge=0, le=1)
+    page: int = Field(1, ge=1)
+
+
+class ShipmentExtractedLine(BaseModel):
+    supplier_code: str = ""
+    description: str = ""
+    quantity_boxes: int = Field(0, ge=0)
+    confidence: float = Field(0.0, ge=0, le=1)
+    bbox: ExtractionBBox | None = None
+    matched_sku_id: int | None = None
+    matched_sku_code: str | None = None
+    matched_sku_name: str | None = None
+
+
+class ShipmentExtractPreviewResponse(BaseModel):
+    supplier_name: str = ""
+    reference: str = ""
+    document_type: str = ""
+    lines: list[ShipmentExtractedLine] = []
+    image_url: str = ""
+    raw_text: str = ""
+
+
 # --- Inventory ---
 
 class CustomerPriceResponse(BaseModel):
