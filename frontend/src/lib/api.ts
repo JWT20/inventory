@@ -276,7 +276,7 @@ export const api = {
   createShipment: (data: {
     supplier_name?: string | null;
     reference?: string | null;
-    lines: { sku_id: number; quantity: number }[];
+    lines: { sku_id: number; quantity: number; supplier_code?: string | null }[];
   }) => json("/shipments", "POST", data),
   bookShipment: (shipmentId: number) =>
     request(`/shipments/${shipmentId}/book`, { method: "POST" }),

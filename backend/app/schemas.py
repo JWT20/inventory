@@ -329,6 +329,7 @@ class ConfirmBookingRequest(BaseModel):
 class ShipmentLineCreate(BaseModel):
     sku_id: int = Field(..., gt=0)
     quantity: int = Field(..., gt=0)
+    supplier_code: str | None = None
 
 
 class ShipmentCreate(BaseModel):
@@ -342,6 +343,7 @@ class ShipmentLineResponse(BaseModel):
     sku_id: int
     sku_code: str = ""
     sku_name: str = ""
+    supplier_code: str | None = None
     quantity: int
 
     model_config = {"from_attributes": True}

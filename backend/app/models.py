@@ -7,12 +7,14 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -329,9 +331,47 @@ class InboundShipmentLine(Base):
         ForeignKey("inbound_shipments.id", ondelete="CASCADE")
     )
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
+    supplier_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     quantity: Mapped[int] = mapped_column(Integer)
 
     shipment: Mapped["InboundShipment"] = relationship(back_populates="lines")
+    sku: Mapped["SKU"] = relationship()
+
+
+class SupplierSKUMapping(Base):
+    __tablename__ = "supplier_sku_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "supplier_name",
+            "supplier_code",
+            name="uq_supplier_sku_mapping_org_supplier_code",
+        ),
+        Index(
+            "uq_supplier_sku_mapping_global_supplier_code",
+            "supplier_name",
+            "supplier_code",
+            unique=True,
+            postgresql_where=text("organization_id IS NULL"),
+            sqlite_where=text("organization_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
+    supplier_name: Mapped[str] = mapped_column(String(255))
+    supplier_code: Mapped[str] = mapped_column(String(100))
+    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    organization: Mapped["Organization | None"] = relationship()
     sku: Mapped["SKU"] = relationship()
 
 
