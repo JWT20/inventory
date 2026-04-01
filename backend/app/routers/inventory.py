@@ -245,9 +245,14 @@ def create_shipment(
     if missing:
         raise HTTPException(400, f"SKU's niet gevonden: {missing}")
 
-    if not user.is_platform_admin and not user.organization_id:
+    if user.is_platform_admin:
+        if not data.organization_id:
+            raise HTTPException(400, "Platform admin must specify organization_id")
+        org_id = data.organization_id
+    elif user.organization_id:
+        org_id = user.organization_id
+    else:
         raise HTTPException(400, "User has no organization")
-    org_id = user.organization_id
     normalized_supplier_name = data.supplier_name.strip() if data.supplier_name else None
 
     shipment = InboundShipment(

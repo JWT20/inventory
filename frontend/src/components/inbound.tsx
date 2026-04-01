@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -30,6 +31,11 @@ interface SKUOption {
   active: boolean;
 }
 
+interface Organization {
+  id: number;
+  name: string;
+}
+
 interface ExtractPreview {
   supplier_name: string;
   reference: string;
@@ -40,6 +46,7 @@ interface ExtractPreview {
 }
 
 export function InboundPage() {
+  const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [confirmingInbound, setConfirmingInbound] = useState(false);
   const [preview, setPreview] = useState<ExtractPreview | null>(null);
@@ -48,6 +55,8 @@ export function InboundPage() {
   const [documentType, setDocumentType] = useState<"pakbon" | "invoice" | "unknown">("unknown");
   const [skuOptions, setSkuOptions] = useState<SKUOption[]>([]);
   const [selectedSkuByLine, setSelectedSkuByLine] = useState<Record<number, number>>({});
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [selectedOrgId, setSelectedOrgId] = useState<number | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -91,6 +100,19 @@ export function InboundPage() {
     }
     void loadSkus();
   }, []);
+
+  useEffect(() => {
+    if (!user?.is_platform_admin) return;
+    async function loadOrgs() {
+      try {
+        const orgs = await api.listOrganizations();
+        setOrganizations((orgs || []) as Organization[]);
+      } catch {
+        // ignore
+      }
+    }
+    void loadOrgs();
+  }, [user?.is_platform_admin]);
 
   async function extractFromBlob(blob: Blob) {
     setLoading(true);
@@ -147,9 +169,15 @@ export function InboundPage() {
       return;
     }
 
+    if (user?.is_platform_admin && !selectedOrgId) {
+      toast.error("Selecteer een organisatie om de pakbon voor in te boeken.");
+      return;
+    }
+
     setConfirmingInbound(true);
     try {
       const created = await api.createShipment({
+        organization_id: user?.is_platform_admin ? selectedOrgId : null,
         supplier_name: preview.supplier_name || null,
         reference: preview.reference || null,
         lines,
@@ -231,6 +259,18 @@ export function InboundPage() {
       <h2 className="text-xl font-bold">Inbound pakbon/factuur</h2>
 
       <Card className="p-3 space-y-3">
+        {user?.is_platform_admin && (
+          <select
+            className="w-full border border-border rounded px-2 py-1 text-sm"
+            value={selectedOrgId ?? ""}
+            onChange={(e) => setSelectedOrgId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">Selecteer organisatie...</option>
+            {organizations.map((org) => (
+              <option key={org.id} value={org.id}>{org.name}</option>
+            ))}
+          </select>
+        )}
         <div className="grid grid-cols-2 gap-2">
           <input
             className="border border-border rounded px-2 py-1 text-sm"
