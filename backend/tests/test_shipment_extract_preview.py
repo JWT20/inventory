@@ -4,6 +4,9 @@ from tests.conftest import auth_header
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 15b4698 (Fix shipment preview test storage permissions)
 class _TmpStorage:
     def __init__(self, base):
         self.base = base
@@ -19,9 +22,12 @@ class _TmpStorage:
 
 
 def test_extract_preview_maps_sku_code(client, db, admin_token, sample_sku, tmp_path):
+<<<<<<< HEAD
 =======
 def test_extract_preview_maps_sku_code(client, db, admin_token, sample_sku):
 >>>>>>> 07c7d39 (Add inbound document extraction preview flow)
+=======
+>>>>>>> 15b4698 (Fix shipment preview test storage permissions)
     mocked = {
         "supplier_name": "Anfors",
         "reference": "PKB-123",
@@ -39,11 +45,16 @@ def test_extract_preview_maps_sku_code(client, db, admin_token, sample_sku):
     }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
          patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
 =======
     with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)):
 >>>>>>> 07c7d39 (Add inbound document extraction preview flow)
+=======
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+>>>>>>> 15b4698 (Fix shipment preview test storage permissions)
         resp = client.post(
             "/api/shipments/extract-preview",
             headers=auth_header(admin_token),
