@@ -299,10 +299,11 @@ async def extract_shipment_preview(
                 match_source = "supplier_mapping"
 
         # If supplier code is missing, use an LLM-only resolver on article description.
-        if not matched_id and not code and normalized_supplier and str(row.get("description", "")).strip():
+        if not matched_id and not code and str(row.get("description", "")).strip():
             llm_candidate_pool = supplier_scoped_candidates or sku_candidates
+            supplier_name_for_matcher = normalized_supplier or "(unknown)"
             suggested_code, llm_confidence = await match_shipment_article_name(
-                supplier_name=normalized_supplier,
+                supplier_name=supplier_name_for_matcher,
                 article_description=str(row.get("description", "")).strip(),
                 candidates=[(v[1], v[2]) for v in llm_candidate_pool.values()],
             )
