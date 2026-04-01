@@ -34,6 +34,7 @@ interface ExtractPreview {
 
 export function InboundPage() {
   const [loading, setLoading] = useState(false);
+  const [confirmingInbound, setConfirmingInbound] = useState(false);
   const [preview, setPreview] = useState<ExtractPreview | null>(null);
   const [selectedLineIndex, setSelectedLineIndex] = useState<number | null>(null);
   const [supplierName, setSupplierName] = useState("");
@@ -100,6 +101,72 @@ export function InboundPage() {
 
   async function uploadFallback(file: File) {
     await extractFromBlob(file);
+  }
+
+  async function confirmInbound() {
+    if (!preview) return;
+    const lines = preview.lines
+      .filter((line) => line.matched_sku_id && line.quantity_boxes > 0)
+      .map((line) => ({ sku_id: line.matched_sku_id as number, quantity: line.quantity_boxes }));
+
+    const unmapped = preview.lines.filter((line) => !line.matched_sku_id && line.quantity_boxes > 0);
+    if (unmapped.length > 0) {
+      const codes = unmapped.map((l) => l.supplier_code || "(geen code)").join(", ");
+      toast.error(`Nog geen SKU-match voor: ${codes}. Maak eerst SKU's aan bij deze regels.`);
+      return;
+    }
+    if (lines.length === 0) {
+      toast.error("Geen boekbare regels gevonden.");
+      return;
+    }
+
+    setConfirmingInbound(true);
+    try {
+      const created = await api.createShipment({
+        supplier_name: preview.supplier_name || null,
+        reference: preview.reference || null,
+        lines,
+      });
+      await api.bookShipment(created.id);
+      toast.success(`Inbound geboekt (pakbon #${created.id})`);
+      setPreview(null);
+      setSelectedLineIndex(null);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Inbound boeken mislukt");
+    } finally {
+      setConfirmingInbound(false);
+    }
+  }
+
+  async function createConceptForLine(lineIndex: number) {
+    if (!preview) return;
+    const line = preview.lines[lineIndex];
+    if (!line || line.matched_sku_id) return;
+
+    const supplierCode = (line.supplier_code || "").trim().toUpperCase();
+    if (!supplierCode) {
+      toast.error("Geen supplier code gevonden voor deze regel.");
+      return;
+    }
+
+    try {
+      const created = await api.createConceptProduct(supplierCode, line.description || undefined);
+
+      setPreview((prev) => {
+        if (!prev) return prev;
+        const nextLines = [...prev.lines];
+        nextLines[lineIndex] = {
+          ...nextLines[lineIndex],
+          matched_sku_id: created.id,
+          matched_sku_code: created.sku_code,
+          matched_sku_name: created.name,
+        };
+        return { ...prev, lines: nextLines };
+      });
+      toast.success(`Concept product ${created.sku_code} aangemaakt`);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Concept product aanmaken mislukt");
+    }
   }
 
   const selectedBox =
@@ -177,6 +244,11 @@ export function InboundPage() {
                 />
               )}
             </div>
+            <div className="mt-3">
+              <Button onClick={confirmInbound} disabled={confirmingInbound} className="w-full">
+                {confirmingInbound ? "Inbound boeken..." : "Confirm inbound"}
+              </Button>
+            </div>
           </Card>
 
           <Card className="p-3">
@@ -201,6 +273,19 @@ export function InboundPage() {
                         ? `Match: ${line.matched_sku_code} - ${line.matched_sku_name}`
                         : "Geen SKU-match"}
                     </p>
+                    {!line.matched_sku_code && (
+                      <Button
+                        type="button"
+                        className="mt-2"
+                        variant="outline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void createConceptForLine(idx);
+                        }}
+                      >
+                        Concept product
+                      </Button>
+                    )}
                   </button>
                 ))}
               </div>

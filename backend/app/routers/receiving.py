@@ -731,3 +731,44 @@ async def create_product_inline(
     )
 
     return _sku_to_response(sku)
+
+
+@router.post("/concept-product", response_model=SKUResponse, status_code=201)
+def create_concept_product(
+    supplier_code: str = Form(...),
+    description: str | None = Form(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_warehouse),
+):
+    """Create an inactive concept product to be completed by merchant/admin."""
+    code = supplier_code.strip().upper()
+    if not code:
+        raise HTTPException(400, "supplier_code is verplicht")
+
+    existing = db.query(SKU).filter(SKU.sku_code == code).first()
+    if existing:
+        return _sku_to_response(existing)
+
+    concept_name = (description or "").strip() or f"Concept {code}"
+    sku = SKU(
+        sku_code=code,
+        name=concept_name,
+        description=concept_name,
+        category="other",
+        active=False,
+        organization_id=user.organization_id,
+    )
+    sku.set_attributes({"status": "concept", "source": "inbound_scan"})
+    db.add(sku)
+    db.commit()
+    db.refresh(sku)
+
+    publish_event(
+        "concept_product_created",
+        details={"sku_code": sku.sku_code, "name": sku.name, "source": "inbound_scan"},
+        user=user,
+        resource_type="sku",
+        resource_id=sku.id,
+    )
+
+    return _sku_to_response(sku)
