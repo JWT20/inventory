@@ -2,7 +2,8 @@ import logging
 import time
 import uuid
 
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Response, UploadFile
+from sqlalchemy.exc import IntegrityError
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy.orm import Session
 
@@ -735,6 +736,7 @@ async def create_product_inline(
 
 @router.post("/concept-product", response_model=SKUResponse, status_code=201)
 def create_concept_product(
+    response: Response,
     supplier_code: str = Form(...),
     description: str | None = Form(None),
     db: Session = Depends(get_db),
@@ -746,18 +748,22 @@ def create_concept_product(
         raise HTTPException(400, "supplier_code is verplicht")
 
     base_query = db.query(SKU).filter(SKU.sku_code == code)
-    if user.organization_id is not None:
-        existing = base_query.filter(SKU.organization_id == user.organization_id).first()
-    else:
-        existing = base_query.filter(SKU.organization_id.is_(None)).first()
 
+    def _get_visible_existing() -> SKU | None:
+        if user.organization_id is not None:
+            return base_query.filter(SKU.organization_id == user.organization_id).first()
+        return base_query.filter(SKU.organization_id.is_(None)).first()
+
+    existing = _get_visible_existing()
     if existing:
+        response.status_code = 200
         return _sku_to_response(existing)
 
     # A SKU with this code exists but is not visible to the current user
     other_org_sku = base_query.first()
     if other_org_sku:
         raise HTTPException(status_code=409, detail="SKU with this code exists in another organization")
+
     concept_name = (description or "").strip() or f"Concept {code}"
     sku = SKU(
         sku_code=code,
@@ -769,7 +775,16 @@ def create_concept_product(
     )
     sku.set_attributes({"status": "concept", "source": "inbound_scan"})
     db.add(sku)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        # Another concurrent request created the same SKU; return it if visible
+        existing = _get_visible_existing()
+        if existing:
+            response.status_code = 200
+            return _sku_to_response(existing)
+        raise HTTPException(status_code=409, detail="SKU code conflict")
     db.refresh(sku)
 
     publish_event(
