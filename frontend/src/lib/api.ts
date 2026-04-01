@@ -162,6 +162,8 @@ export const api = {
   listSKUs: (activeOnly = false) =>
     request(`/skus${activeOnly ? "?active_only=true" : ""}`),
   createSKU: (data: {
+    sku_code?: string;
+    name?: string;
     category?: string;
     attributes: Record<string, string>;
     active?: boolean;
@@ -202,6 +204,12 @@ export const api = {
       fields,
       "image.jpg",
     );
+  },
+  createConceptProduct: (supplierCode: string, description?: string) => {
+    const form = new FormData();
+    form.append("supplier_code", supplierCode);
+    if (description) form.append("description", description);
+    return request("/receiving/concept-product", { method: "POST", body: form });
   },
 
   // Customers
@@ -265,6 +273,13 @@ export const api = {
     form.append("document_type", documentType);
     return request("/shipments/extract-preview", { method: "POST", body: form });
   },
+  createShipment: (data: {
+    supplier_name?: string | null;
+    reference?: string | null;
+    lines: { sku_id: number; quantity: number }[];
+  }) => json("/shipments", "POST", data),
+  bookShipment: (shipmentId: number) =>
+    request(`/shipments/${shipmentId}/book`, { method: "POST" }),
   updateDefaultPrice: (skuId: number, defaultPrice: number | null) =>
     json(`/skus/${skuId}/price`, "PUT", { default_price: defaultPrice }),
   updateCustomerPrice: (customerId: number, skuId: number, unitPrice: number | null) =>
