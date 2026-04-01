@@ -745,10 +745,19 @@ def create_concept_product(
     if not code:
         raise HTTPException(400, "supplier_code is verplicht")
 
-    existing = db.query(SKU).filter(SKU.sku_code == code).first()
+    base_query = db.query(SKU).filter(SKU.sku_code == code)
+    if user.organization_id is not None:
+        existing = base_query.filter(SKU.organization_id == user.organization_id).first()
+    else:
+        existing = base_query.filter(SKU.organization_id.is_(None)).first()
+
     if existing:
         return _sku_to_response(existing)
 
+    # A SKU with this code exists but is not visible to the current user
+    other_org_sku = base_query.first()
+    if other_org_sku:
+        raise HTTPException(status_code=409, detail="SKU with this code exists in another organization")
     concept_name = (description or "").strip() or f"Concept {code}"
     sku = SKU(
         sku_code=code,
