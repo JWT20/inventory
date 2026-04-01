@@ -3,7 +3,21 @@ from unittest.mock import AsyncMock, patch
 from tests.conftest import auth_header
 
 
-def test_extract_preview_maps_sku_code(client, db, admin_token, sample_sku):
+class _TmpStorage:
+    def __init__(self, base):
+        self.base = base
+
+    def save(self, key: str, content: bytes) -> str:
+        path = self.base / key
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        return key
+
+    def url(self, key: str) -> str:
+        return f"/api/files/{key}"
+
+
+def test_extract_preview_maps_sku_code(client, db, admin_token, sample_sku, tmp_path):
     mocked = {
         "supplier_name": "Anfors",
         "reference": "PKB-123",
@@ -20,7 +34,8 @@ def test_extract_preview_maps_sku_code(client, db, admin_token, sample_sku):
         ],
     }
 
-    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)):
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
         resp = client.post(
             "/api/shipments/extract-preview",
             headers=auth_header(admin_token),
