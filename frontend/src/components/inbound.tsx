@@ -23,6 +23,13 @@ interface ExtractedLine {
   matched_sku_name: string | null;
 }
 
+interface SKUOption {
+  id: number;
+  sku_code: string;
+  name: string;
+  active: boolean;
+}
+
 interface ExtractPreview {
   supplier_name: string;
   reference: string;
@@ -39,6 +46,8 @@ export function InboundPage() {
   const [selectedLineIndex, setSelectedLineIndex] = useState<number | null>(null);
   const [supplierName, setSupplierName] = useState("");
   const [documentType, setDocumentType] = useState<"pakbon" | "invoice" | "unknown">("unknown");
+  const [skuOptions, setSkuOptions] = useState<SKUOption[]>([]);
+  const [selectedSkuByLine, setSelectedSkuByLine] = useState<Record<number, number>>({});
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -70,12 +79,26 @@ export function InboundPage() {
     };
   }, []);
 
+
+  useEffect(() => {
+    async function loadSkus() {
+      try {
+        const skus = await api.listSKUs(true);
+        setSkuOptions((skus || []) as SKUOption[]);
+      } catch (err: unknown) {
+        toast.error(err instanceof Error ? err.message : "SKU's laden mislukt");
+      }
+    }
+    void loadSkus();
+  }, []);
+
   async function extractFromBlob(blob: Blob) {
     setLoading(true);
     try {
       const data = await api.extractShipmentPreview(blob, supplierName, documentType);
       setPreview(data);
       setSelectedLineIndex(null);
+      setSelectedSkuByLine({});
       toast.success("Extractie voltooid");
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Extractie mislukt");
@@ -135,11 +158,36 @@ export function InboundPage() {
       toast.success(`Inbound geboekt (pakbon #${created.id})`);
       setPreview(null);
       setSelectedLineIndex(null);
+      setSelectedSkuByLine({});
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Inbound boeken mislukt");
     } finally {
       setConfirmingInbound(false);
     }
+  }
+
+
+  function linkExistingSku(lineIndex: number) {
+    if (!preview) return;
+    const selectedSkuId = selectedSkuByLine[lineIndex];
+    const sku = skuOptions.find((s) => s.id === selectedSkuId);
+    if (!sku) {
+      toast.error("Kies eerst een bestaande SKU");
+      return;
+    }
+
+    setPreview((prev) => {
+      if (!prev) return prev;
+      const nextLines = [...prev.lines];
+      nextLines[lineIndex] = {
+        ...nextLines[lineIndex],
+        matched_sku_id: sku.id,
+        matched_sku_code: sku.sku_code,
+        matched_sku_name: sku.name,
+      };
+      return { ...prev, lines: nextLines };
+    });
+    toast.success(`Gekoppeld aan ${sku.sku_code}`);
   }
 
   async function createConceptForLine(lineIndex: number) {
@@ -233,6 +281,9 @@ export function InboundPage() {
             <p className="text-sm"><strong>Leverancier:</strong> {preview.supplier_name || "-"}</p>
             <p className="text-sm"><strong>Referentie:</strong> {preview.reference || "-"}</p>
             <p className="text-sm"><strong>Type:</strong> {preview.document_type || "unknown"}</p>
+            <p className="text-xs text-muted-foreground mt-2">
+              Auto-mapping: eerst op leverancier + supplier code (opgeslagen mappings), daarna op exacte SKU-code match.
+            </p>
 
             <div className="relative mt-3 border border-border rounded overflow-hidden">
               <img src={preview.image_url} alt="Pakbon/factuur" className="w-full" />
@@ -278,17 +329,43 @@ export function InboundPage() {
                         : "Geen SKU-match"}
                     </p>
                     {!line.matched_sku_code && (
-                      <Button
-                        type="button"
-                        className="mt-2"
-                        variant="outline"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void createConceptForLine(idx);
-                        }}
-                      >
-                        Concept product
-                      </Button>
+                      <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex gap-2">
+                          <select
+                            className="flex-1 border border-border rounded px-2 py-1 text-xs bg-background"
+                            value={selectedSkuByLine[idx] ?? ""}
+                            onChange={(e) =>
+                              setSelectedSkuByLine((prev) => ({
+                                ...prev,
+                                [idx]: Number(e.target.value),
+                              }))
+                            }
+                          >
+                            <option value="">Kies bestaande SKU...</option>
+                            {skuOptions.map((sku) => (
+                              <option key={sku.id} value={sku.id}>
+                                {sku.sku_code} - {sku.name}
+                              </option>
+                            ))}
+                          </select>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => linkExistingSku(idx)}
+                          >
+                            Koppel
+                          </Button>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            void createConceptForLine(idx);
+                          }}
+                        >
+                          Concept product
+                        </Button>
+                      </div>
                     )}
                   </button>
                 ))}
