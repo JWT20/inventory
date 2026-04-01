@@ -1,5 +1,6 @@
 from unittest.mock import AsyncMock, patch
 
+from app.models import SKU, SupplierSKUMapping
 from tests.conftest import auth_header
 
 
@@ -60,3 +61,51 @@ def test_extract_preview_requires_warehouse_role(client, owner_token):
     )
 
     assert resp.status_code == 403
+
+
+def test_extract_preview_prefers_supplier_mapping_over_direct_sku_code(
+    client, db, admin_token, sample_sku, tmp_path
+):
+    mapped_sku = SKU(
+        sku_code="MAPPED-001",
+        name="Mapped SKU",
+        organization_id=None,
+    )
+    db.add(mapped_sku)
+    db.flush()
+    db.add(SupplierSKUMapping(
+        organization_id=None,
+        supplier_name="Anfors",
+        supplier_code="WINE-001",
+        sku_id=mapped_sku.id,
+    ))
+    db.commit()
+
+    mocked = {
+        "supplier_name": "Anfors",
+        "reference": "PKB-123",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [
+            {
+                "supplier_code": "WINE-001",
+                "description": "Mapped first",
+                "quantity_boxes": 2,
+                "confidence": 0.88,
+                "bbox": {"x": 0.1, "y": 0.2, "width": 0.4, "height": 0.05, "page": 1},
+            }
+        ],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(admin_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={"document_type": "pakbon", "supplier_name": "Anfors"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["lines"][0]["matched_sku_code"] == "MAPPED-001"

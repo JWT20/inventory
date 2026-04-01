@@ -107,7 +107,11 @@ export function InboundPage() {
     if (!preview) return;
     const lines = preview.lines
       .filter((line) => line.matched_sku_id && line.quantity_boxes > 0)
-      .map((line) => ({ sku_id: line.matched_sku_id as number, quantity: line.quantity_boxes }));
+      .map((line) => ({
+        sku_id: line.matched_sku_id as number,
+        quantity: line.quantity_boxes,
+        supplier_code: line.supplier_code || null,
+      }));
 
     const unmapped = preview.lines.filter((line) => !line.matched_sku_id && line.quantity_boxes > 0);
     if (unmapped.length > 0) {

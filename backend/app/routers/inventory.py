@@ -18,6 +18,7 @@ from app.models import (
     InboundShipmentLine,
     InventoryBalance,
     ReferenceImage,
+    SupplierSKUMapping,
     StockMovement,
     User,
 )
@@ -132,6 +133,7 @@ def _shipment_to_response(shipment: InboundShipment) -> ShipmentResponse:
                 sku_id=line.sku_id,
                 sku_code=line.sku.sku_code if line.sku else "",
                 sku_name=line.sku.name if line.sku else "",
+                supplier_code=line.supplier_code,
                 quantity=line.quantity,
             )
             for line in shipment.lines
@@ -163,7 +165,9 @@ async def extract_shipment_preview(
         detected_type = document_type
 
     lines: list[ShipmentExtractedLine] = []
+    normalized_supplier = supplier_name.strip()
     sku_lookup: dict[str, tuple[int, str, str]] = {}
+    mapping_lookup: dict[tuple[str, str], tuple[int, str, str]] = {}
     sku_query = db.query(SKU)
     if not user.is_platform_admin:
         if user.organization_id:
@@ -172,6 +176,21 @@ async def extract_shipment_preview(
             sku_query = sku_query.filter(SKU.organization_id.is_(None))
     for sku in sku_query.all():
         sku_lookup[sku.sku_code.strip().upper()] = (sku.id, sku.sku_code, sku.name)
+
+    if normalized_supplier:
+        mappings = db.query(SupplierSKUMapping, SKU).join(
+            SKU, SKU.id == SupplierSKUMapping.sku_id
+        )
+        if not user.is_platform_admin:
+            mappings = mappings.filter(
+                SupplierSKUMapping.organization_id == user.organization_id
+            )
+        for mapping, sku in mappings.filter(
+            SupplierSKUMapping.supplier_name == normalized_supplier
+        ).all():
+            mapping_lookup[
+                (mapping.supplier_name.strip().upper(), mapping.supplier_code.strip().upper())
+            ] = (sku.id, sku.sku_code, sku.name)
 
     for row in extracted.get("lines", []):
         code = str(row.get("supplier_code", "")).strip()
@@ -183,7 +202,9 @@ async def extract_shipment_preview(
         matched_code = None
         matched_name = None
         if code:
-            hit = sku_lookup.get(code.upper())
+            hit = mapping_lookup.get((normalized_supplier.upper(), code.upper()))
+            if not hit:
+                hit = sku_lookup.get(code.upper())
             if hit:
                 matched_id, matched_code, matched_name = hit
 
@@ -225,10 +246,11 @@ def create_shipment(
     if not user.is_platform_admin and not user.organization_id:
         raise HTTPException(400, "User has no organization")
     org_id = user.organization_id
+    normalized_supplier_name = data.supplier_name.strip() if data.supplier_name else None
 
     shipment = InboundShipment(
         organization_id=org_id,
-        supplier_name=data.supplier_name,
+        supplier_name=normalized_supplier_name,
         reference=data.reference,
         status="draft",
     )
@@ -239,8 +261,30 @@ def create_shipment(
         db.add(InboundShipmentLine(
             shipment_id=shipment.id,
             sku_id=line.sku_id,
+            supplier_code=line.supplier_code.strip() if line.supplier_code else None,
             quantity=line.quantity,
         ))
+        if normalized_supplier_name and line.supplier_code:
+            normalized_code = line.supplier_code.strip()
+            if normalized_code:
+                existing_mapping = (
+                    db.query(SupplierSKUMapping)
+                    .filter(
+                        SupplierSKUMapping.organization_id == org_id,
+                        SupplierSKUMapping.supplier_name == normalized_supplier_name,
+                        SupplierSKUMapping.supplier_code == normalized_code,
+                    )
+                    .first()
+                )
+                if existing_mapping:
+                    existing_mapping.sku_id = line.sku_id
+                else:
+                    db.add(SupplierSKUMapping(
+                        organization_id=org_id,
+                        supplier_name=normalized_supplier_name,
+                        supplier_code=normalized_code,
+                        sku_id=line.sku_id,
+                    ))
     db.commit()
     db.refresh(shipment)
 
