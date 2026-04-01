@@ -325,7 +325,24 @@ function SKUDialog({
       onSaved();
       onClose();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Verwijderen mislukt");
+      const msg = err instanceof Error ? err.message : "Verwijderen mislukt";
+      if (msg.includes("still referenced by")) {
+        const force = confirm(
+          `${msg}\n\nWil je het product inclusief alle gekoppelde gegevens definitief verwijderen?`
+        );
+        if (force) {
+          try {
+            await api.deleteSKU(currentId, true);
+            toast.success("Product verwijderd");
+            onSaved();
+            onClose();
+          } catch (err2: unknown) {
+            toast.error(err2 instanceof Error ? err2.message : "Verwijderen mislukt");
+          }
+        }
+      } else {
+        toast.error(msg);
+      }
     } finally {
       setDeleting(false);
     }
