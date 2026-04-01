@@ -389,6 +389,7 @@ class ShipmentExtractPreviewResponse(BaseModel):
     raw_text: str = ""
 
 
+<<<<<<< HEAD
 class ShipmentConfirmLine(BaseModel):
     supplier_code: str = ""
     sku_id: int = Field(..., gt=0)
@@ -440,6 +441,8 @@ class ResolveUnmatchedQueueRequest(BaseModel):
     save_mapping: bool = True
 
 
+=======
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
 # --- Inventory ---
 
 class CustomerPriceResponse(BaseModel):

@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch
 from tests.conftest import auth_header
 
 
+<<<<<<< HEAD
 class _TmpStorage:
     def __init__(self, base):
         self.base = base
@@ -18,6 +19,9 @@ class _TmpStorage:
 
 
 def test_extract_preview_maps_sku_code(client, db, admin_token, sample_sku, tmp_path):
+=======
+def test_extract_preview_maps_sku_code(client, db, admin_token, sample_sku):
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
     mocked = {
         "supplier_name": "Anfors",
         "reference": "PKB-123",
@@ -34,8 +38,12 @@ def test_extract_preview_maps_sku_code(client, db, admin_token, sample_sku, tmp_
         ],
     }
 
+<<<<<<< HEAD
     with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
          patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+=======
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)):
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
         resp = client.post(
             "/api/shipments/extract-preview",
             headers=auth_header(admin_token),
@@ -60,6 +68,7 @@ def test_extract_preview_requires_warehouse_role(client, owner_token):
     )
 
     assert resp.status_code == 403
+<<<<<<< HEAD
 
 
 def test_confirm_from_preview_creates_and_books_shipment(client, db, admin_token, sample_sku):
@@ -111,3 +120,5 @@ def test_save_unmatched_queue_items(client, db, admin_token):
     assert len(body) == 1
     assert body[0]["status"] == "open"
     assert body[0]["supplier_code"] == "AF999"
+=======
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)

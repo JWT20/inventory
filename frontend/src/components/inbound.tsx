@@ -38,10 +38,13 @@ export function InboundPage() {
   const [selectedLineIndex, setSelectedLineIndex] = useState<number | null>(null);
   const [supplierName, setSupplierName] = useState("");
   const [documentType, setDocumentType] = useState<"pakbon" | "invoice" | "unknown">("unknown");
+<<<<<<< HEAD
   const [skuOptions, setSkuOptions] = useState<{ id: number; sku_code: string; name: string }[]>([]);
   const [lineSkuSelections, setLineSkuSelections] = useState<Record<number, number>>({});
   const [saveMappings, setSaveMappings] = useState(true);
   const [autoBook, setAutoBook] = useState(true);
+=======
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -73,6 +76,7 @@ export function InboundPage() {
     };
   }, []);
 
+<<<<<<< HEAD
   useEffect(() => {
     async function loadSkus() {
       try {
@@ -85,11 +89,14 @@ export function InboundPage() {
     loadSkus();
   }, []);
 
+=======
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
   async function extractFromBlob(blob: Blob) {
     setLoading(true);
     try {
       const data = await api.extractShipmentPreview(blob, supplierName, documentType);
       setPreview(data);
+<<<<<<< HEAD
       setLineSkuSelections(
         Object.fromEntries(
           data.lines
@@ -98,6 +105,8 @@ export function InboundPage() {
             .filter(Boolean) as [number, number][],
         ),
       );
+=======
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
       setSelectedLineIndex(null);
       toast.success("Extractie voltooid");
     } catch (err: unknown) {
@@ -131,6 +140,7 @@ export function InboundPage() {
       ? preview.lines[selectedLineIndex].bbox
       : null;
 
+<<<<<<< HEAD
   const unresolvedCount = preview
     ? preview.lines.filter((_, idx) => !lineSkuSelections[idx]).length
     : 0;
@@ -198,6 +208,8 @@ export function InboundPage() {
     }
   }
 
+=======
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-bold">Inbound pakbon/factuur</h2>
@@ -268,6 +280,7 @@ export function InboundPage() {
                 />
               )}
             </div>
+<<<<<<< HEAD
             <div className="mt-3 space-y-2 text-sm">
               <label className="flex items-center gap-2">
                 <input
@@ -302,6 +315,8 @@ export function InboundPage() {
                 </Button>
               )}
             </div>
+=======
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
           </Card>
 
           <Card className="p-3">
@@ -311,6 +326,7 @@ export function InboundPage() {
             ) : (
               <div className="space-y-2 max-h-[520px] overflow-auto">
                 {preview.lines.map((line, idx) => (
+<<<<<<< HEAD
                   <div
                     key={`${line.supplier_code}-${idx}`}
                     role="button"
@@ -318,6 +334,12 @@ export function InboundPage() {
                     className={`w-full text-left border rounded p-2 cursor-pointer ${selectedLineIndex === idx ? "border-primary" : "border-border"}`}
                     onClick={() => setSelectedLineIndex(idx)}
                     onKeyDown={(e) => e.key === "Enter" && setSelectedLineIndex(idx)}
+=======
+                  <button
+                    key={`${line.supplier_code}-${idx}`}
+                    className={`w-full text-left border rounded p-2 ${selectedLineIndex === idx ? "border-primary" : "border-border"}`}
+                    onClick={() => setSelectedLineIndex(idx)}
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
                   >
                     <p className="text-sm font-medium">{line.supplier_code || "(geen code)"}</p>
                     <p className="text-sm">{line.description || "-"}</p>
@@ -329,6 +351,7 @@ export function InboundPage() {
                         ? `Match: ${line.matched_sku_code} - ${line.matched_sku_name}`
                         : "Geen SKU-match"}
                     </p>
+<<<<<<< HEAD
                     <div
                       className="mt-2"
                       onClick={(e) => e.stopPropagation()}
@@ -352,6 +375,9 @@ export function InboundPage() {
                       </select>
                     </div>
                   </div>
+=======
+                  </button>
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
                 ))}
               </div>
             )}

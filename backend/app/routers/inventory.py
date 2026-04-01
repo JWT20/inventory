@@ -1,7 +1,10 @@
 import logging
 
 import uuid
+<<<<<<< HEAD
 import json
+=======
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func
@@ -31,7 +34,10 @@ from app.schemas import (
     InventoryCountRequest,
     InventoryOverviewItem,
     ShipmentCreate,
+<<<<<<< HEAD
     ShipmentConfirmFromPreviewRequest,
+=======
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
     ShipmentExtractPreviewResponse,
     ShipmentExtractedLine,
     ShipmentLineResponse,
@@ -160,6 +166,7 @@ def _shipment_to_response(shipment: InboundShipment) -> ShipmentResponse:
     )
 
 
+<<<<<<< HEAD
 def _unmatched_to_response(item: UnmatchedInboundLine) -> UnmatchedQueueItemResponse:
     return UnmatchedQueueItemResponse(
         id=item.id,
@@ -176,6 +183,8 @@ def _unmatched_to_response(item: UnmatchedInboundLine) -> UnmatchedQueueItemResp
     )
 
 
+=======
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
 @router.post("/shipments/extract-preview", response_model=ShipmentExtractPreviewResponse)
 async def extract_shipment_preview(
     file: UploadFile = File(...),
@@ -185,10 +194,14 @@ async def extract_shipment_preview(
     user: User = Depends(require_warehouse),
 ):
     """Camera-first extraction preview for pakbon/factuur with bbox hints."""
+<<<<<<< HEAD
     try:
         image_bytes = await file.read()
     finally:
         await file.close()
+=======
+    image_bytes = file.file.read()
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
     if not image_bytes:
         raise HTTPException(400, "Leeg bestand")
     if len(image_bytes) > 10 * 1024 * 1024:
@@ -203,6 +216,7 @@ async def extract_shipment_preview(
         detected_type = document_type
 
     lines: list[ShipmentExtractedLine] = []
+<<<<<<< HEAD
     raw_lines = extracted.get("lines", [])
     # Collect unique normalized supplier codes for batch DB queries
     unique_codes = {
@@ -253,11 +267,29 @@ async def extract_shipment_preview(
         confidence = float(row.get("confidence", 0.0) or 0.0)
         raw_bbox = row.get("bbox") if isinstance(row.get("bbox"), dict) else None
         bbox = _clamp_bbox(raw_bbox) if raw_bbox else None
+=======
+    sku_lookup: dict[str, tuple[int, str, str]] = {}
+    sku_query = db.query(SKU)
+    if not user.is_platform_admin:
+        if user.organization_id:
+            sku_query = sku_query.filter(SKU.organization_id == user.organization_id)
+        else:
+            sku_query = sku_query.filter(SKU.organization_id.is_(None))
+    for sku in sku_query.all():
+        sku_lookup[sku.sku_code.strip().upper()] = (sku.id, sku.sku_code, sku.name)
+
+    for row in extracted.get("lines", []):
+        code = str(row.get("supplier_code", "")).strip()
+        qty = int(row.get("quantity_boxes", 0) or 0)
+        confidence = float(row.get("confidence", 0.0) or 0.0)
+        bbox = row.get("bbox") if isinstance(row.get("bbox"), dict) else None
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
 
         matched_id = None
         matched_code = None
         matched_name = None
         if code:
+<<<<<<< HEAD
             mapping = mapping_lookup.get(code.upper())
             if mapping:
                 hit = mapped_skus.get(mapping.sku_id)
@@ -267,6 +299,11 @@ async def extract_shipment_preview(
                 hit = sku_lookup.get(code.upper())
                 if hit:
                     matched_id, matched_code, matched_name = hit
+=======
+            hit = sku_lookup.get(code.upper())
+            if hit:
+                matched_id, matched_code, matched_name = hit
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
 
         lines.append(ShipmentExtractedLine(
             supplier_code=code,
@@ -289,6 +326,7 @@ async def extract_shipment_preview(
     )
 
 
+<<<<<<< HEAD
 @router.post("/shipments/unmatched", response_model=list[UnmatchedQueueItemResponse], status_code=201)
 def create_unmatched_queue_items(
     body: UnmatchedQueueCreateRequest,
@@ -486,6 +524,8 @@ def confirm_shipment_from_preview(
     return _shipment_to_response(shipment)
 
 
+=======
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
 @router.post("/shipments", response_model=ShipmentResponse, status_code=201)
 def create_shipment(
     data: ShipmentCreate,

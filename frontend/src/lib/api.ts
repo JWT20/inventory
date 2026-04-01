@@ -265,6 +265,7 @@ export const api = {
     form.append("document_type", documentType);
     return request("/shipments/extract-preview", { method: "POST", body: form });
   },
+<<<<<<< HEAD
   confirmInboundFromPreview: (data: {
     supplier_name: string;
     reference?: string;
@@ -283,6 +284,8 @@ export const api = {
     request(`/shipments/unmatched?status=${encodeURIComponent(status)}`),
   resolveUnmatchedInbound: (itemId: number, skuId: number, saveMapping = true) =>
     json(`/shipments/unmatched/${itemId}/resolve`, "POST", { sku_id: skuId, save_mapping: saveMapping }),
+=======
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
   updateDefaultPrice: (skuId: number, defaultPrice: number | null) =>
     json(`/skus/${skuId}/price`, "PUT", { default_price: defaultPrice }),
   updateCustomerPrice: (customerId: number, skuId: number, unitPrice: number | null) =>

@@ -45,7 +45,11 @@ function Main() {
     {
       id: "inbound",
       label: "Inbound",
+<<<<<<< HEAD
       show: isAdmin || user.role === "courier",
+=======
+      show: isAdmin || user.role === "courier" || user.role === "owner" || user.role === "member",
+>>>>>>> 07c7d39 (Add inbound document extraction preview flow)
     },
     {
       id: "skus",
