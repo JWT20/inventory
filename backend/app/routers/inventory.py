@@ -493,15 +493,15 @@ def confirm_line_match(
     )
     if not mapping:
         return SupplierMappingResponse(
-            id=0,
+            id=None,
             organization_id=org_id,
             supplier_name=normalized_supplier_name,
             supplier_code=normalized_supplier_code,
             sku_id=sku.id,
             sku_code=sku.sku_code,
             sku_name=sku.name,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=None,
+            updated_at=None,
         )
     return _mapping_to_response(mapping)
 
