@@ -381,6 +381,16 @@ class ShipmentExtractedLine(BaseModel):
     matched_sku_id: int | None = None
     matched_sku_code: str | None = None
     matched_sku_name: str | None = None
+    needs_confirmation: bool = False
+    match_source: Literal["supplier_mapping", "llm_suggestion", "unresolved"] = "unresolved"
+    candidate_matches: list["ShipmentMatchCandidate"] = []
+
+
+class ShipmentMatchCandidate(BaseModel):
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    confidence: float = Field(0.0, ge=0, le=1)
 
 
 class ShipmentExtractPreviewResponse(BaseModel):
@@ -403,6 +413,27 @@ class CustomerPriceResponse(BaseModel):
     effective_price: float | None = None
 
     model_config = {"from_attributes": True}
+
+
+class SupplierMappingResponse(BaseModel):
+    id: int | None = None
+    organization_id: int | None = None
+    supplier_name: str
+    supplier_code: str
+    sku_id: int
+    sku_code: str = ""
+    sku_name: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ConfirmLineMatchRequest(BaseModel):
+    supplier_name: str = Field(..., min_length=1)
+    supplier_code: str = Field(..., min_length=1)
+    chosen_sku_id: int = Field(..., gt=0)
+    persist_mapping: bool = True
 
 
 class InventoryBalanceResponse(BaseModel):

@@ -1,8 +1,9 @@
 import logging
 
 import uuid
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
@@ -24,12 +25,15 @@ from app.models import (
     User,
 )
 from app.schemas import (
+    ConfirmLineMatchRequest,
     CustomerPriceResponse,
     InventoryAdjustRequest,
     InventoryBalanceResponse,
     InventoryCountRequest,
     InventoryOverviewItem,
+    SupplierMappingResponse,
     ShipmentCreate,
+    ShipmentMatchCandidate,
     ShipmentExtractPreviewResponse,
     ShipmentExtractedLine,
     ShipmentLineResponse,
@@ -39,12 +43,27 @@ from app.schemas import (
     UpdateCustomerSKUDiscountRequest,
     UpdateDefaultPriceRequest,
 )
-from app.services.embedding import extract_shipment_document
+from app.services.embedding import extract_shipment_document, match_shipment_article_name
 from app.services.storage import storage
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["inventory"])
+
+
+def _normalize_supplier_name(value: str | None) -> str:
+    if not value:
+        return ""
+    return " ".join(value.strip().split()).upper()
+
+
+def _normalize_supplier_code(value: str | None) -> str:
+    if not value:
+        return ""
+    return value.strip().upper()
+
+
+LLM_ARTICLE_MATCH_MIN_CONFIDENCE = 0.80
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +161,71 @@ def _shipment_to_response(shipment: InboundShipment) -> ShipmentResponse:
     )
 
 
+def _mapping_to_response(mapping: SupplierSKUMapping) -> SupplierMappingResponse:
+    return SupplierMappingResponse(
+        id=mapping.id,
+        organization_id=mapping.organization_id,
+        supplier_name=mapping.supplier_name,
+        supplier_code=mapping.supplier_code,
+        sku_id=mapping.sku_id,
+        sku_code=mapping.sku.sku_code if mapping.sku else "",
+        sku_name=mapping.sku.name if mapping.sku else "",
+        created_at=mapping.created_at,
+        updated_at=mapping.updated_at,
+    )
+
+
+def _resolve_org_id_for_user(user: User, requested_org_id: int | None = None) -> int | None:
+    if user.is_platform_admin:
+        return requested_org_id
+    return user.organization_id
+
+
+def _upsert_supplier_mapping(
+    db: Session,
+    *,
+    organization_id: int | None,
+    supplier_name: str,
+    supplier_code: str,
+    sku_id: int,
+) -> None:
+    existing_mapping = (
+        db.query(SupplierSKUMapping)
+        .filter(
+            SupplierSKUMapping.organization_id == organization_id,
+            SupplierSKUMapping.supplier_name == supplier_name,
+            SupplierSKUMapping.supplier_code == supplier_code,
+        )
+        .first()
+    )
+    if existing_mapping:
+        existing_mapping.sku_id = sku_id
+        return
+
+    try:
+        with db.begin_nested():
+            db.add(SupplierSKUMapping(
+                organization_id=organization_id,
+                supplier_name=supplier_name,
+                supplier_code=supplier_code,
+                sku_id=sku_id,
+            ))
+    except IntegrityError:
+        concurrent_mapping = (
+            db.query(SupplierSKUMapping)
+            .filter(
+                SupplierSKUMapping.organization_id == organization_id,
+                SupplierSKUMapping.supplier_name == supplier_name,
+                SupplierSKUMapping.supplier_code == supplier_code,
+            )
+            .first()
+        )
+        if concurrent_mapping:
+            concurrent_mapping.sku_id = sku_id
+        else:
+            raise
+
+
 @router.post("/shipments/extract-preview", response_model=ShipmentExtractPreviewResponse)
 async def extract_shipment_preview(
     file: UploadFile = File(...),
@@ -167,18 +251,10 @@ async def extract_shipment_preview(
 
     lines: list[ShipmentExtractedLine] = []
     extracted_supplier = str(extracted.get("supplier_name", "") or "")
-    normalized_supplier = supplier_name.strip() or extracted_supplier
-    sku_lookup: dict[str, tuple[int, str, str]] = {}
+    normalized_supplier = _normalize_supplier_name(supplier_name) or _normalize_supplier_name(extracted_supplier)
     mapping_lookup: dict[tuple[str, str], tuple[int, str, str]] = {}
-    sku_query = db.query(SKU)
-    if not user.is_platform_admin:
-        if user.organization_id:
-            sku_query = sku_query.filter(SKU.organization_id == user.organization_id)
-        else:
-            sku_query = sku_query.filter(SKU.organization_id.is_(None))
-    for sku in sku_query.all():
-        sku_lookup[sku.sku_code.strip().upper()] = (sku.id, sku.sku_code, sku.name)
-
+    sku_candidates: dict[str, tuple[int, str, str]] = {}
+    supplier_scoped_candidates: dict[str, tuple[int, str, str]] = {}
     if normalized_supplier:
         mappings = db.query(SupplierSKUMapping, SKU).join(
             SKU, SKU.id == SupplierSKUMapping.sku_id
@@ -188,11 +264,22 @@ async def extract_shipment_preview(
                 SupplierSKUMapping.organization_id == user.organization_id
             )
         for mapping, sku in mappings.filter(
-            func.upper(SupplierSKUMapping.supplier_name) == normalized_supplier.upper()
+            SupplierSKUMapping.supplier_name == normalized_supplier
         ).all():
+            normalized_mapping = (sku.id, sku.sku_code, sku.name)
             mapping_lookup[
-                (mapping.supplier_name.strip().upper(), mapping.supplier_code.strip().upper())
-            ] = (sku.id, sku.sku_code, sku.name)
+                (_normalize_supplier_name(mapping.supplier_name), _normalize_supplier_code(mapping.supplier_code))
+            ] = normalized_mapping
+            supplier_scoped_candidates[_normalize_supplier_code(sku.sku_code)] = normalized_mapping
+
+    sku_query = db.query(SKU)
+    if not user.is_platform_admin:
+        if user.organization_id:
+            sku_query = sku_query.filter(SKU.organization_id == user.organization_id)
+        else:
+            sku_query = sku_query.filter(SKU.organization_id.is_(None))
+    for sku in sku_query.all():
+        sku_candidates[_normalize_supplier_code(sku.sku_code)] = (sku.id, sku.sku_code, sku.name)
 
     for row in extracted.get("lines", []):
         code = str(row.get("supplier_code", "")).strip()
@@ -203,12 +290,41 @@ async def extract_shipment_preview(
         matched_id = None
         matched_code = None
         matched_name = None
+        needs_confirmation = not code  # flag any no-code line for human review
+        match_source = "unresolved"
+        candidate_matches: list[ShipmentMatchCandidate] = []
         if code:
-            hit = mapping_lookup.get((normalized_supplier.upper(), code.upper()))
-            if not hit:
-                hit = sku_lookup.get(code.upper())
+            # Resolution priority: supplier-specific mapping when supplier code exists
+            hit = mapping_lookup.get((normalized_supplier, _normalize_supplier_code(code)))
             if hit:
                 matched_id, matched_code, matched_name = hit
+                match_source = "supplier_mapping"
+
+        # If supplier code is missing, use an LLM-only resolver on article description.
+        if not matched_id and not code and str(row.get("description", "")).strip():
+            llm_candidate_pool = supplier_scoped_candidates or sku_candidates
+            supplier_name_for_matcher = normalized_supplier or "(unknown)"
+            suggested_code, llm_confidence = await match_shipment_article_name(
+                supplier_name=supplier_name_for_matcher,
+                article_description=str(row.get("description", "")).strip(),
+                candidates=[(v[1], v[2]) for v in llm_candidate_pool.values()],
+            )
+            normalized_suggested_code = _normalize_supplier_code(suggested_code)
+            if (
+                normalized_suggested_code
+                and normalized_suggested_code in llm_candidate_pool
+            ):
+                c_id, c_code, c_name = llm_candidate_pool[normalized_suggested_code]
+                candidate_matches = [ShipmentMatchCandidate(
+                    sku_id=c_id,
+                    sku_code=c_code,
+                    sku_name=c_name,
+                    confidence=llm_confidence,
+                )]
+                needs_confirmation = True
+                match_source = "llm_suggestion"
+                if llm_confidence >= LLM_ARTICLE_MATCH_MIN_CONFIDENCE:
+                    confidence = max(confidence, llm_confidence)
 
         lines.append(ShipmentExtractedLine(
             supplier_code=code,
@@ -219,10 +335,13 @@ async def extract_shipment_preview(
             matched_sku_id=matched_id,
             matched_sku_code=matched_code,
             matched_sku_name=matched_name,
+            needs_confirmation=needs_confirmation,
+            match_source=match_source,
+            candidate_matches=candidate_matches,
         ))
 
     return ShipmentExtractPreviewResponse(
-        supplier_name=(supplier_name.strip() or extracted.get("supplier_name", "")),
+        supplier_name=(supplier_name.strip() or str(extracted.get("supplier_name", "") or "").strip()),
         reference=str(extracted.get("reference", "") or ""),
         document_type=detected_type,
         lines=lines,
@@ -253,11 +372,12 @@ def create_shipment(
         org_id = user.organization_id
     else:
         raise HTTPException(400, "User has no organization")
-    normalized_supplier_name = data.supplier_name.strip() if data.supplier_name else None
+    normalized_supplier_name = _normalize_supplier_name(data.supplier_name)
+    supplier_name_display = data.supplier_name.strip() if data.supplier_name else None
 
     shipment = InboundShipment(
         organization_id=org_id,
-        supplier_name=normalized_supplier_name,
+        supplier_name=supplier_name_display,
         reference=data.reference,
         status="draft",
     )
@@ -268,45 +388,19 @@ def create_shipment(
         db.add(InboundShipmentLine(
             shipment_id=shipment.id,
             sku_id=line.sku_id,
-            supplier_code=line.supplier_code.strip() if line.supplier_code else None,
+            supplier_code=_normalize_supplier_code(line.supplier_code) or None,
             quantity=line.quantity,
         ))
         if normalized_supplier_name and line.supplier_code:
-            normalized_code = line.supplier_code.strip()
+            normalized_code = _normalize_supplier_code(line.supplier_code)
             if normalized_code:
-                existing_mapping = (
-                    db.query(SupplierSKUMapping)
-                    .filter(
-                        SupplierSKUMapping.organization_id == org_id,
-                        SupplierSKUMapping.supplier_name == normalized_supplier_name,
-                        SupplierSKUMapping.supplier_code == normalized_code,
-                    )
-                    .first()
+                _upsert_supplier_mapping(
+                    db,
+                    organization_id=org_id,
+                    supplier_name=normalized_supplier_name,
+                    supplier_code=normalized_code,
+                    sku_id=line.sku_id,
                 )
-                if existing_mapping:
-                    existing_mapping.sku_id = line.sku_id
-                else:
-                    try:
-                        with db.begin_nested():
-                            db.add(SupplierSKUMapping(
-                                organization_id=org_id,
-                                supplier_name=normalized_supplier_name,
-                                supplier_code=normalized_code,
-                                sku_id=line.sku_id,
-                            ))
-                    except IntegrityError:
-                        # Concurrent insert won; find and update the existing row
-                        concurrent_mapping = (
-                            db.query(SupplierSKUMapping)
-                            .filter(
-                                SupplierSKUMapping.organization_id == org_id,
-                                func.upper(SupplierSKUMapping.supplier_name) == normalized_supplier_name.upper(),
-                                SupplierSKUMapping.supplier_code == normalized_code,
-                            )
-                            .first()
-                        )
-                        if concurrent_mapping:
-                            concurrent_mapping.sku_id = line.sku_id
     db.commit()
     db.refresh(shipment)
 
@@ -323,6 +417,106 @@ def create_shipment(
     )
 
     return _shipment_to_response(shipment)
+
+
+@router.get("/supplier-mappings", response_model=list[SupplierMappingResponse])
+def list_supplier_mappings(
+    supplier_name: str | None = None,
+    organization_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    org_id = _resolve_org_id_for_user(user, organization_id)
+    query = db.query(SupplierSKUMapping).options(joinedload(SupplierSKUMapping.sku))
+    if org_id is None and not user.is_platform_admin:
+        return []
+    query = query.filter(SupplierSKUMapping.organization_id == org_id)
+    if supplier_name:
+        query = query.filter(
+            SupplierSKUMapping.supplier_name == _normalize_supplier_name(supplier_name)
+        )
+    rows = query.order_by(
+        SupplierSKUMapping.supplier_name.asc(),
+        SupplierSKUMapping.supplier_code.asc(),
+    ).all()
+    return [_mapping_to_response(row) for row in rows]
+
+
+@router.delete("/supplier-mappings/{mapping_id}", status_code=204)
+def delete_supplier_mapping(
+    mapping_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    mapping = db.get(SupplierSKUMapping, mapping_id)
+    if not mapping:
+        raise HTTPException(404, "Mapping niet gevonden")
+    if not user.is_platform_admin and mapping.organization_id != user.organization_id:
+        raise HTTPException(403, "Geen toegang tot deze mapping")
+    db.delete(mapping)
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/shipments/confirm-line-match", response_model=SupplierMappingResponse)
+def confirm_line_match(
+    body: ConfirmLineMatchRequest,
+    organization_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    org_id = _resolve_org_id_for_user(user, organization_id)
+    sku = db.get(SKU, body.chosen_sku_id)
+    if not sku:
+        raise HTTPException(404, "SKU niet gevonden")
+    if not user.is_platform_admin and sku.organization_id != user.organization_id:
+        raise HTTPException(403, "Geen toegang tot deze SKU")
+
+    normalized_supplier_name = _normalize_supplier_name(body.supplier_name)
+    normalized_supplier_code = _normalize_supplier_code(body.supplier_code)
+    if not normalized_supplier_name or not normalized_supplier_code:
+        missing = []
+        if not normalized_supplier_name:
+            missing.append("supplier_name")
+        if not normalized_supplier_code:
+            missing.append("supplier_code")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Field(s) must be non-empty after normalization: {', '.join(missing)}",
+        )
+    if body.persist_mapping:
+        _upsert_supplier_mapping(
+            db,
+            organization_id=org_id,
+            supplier_name=normalized_supplier_name,
+            supplier_code=normalized_supplier_code,
+            sku_id=sku.id,
+        )
+        db.commit()
+
+    mapping = (
+        db.query(SupplierSKUMapping)
+        .options(joinedload(SupplierSKUMapping.sku))
+        .filter(
+            SupplierSKUMapping.organization_id == org_id,
+            SupplierSKUMapping.supplier_name == normalized_supplier_name,
+            SupplierSKUMapping.supplier_code == normalized_supplier_code,
+        )
+        .first()
+    )
+    if not mapping:
+        return SupplierMappingResponse(
+            id=None,
+            organization_id=org_id,
+            supplier_name=normalized_supplier_name,
+            supplier_code=normalized_supplier_code,
+            sku_id=sku.id,
+            sku_code=sku.sku_code,
+            sku_name=sku.name,
+            created_at=None,
+            updated_at=None,
+        )
+    return _mapping_to_response(mapping)
 
 
 @router.get("/shipments", response_model=list[ShipmentResponse])

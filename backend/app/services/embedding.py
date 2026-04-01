@@ -466,3 +466,84 @@ async def extract_shipment_document(image_bytes: bytes) -> dict:
             "raw_text": cleaned[:1000],
             "lines": [],
         }
+
+
+MATCH_SHIPMENT_ARTICLE_DEFAULT = """You are matching one inbound shipment line to an internal SKU catalog.
+Return ONLY valid JSON:
+{
+  "sku_code": "string",
+  "confidence": 0.0
+}
+
+Rules:
+- Use the line description and optional supplier name.
+- Choose from provided candidates only.
+- If uncertain, return {"sku_code": "", "confidence": 0.0}.
+"""
+
+
+@observe()
+async def match_shipment_article_name(
+    *,
+    supplier_name: str,
+    article_description: str,
+    candidates: list[tuple[str, str]],
+) -> tuple[str | None, float]:
+    """LLM-only resolver for shipment lines without supplier codes.
+
+    Returns (sku_code, confidence). sku_code is None when unresolved.
+    """
+    if not article_description.strip() or not candidates:
+        return None, 0.0
+
+    candidate_lines = "\n".join(f"- {code}: {name}" for code, name in candidates[:200])
+    prompt_template = get_prompt(
+        "match-shipment-article-name",
+        fallback=MATCH_SHIPMENT_ARTICLE_DEFAULT,
+    )
+    prompt = (
+        f"{prompt_template}\n\n"
+        f"Supplier: {supplier_name or '(unknown)'}\n"
+        f"Article description: {article_description}\n\n"
+        f"Candidates:\n{candidate_lines}"
+    )
+
+    client = _get_client()
+    async with _get_semaphore():
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                response = await client.aio.models.generate_content(
+                    model=settings.gemini_vision_model,
+                    contents=[prompt],
+                )
+                break
+            except ClientError as e:
+                if e.code == 429 and attempt < MAX_RETRIES:
+                    delay = RETRY_BASE_DELAY * attempt
+                    logger.warning(
+                        "Gemini rate limited on article matcher (attempt %d/%d), retrying in %ds",
+                        attempt, MAX_RETRIES, delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.exception(
+                        "Article-name matcher API call failed (attempt=%d)", attempt
+                    )
+                    raise
+    cleaned = _strip_markdown_fences((response.text or "").strip())
+
+    import json as _json
+
+    try:
+        payload = _json.loads(cleaned)
+        if not isinstance(payload, dict):
+            return None, 0.0
+        sku_code = str(payload.get("sku_code", "") or "").strip()
+        confidence = float(payload.get("confidence", 0.0) or 0.0)
+        if not sku_code:
+            return None, 0.0
+        confidence = max(0.0, min(1.0, confidence))
+        return sku_code, confidence
+    except Exception:
+        logger.warning("Article-name matcher returned invalid JSON")
+        return None, 0.0
