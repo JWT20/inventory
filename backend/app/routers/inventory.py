@@ -471,6 +471,11 @@ def confirm_line_match(
 
     normalized_supplier_name = _normalize_supplier_name(body.supplier_name)
     normalized_supplier_code = _normalize_supplier_code(body.supplier_code)
+    if not normalized_supplier_name or not normalized_supplier_code:
+        raise HTTPException(
+            status_code=422,
+            detail="Supplier name and code must be non-empty after normalization.",
+        )
     if body.persist_mapping:
         _upsert_supplier_mapping(
             db,
