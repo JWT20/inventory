@@ -416,15 +416,15 @@ class CustomerPriceResponse(BaseModel):
 
 
 class SupplierMappingResponse(BaseModel):
-    id: int
+    id: int | None = None
     organization_id: int | None = None
     supplier_name: str
     supplier_code: str
     sku_id: int
     sku_code: str = ""
     sku_name: str = ""
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

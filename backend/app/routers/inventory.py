@@ -193,8 +193,8 @@ def _upsert_supplier_mapping(
         db.query(SupplierSKUMapping)
         .filter(
             SupplierSKUMapping.organization_id == organization_id,
-            func.upper(SupplierSKUMapping.supplier_name) == supplier_name,
-            func.upper(SupplierSKUMapping.supplier_code) == supplier_code,
+            SupplierSKUMapping.supplier_name == supplier_name,
+            SupplierSKUMapping.supplier_code == supplier_code,
         )
         .first()
     )
@@ -215,13 +215,15 @@ def _upsert_supplier_mapping(
             db.query(SupplierSKUMapping)
             .filter(
                 SupplierSKUMapping.organization_id == organization_id,
-                func.upper(SupplierSKUMapping.supplier_name) == supplier_name,
-                func.upper(SupplierSKUMapping.supplier_code) == supplier_code,
+                SupplierSKUMapping.supplier_name == supplier_name,
+                SupplierSKUMapping.supplier_code == supplier_code,
             )
             .first()
         )
         if concurrent_mapping:
             concurrent_mapping.sku_id = sku_id
+        else:
+            raise
 
 
 @router.post("/shipments/extract-preview", response_model=ShipmentExtractPreviewResponse)
@@ -262,7 +264,7 @@ async def extract_shipment_preview(
                 SupplierSKUMapping.organization_id == user.organization_id
             )
         for mapping, sku in mappings.filter(
-            func.upper(SupplierSKUMapping.supplier_name) == normalized_supplier
+            SupplierSKUMapping.supplier_name == normalized_supplier
         ).all():
             normalized_mapping = (sku.id, sku.sku_code, sku.name)
             mapping_lookup[
@@ -288,7 +290,7 @@ async def extract_shipment_preview(
         matched_id = None
         matched_code = None
         matched_name = None
-        needs_confirmation = False
+        needs_confirmation = not code  # flag any no-code line for human review
         match_source = "unresolved"
         candidate_matches: list[ShipmentMatchCandidate] = []
         if code:
@@ -299,10 +301,11 @@ async def extract_shipment_preview(
                 match_source = "supplier_mapping"
 
         # If supplier code is missing, use an LLM-only resolver on article description.
-        if not matched_id and not code and normalized_supplier and str(row.get("description", "")).strip():
+        if not matched_id and not code and str(row.get("description", "")).strip():
             llm_candidate_pool = supplier_scoped_candidates or sku_candidates
+            supplier_name_for_matcher = normalized_supplier or "(unknown)"
             suggested_code, llm_confidence = await match_shipment_article_name(
-                supplier_name=normalized_supplier,
+                supplier_name=supplier_name_for_matcher,
                 article_description=str(row.get("description", "")).strip(),
                 candidates=[(v[1], v[2]) for v in llm_candidate_pool.values()],
             )
@@ -430,7 +433,7 @@ def list_supplier_mappings(
     query = query.filter(SupplierSKUMapping.organization_id == org_id)
     if supplier_name:
         query = query.filter(
-            func.upper(SupplierSKUMapping.supplier_name) == _normalize_supplier_name(supplier_name)
+            SupplierSKUMapping.supplier_name == _normalize_supplier_name(supplier_name)
         )
     rows = query.order_by(
         SupplierSKUMapping.supplier_name.asc(),
@@ -472,9 +475,14 @@ def confirm_line_match(
     normalized_supplier_name = _normalize_supplier_name(body.supplier_name)
     normalized_supplier_code = _normalize_supplier_code(body.supplier_code)
     if not normalized_supplier_name or not normalized_supplier_code:
+        missing = []
+        if not normalized_supplier_name:
+            missing.append("supplier_name")
+        if not normalized_supplier_code:
+            missing.append("supplier_code")
         raise HTTPException(
             status_code=422,
-            detail="Supplier name and code must be non-empty after normalization.",
+            detail=f"Field(s) must be non-empty after normalization: {', '.join(missing)}",
         )
     if body.persist_mapping:
         _upsert_supplier_mapping(
@@ -491,8 +499,8 @@ def confirm_line_match(
         .options(joinedload(SupplierSKUMapping.sku))
         .filter(
             SupplierSKUMapping.organization_id == org_id,
-            func.upper(SupplierSKUMapping.supplier_name) == normalized_supplier_name,
-            func.upper(SupplierSKUMapping.supplier_code) == normalized_supplier_code,
+            SupplierSKUMapping.supplier_name == normalized_supplier_name,
+            SupplierSKUMapping.supplier_code == normalized_supplier_code,
         )
         .first()
     )

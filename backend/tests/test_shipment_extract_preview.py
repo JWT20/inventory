@@ -75,7 +75,7 @@ def test_extract_preview_maps_using_supplier_mapping(
     db.flush()
     db.add(SupplierSKUMapping(
         organization_id=None,
-        supplier_name="Anfors",
+        supplier_name="ANFORS",
         supplier_code="WINE-001",
         sku_id=mapped_sku.id,
     ))

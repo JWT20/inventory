@@ -509,10 +509,27 @@ async def match_shipment_article_name(
     )
 
     client = _get_client()
-    response = await client.aio.models.generate_content(
-        model=settings.gemini_vision_model,
-        contents=[prompt],
-    )
+    async with _get_semaphore():
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                response = await client.aio.models.generate_content(
+                    model=settings.gemini_vision_model,
+                    contents=[prompt],
+                )
+                break
+            except ClientError as e:
+                if e.code == 429 and attempt < MAX_RETRIES:
+                    delay = RETRY_BASE_DELAY * attempt
+                    logger.warning(
+                        "Gemini rate limited on article matcher (attempt %d/%d), retrying in %ds",
+                        attempt, MAX_RETRIES, delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.exception(
+                        "Article-name matcher API call failed (attempt=%d)", attempt
+                    )
+                    raise
     cleaned = _strip_markdown_fences((response.text or "").strip())
 
     import json as _json

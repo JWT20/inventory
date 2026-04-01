@@ -32,10 +32,7 @@ Add a confirmation endpoint:
 - body: `{supplier_name, supplier_code, chosen_sku_id, persist_mapping: bool}`
 
 ## Why this is safer
-- `POST /api/shipments/confirm-line-match`
-- body: `{supplier_name, supplier_code, chosen_sku_id, persist_mapping: bool}`
 
-## Why this is safer
 - Prevents inventory drift from LLM hallucinations on ambiguous names/vintages.
 - Keeps operator in control on exactly the cases where deterministic keys are missing.
 - Creates an audit trail of why a no-code line was linked to a SKU.
