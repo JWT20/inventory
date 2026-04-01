@@ -214,6 +214,7 @@ def update_sku(
 @router.delete("/{sku_id}", status_code=204)
 def delete_sku(
     sku_id: int,
+    force: bool = False,
     db: Session = Depends(get_db),
     user: User = Depends(require_admin),
 ):
@@ -221,22 +222,29 @@ def delete_sku(
     if not sku:
         raise HTTPException(404, "SKU not found")
 
-    blockers: list[str] = []
-    if db.query(OrderLine).filter(OrderLine.sku_id == sku_id).first():
-        blockers.append("order lines")
-    if db.query(Booking).filter(Booking.sku_id == sku_id).first():
-        blockers.append("bookings")
-    if db.query(InboundShipmentLine).filter(InboundShipmentLine.sku_id == sku_id).first():
-        blockers.append("inbound shipment lines")
-    if db.query(StockMovement).filter(StockMovement.sku_id == sku_id).first():
-        blockers.append("stock movements")
-    if db.query(InventoryBalance).filter(InventoryBalance.sku_id == sku_id).first():
-        blockers.append("inventory balance")
-    if blockers:
-        raise HTTPException(
-            409,
-            f"Cannot delete SKU '{sku.sku_code}': still referenced by {', '.join(blockers)}",
-        )
+    if force:
+        db.query(Booking).filter(Booking.sku_id == sku_id).delete()
+        db.query(OrderLine).filter(OrderLine.sku_id == sku_id).delete()
+        db.query(InboundShipmentLine).filter(InboundShipmentLine.sku_id == sku_id).delete()
+        db.query(StockMovement).filter(StockMovement.sku_id == sku_id).delete()
+        db.query(InventoryBalance).filter(InventoryBalance.sku_id == sku_id).delete()
+    else:
+        blockers: list[str] = []
+        if db.query(OrderLine).filter(OrderLine.sku_id == sku_id).first():
+            blockers.append("order lines")
+        if db.query(Booking).filter(Booking.sku_id == sku_id).first():
+            blockers.append("bookings")
+        if db.query(InboundShipmentLine).filter(InboundShipmentLine.sku_id == sku_id).first():
+            blockers.append("inbound shipment lines")
+        if db.query(StockMovement).filter(StockMovement.sku_id == sku_id).first():
+            blockers.append("stock movements")
+        if db.query(InventoryBalance).filter(InventoryBalance.sku_id == sku_id).first():
+            blockers.append("inventory balance")
+        if blockers:
+            raise HTTPException(
+                409,
+                f"Cannot delete SKU '{sku.sku_code}': still referenced by {', '.join(blockers)}",
+            )
 
     sku_code = sku.sku_code
     db.delete(sku)

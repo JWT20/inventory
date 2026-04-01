@@ -171,7 +171,8 @@ export const api = {
   getSKU: (id: number) => request(`/skus/${id}`),
   updateSKU: (id: number, data: Record<string, unknown>) =>
     json(`/skus/${id}`, "PATCH", data),
-  deleteSKU: (id: number) => request(`/skus/${id}`, { method: "DELETE" }),
+  deleteSKU: (id: number, force = false) =>
+    request(`/skus/${id}${force ? "?force=true" : ""}`, { method: "DELETE" }),
 
   // Reference images
   listImages: (skuId: number) => request(`/skus/${skuId}/images`),
