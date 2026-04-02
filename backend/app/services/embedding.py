@@ -422,10 +422,12 @@ Return ONLY valid JSON in this exact structure:
     {
       "supplier_code": "string",
       "description": "string",
+      "evidence": {
+        "line_text": "raw line text",
+        "quantity_text": "raw quantity fragment",
+        "packaging_text": "raw packaging/pack-size fragment"
+      },
       "quantity_boxes": 12,
-      "quantity_unit": "boxes|colli|ct|fles|fl|unknown",
-      "bottles_per_box": 6,
-      "quantity_text": "raw quantity fragment",
       "confidence": 0.91,
       "bbox": {"x": 0.1, "y": 0.2, "width": 0.6, "height": 0.04, "page": 1}
     }
@@ -433,11 +435,10 @@ Return ONLY valid JSON in this exact structure:
 }
 
 Rules:
-- quantity_boxes is number of full boxes/cases/colli.
-- If the document quantity is in bottles (fles/fl), convert to boxes when pack size is visible (example: "18 fles" with "ct6" means quantity_boxes=3 and bottles_per_box=6).
-- If quantity already represents boxes/colli, keep it unchanged.
-- quantity_unit must match the unit of quantity_boxes ("ct"/"colli"/"boxes" if you convert to boxes, or "fles"/"fl" if the quantity remains in bottles).
-- quantity_text should contain the short raw quantity fragment from the document that you used for your interpretation (including the original units).
+- For each line, first transcribe evidence from the document into evidence.line_text, evidence.quantity_text, and evidence.packaging_text.
+- Then infer quantity_boxes from that evidence (single best interpretation), and return it as an integer.
+- Do not output quantity_unit or bottles_per_box.
+- Keep evidence fields as short verbatim snippets from the document whenever possible.
 - bbox values are normalized between 0 and 1.
 - Include only product lines, ignore totals, pallet costs, transport and signature fields.
 - If uncertain, still include best guess with lower confidence.
