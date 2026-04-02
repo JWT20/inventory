@@ -439,6 +439,7 @@ Rules:
 - quantity_boxes must already be the interpreted number of boxes/cases/colli for receiving.
 - If quantity appears in bottles/fles/fl/flessen, infer equivalent box count when pack-size context is present on the same line or nearby.
 - Keep evidence fields populated so downstream logic can audit your interpretation.
+- You may include extra keys when helpful, but do not omit the required keys in the schema above.
 - bbox values are normalized between 0 and 1.
 - Include only product lines, ignore totals, pallet costs, transport and signature fields.
 - If uncertain, still include best guess with lower confidence.
