@@ -66,6 +66,13 @@ def _normalize_supplier_code(value: str | None) -> str:
 LLM_ARTICLE_MATCH_MIN_CONFIDENCE = 0.80
 
 
+def _to_int(value: object, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
 # ---------------------------------------------------------------------------
 # Shared helper — used by this router AND by receiving.py
 # ---------------------------------------------------------------------------
@@ -283,7 +290,7 @@ async def extract_shipment_preview(
 
     for row in extracted.get("lines", []):
         code = str(row.get("supplier_code", "")).strip()
-        qty = int(row.get("quantity_boxes", 0) or 0)
+        qty = _to_int(row.get("quantity_boxes", 0) if isinstance(row, dict) else 0, 0)
         confidence = float(row.get("confidence", 0.0) or 0.0)
         bbox = row.get("bbox") if isinstance(row.get("bbox"), dict) else None
 

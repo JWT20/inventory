@@ -423,6 +423,11 @@ Return ONLY valid JSON in this exact structure:
       "supplier_code": "string",
       "description": "string",
       "quantity_boxes": 12,
+      "evidence": {
+        "line_text": "full raw line text",
+        "quantity_text": "raw quantity fragment",
+        "packaging_text": "raw packaging fragment"
+      },
       "confidence": 0.91,
       "bbox": {"x": 0.1, "y": 0.2, "width": 0.6, "height": 0.04, "page": 1}
     }
@@ -430,7 +435,10 @@ Return ONLY valid JSON in this exact structure:
 }
 
 Rules:
-- quantity_boxes is number of full boxes/cases/colli. If only bottles are present, convert to box-equivalent only when explicit per-case info is visible, otherwise use 0.
+- First transcribe each product line as-is into evidence.line_text; then infer structured fields from that transcription.
+- quantity_boxes must already be the interpreted number of boxes/cases/colli for receiving.
+- If quantity appears in bottles/fles/fl/flessen, infer equivalent box count when pack-size context is present on the same line or nearby.
+- Keep evidence fields populated so downstream logic can audit your interpretation.
 - bbox values are normalized between 0 and 1.
 - Include only product lines, ignore totals, pallet costs, transport and signature fields.
 - If uncertain, still include best guess with lower confidence.
