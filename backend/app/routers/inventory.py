@@ -288,7 +288,11 @@ async def extract_shipment_preview(
     for sku in sku_query.all():
         sku_candidates[_normalize_supplier_code(sku.sku_code)] = (sku.id, sku.sku_code, sku.name)
 
-    for raw_row in extracted.get("lines", []):
+    extracted_lines = extracted.get("lines", [])
+    if not isinstance(extracted_lines, list):
+        extracted_lines = []
+
+    for raw_row in extracted_lines:
         row = raw_row if isinstance(raw_row, dict) else {}
         code = str(row.get("supplier_code", "")).strip()
         qty = _to_int(row.get("quantity_boxes", 0), 0)

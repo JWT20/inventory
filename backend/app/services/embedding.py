@@ -423,6 +423,8 @@ Return ONLY valid JSON in this exact structure:
       "supplier_code": "string",
       "description": "string",
       "quantity_boxes": 12,
+      "quantity_unit": "boxes|colli|ct|fles|fl|flessen|unknown",
+      "bottles_per_box": 6,
       "evidence": {
         "line_text": "full raw line text",
         "quantity_text": "raw quantity fragment",
@@ -438,6 +440,7 @@ Rules:
 - First transcribe each product line as-is into evidence.line_text; then infer structured fields from that transcription.
 - quantity_boxes must already be the interpreted number of boxes/cases/colli for receiving.
 - If quantity appears in bottles/fles/fl/flessen, infer equivalent box count when pack-size context is present on the same line or nearby.
+- quantity_unit and bottles_per_box are optional but should be filled when visible from the document.
 - Keep evidence fields populated so downstream logic can audit your interpretation.
 - You may include extra keys when helpful, but do not omit the required keys in the schema above.
 - bbox values are normalized between 0 and 1.

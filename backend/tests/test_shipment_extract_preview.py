@@ -288,6 +288,31 @@ def test_extract_preview_tolerates_non_object_lines(
     assert body["lines"][0]["quantity_boxes"] == 0
 
 
+def test_extract_preview_tolerates_non_list_lines_payload(
+    client, db, admin_token, tmp_path
+):
+    mocked = {
+        "supplier_name": "Anfors",
+        "reference": "PKB-781",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": {"supplier_code": "AFO161023"},
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(admin_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={"document_type": "pakbon"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["lines"] == []
+
+
 def test_supplier_mapping_crud_and_confirm_flow(client, db, owner_token, owner_user):
     sku = SKU(sku_code="SKU-MAP-1", name="Map 1", organization_id=owner_user.organization_id)
     db.add(sku)
