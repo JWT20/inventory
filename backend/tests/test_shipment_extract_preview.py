@@ -225,6 +225,41 @@ def test_extract_preview_llm_low_confidence_does_not_autolink(
     assert body["lines"][0]["needs_confirmation"] is True
 
 
+def test_extract_preview_converts_bottle_quantity_to_boxes(
+    client, db, admin_token, tmp_path
+):
+    mocked = {
+        "supplier_name": "Anfors",
+        "reference": "PKB-779",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [
+            {
+                "supplier_code": "AFO161023",
+                "description": "PMC Burgenland Chardonnay23 3 ct6 18 fl",
+                "quantity_boxes": 18,
+                "quantity_unit": "fl",
+                "bottles_per_box": 6,
+                "quantity_text": "3 ct6 18 fl",
+                "confidence": 0.94,
+            }
+        ],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(admin_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={"document_type": "pakbon"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["lines"][0]["quantity_boxes"] == 3
+
+
 def test_supplier_mapping_crud_and_confirm_flow(client, db, owner_token, owner_user):
     sku = SKU(sku_code="SKU-MAP-1", name="Map 1", organization_id=owner_user.organization_id)
     db.add(sku)
