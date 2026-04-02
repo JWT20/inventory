@@ -260,6 +260,76 @@ def test_extract_preview_converts_bottle_quantity_to_boxes(
     assert body["lines"][0]["quantity_boxes"] == 3
 
 
+def test_extract_preview_infers_bottles_per_box_from_quantity_text(
+    client, db, admin_token, tmp_path
+):
+    """bottles_per_box omitted; should be inferred from quantity_text via regex."""
+    mocked = {
+        "supplier_name": "Anfors",
+        "reference": "PKB-780",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [
+            {
+                "supplier_code": "AFO161024",
+                "description": "PMC Burgenland Chardonnay23 ct6",
+                "quantity_boxes": 12,
+                "quantity_unit": "fl",
+                "quantity_text": "12 fl ct6",
+                "confidence": 0.91,
+            }
+        ],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(admin_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={"document_type": "pakbon"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["lines"][0]["quantity_boxes"] == 2  # ceil(12 / 6)
+
+
+def test_extract_preview_bottle_unit_no_bottles_per_box_returns_zero(
+    client, db, admin_token, tmp_path
+):
+    """When quantity_unit is a bottle unit and bottles_per_box cannot be inferred, expect 0."""
+    mocked = {
+        "supplier_name": "Anfors",
+        "reference": "PKB-781",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [
+            {
+                "supplier_code": "AFO161025",
+                "description": "PMC Burgenland Chardonnay23",
+                "quantity_boxes": 18,
+                "quantity_unit": "fl",
+                "quantity_text": "18 fl",
+                "confidence": 0.88,
+            }
+        ],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(admin_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={"document_type": "pakbon"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["lines"][0]["quantity_boxes"] == 0
+
+
 def test_supplier_mapping_crud_and_confirm_flow(client, db, owner_token, owner_user):
     sku = SKU(sku_code="SKU-MAP-1", name="Map 1", organization_id=owner_user.organization_id)
     db.add(sku)

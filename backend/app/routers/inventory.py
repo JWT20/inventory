@@ -109,6 +109,7 @@ def _normalize_quantity_boxes(row: dict) -> int:
         bottles_per_box = _extract_bottles_per_box(row)
         if bottles_per_box > 0 and qty > 0:
             return max(0, math.ceil(qty / bottles_per_box))
+        return 0  # bottle unit but bottles_per_box unknown — cannot safely treat as boxes
     return max(0, qty)
 
 
