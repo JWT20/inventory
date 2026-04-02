@@ -1,5 +1,7 @@
 import logging
 
+import math
+import re
 import uuid
 from datetime import datetime
 
@@ -64,6 +66,51 @@ def _normalize_supplier_code(value: str | None) -> str:
 
 
 LLM_ARTICLE_MATCH_MIN_CONFIDENCE = 0.80
+BOTTLE_UNITS = {"fles", "fl", "flesse", "flessen", "bottle", "bottles"}
+BOX_UNITS = {"ct", "colli", "doos", "dozen", "box", "boxes", "case", "cases", "kist", "kisten"}
+
+
+def _to_int(value: object, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _extract_bottles_per_box(row: dict) -> int:
+    explicit = _to_int(row.get("bottles_per_box"), 0)
+    if explicit > 0:
+        return explicit
+
+    text_fragments = [
+        str(row.get("packaging", "") or ""),
+        str(row.get("quantity_text", "") or ""),
+        str(row.get("description", "") or ""),
+    ]
+    joined = " ".join(text_fragments).lower()
+    for pattern in (
+        r"\bct\s*([0-9]{1,3})\b",
+        r"\bdoos\s*van\s*([0-9]{1,3})\b",
+        r"\b([0-9]{1,3})\s*(?:fles|fl)\s*(?:per\s*(?:doos|ct|box|case))\b",
+    ):
+        match = re.search(pattern, joined)
+        if match:
+            return _to_int(match.group(1), 0)
+    return 0
+
+
+def _normalize_quantity_boxes(row: dict) -> int:
+    qty = _to_int(row.get("quantity_boxes"), 0)
+    unit = str(row.get("quantity_unit", "") or "").strip().lower()
+    if unit in BOX_UNITS:
+        return max(0, qty)
+
+    if unit in BOTTLE_UNITS:
+        bottles_per_box = _extract_bottles_per_box(row)
+        if bottles_per_box > 0 and qty > 0:
+            return max(0, math.ceil(qty / bottles_per_box))
+        return 0  # bottle unit but bottles_per_box unknown — cannot safely treat as boxes
+    return max(0, qty)
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +330,7 @@ async def extract_shipment_preview(
 
     for row in extracted.get("lines", []):
         code = str(row.get("supplier_code", "")).strip()
-        qty = int(row.get("quantity_boxes", 0) or 0)
+        qty = _normalize_quantity_boxes(row if isinstance(row, dict) else {})
         confidence = float(row.get("confidence", 0.0) or 0.0)
         bbox = row.get("bbox") if isinstance(row.get("bbox"), dict) else None
 
