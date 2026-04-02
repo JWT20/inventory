@@ -435,13 +435,21 @@ Return ONLY valid JSON in this exact structure:
 }
 
 Rules:
+- quantity_boxes MUST ALWAYS be the number of boxes/cases/colli to receive for that line (never bottles or individual units).
 - For each line, first transcribe evidence from the document into evidence.line_text, evidence.quantity_text, and evidence.packaging_text.
-- Then infer quantity_boxes from that evidence (single best interpretation), and return it as an integer.
+- Then infer quantity_boxes from that evidence (single best interpretation), and return it as an integer number of boxes/cases/colli.
+- If the document shows bottles or pieces (e.g. "18 fl", "24 btls") and also a pack-size (e.g. "6x75cl", "12 btls/box"), convert to boxes using that pack-size (e.g. 18 bottles with pack-size 6 → quantity_boxes = 3).
+- Never return a raw bottle or piece count in quantity_boxes, even if no packaging_text is present.
+- If you cannot confidently infer the number of boxes/cases from the document, make your best conservative guess and reflect the uncertainty in the confidence score.
 - Do not output quantity_unit or bottles_per_box.
 - Keep evidence fields as short verbatim snippets from the document whenever possible.
 - bbox values are normalized between 0 and 1.
 - Include only product lines, ignore totals, pallet costs, transport and signature fields.
 - If uncertain, still include best guess with lower confidence.
+
+Examples (illustrative, not exhaustive):
+- Document shows line: "ART123 Merlot 6x75cl 18 fl". Use evidence.quantity_text = "18 fl", evidence.packaging_text = "6x75cl", and quantity_boxes = 3 (because 18 ÷ 6 = 3 boxes).
+- Document shows line: "ART456 Chardonnay 12 btls/box 24 btls". Use evidence.quantity_text = "24 btls", evidence.packaging_text = "12 btls/box", and quantity_boxes = 2.
 """
 
 
