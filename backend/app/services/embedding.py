@@ -436,8 +436,8 @@ Rules:
 - quantity_boxes is number of full boxes/cases/colli.
 - If the document quantity is in bottles (fles/fl), convert to boxes when pack size is visible (example: "18 fles" with "ct6" means quantity_boxes=3 and bottles_per_box=6).
 - If quantity already represents boxes/colli, keep it unchanged.
-- quantity_unit must capture what the source quantity refers to ("fles"/"fl" vs "ct"/"colli"/"boxes").
-- quantity_text should contain the short raw fragment used for your quantity interpretation.
+- quantity_unit must match the unit of quantity_boxes ("ct"/"colli"/"boxes" if you convert to boxes, or "fles"/"fl" if the quantity remains in bottles).
+- quantity_text should contain the short raw quantity fragment from the document that you used for your interpretation (including the original units).
 - bbox values are normalized between 0 and 1.
 - Include only product lines, ignore totals, pallet costs, transport and signature fields.
 - If uncertain, still include best guess with lower confidence.
