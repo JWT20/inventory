@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     secret_key: str = _INSECURE_DEFAULT
     gemini_api_key: str = ""
     gemini_vision_model: str = "gemini-2.5-flash"
+    gemini_extraction_model: str = "gemini-2.5-pro"  # stronger model for document extraction
     gemini_embedding_model: str = "gemini-embedding-001"
     gemini_max_concurrent: int = 5  # max concurrent Gemini API requests
     match_threshold: float = 0.80
