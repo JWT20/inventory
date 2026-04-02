@@ -43,6 +43,8 @@ from app.schemas import (
     UpdateCustomerSKUDiscountRequest,
     UpdateDefaultPriceRequest,
 )
+from langfuse import observe, propagate_attributes
+
 from app.services.embedding import extract_shipment_document, match_shipment_article_name
 from app.services.storage import storage
 
@@ -233,6 +235,7 @@ def _upsert_supplier_mapping(
 
 
 @router.post("/shipments/extract-preview", response_model=ShipmentExtractPreviewResponse)
+@observe()
 async def extract_shipment_preview(
     file: UploadFile = File(...),
     supplier_name: str = Form(""),
@@ -241,119 +244,123 @@ async def extract_shipment_preview(
     user: User = Depends(require_warehouse),
 ):
     """Camera-first extraction preview for pakbon/factuur with bbox hints."""
-    image_bytes = file.file.read()
-    if not image_bytes:
-        raise HTTPException(400, "Leeg bestand")
-    if len(image_bytes) > 10 * 1024 * 1024:
-        raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
+    with propagate_attributes(
+        user_id=str(user.id),
+        metadata={"endpoint": "/api/shipments/extract-preview", "username": user.username},
+    ):
+        image_bytes = file.file.read()
+        if not image_bytes:
+            raise HTTPException(400, "Leeg bestand")
+        if len(image_bytes) > 10 * 1024 * 1024:
+            raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
 
-    image_key = f"shipment_docs/{uuid.uuid4().hex}.jpg"
-    storage.save(image_key, image_bytes)
+        image_key = f"shipment_docs/{uuid.uuid4().hex}.jpg"
+        storage.save(image_key, image_bytes)
 
-    extracted = await extract_shipment_document(image_bytes)
-    detected_type = extracted.get("document_type") or "unknown"
-    if document_type in {"pakbon", "invoice"}:
-        detected_type = document_type
+        extracted = await extract_shipment_document(image_bytes)
+        detected_type = extracted.get("document_type") or "unknown"
+        if document_type in {"pakbon", "invoice"}:
+            detected_type = document_type
 
-    lines: list[ShipmentExtractedLine] = []
-    extracted_supplier = str(extracted.get("supplier_name", "") or "")
-    normalized_supplier = _normalize_supplier_name(supplier_name) or _normalize_supplier_name(extracted_supplier)
-    mapping_lookup: dict[tuple[str, str], tuple[int, str, str]] = {}
-    sku_candidates: dict[str, tuple[int, str, str]] = {}
-    supplier_scoped_candidates: dict[str, tuple[int, str, str]] = {}
-    if normalized_supplier:
-        mappings = db.query(SupplierSKUMapping, SKU).join(
-            SKU, SKU.id == SupplierSKUMapping.sku_id
-        )
+        lines: list[ShipmentExtractedLine] = []
+        extracted_supplier = str(extracted.get("supplier_name", "") or "")
+        normalized_supplier = _normalize_supplier_name(supplier_name) or _normalize_supplier_name(extracted_supplier)
+        mapping_lookup: dict[tuple[str, str], tuple[int, str, str]] = {}
+        sku_candidates: dict[str, tuple[int, str, str]] = {}
+        supplier_scoped_candidates: dict[str, tuple[int, str, str]] = {}
+        if normalized_supplier:
+            mappings = db.query(SupplierSKUMapping, SKU).join(
+                SKU, SKU.id == SupplierSKUMapping.sku_id
+            )
+            if not user.is_platform_admin:
+                mappings = mappings.filter(
+                    SupplierSKUMapping.organization_id == user.organization_id
+                )
+            for mapping, sku in mappings.filter(
+                SupplierSKUMapping.supplier_name == normalized_supplier
+            ).all():
+                normalized_mapping = (sku.id, sku.sku_code, sku.name)
+                mapping_lookup[
+                    (_normalize_supplier_name(mapping.supplier_name), _normalize_supplier_code(mapping.supplier_code))
+                ] = normalized_mapping
+                supplier_scoped_candidates[_normalize_supplier_code(sku.sku_code)] = normalized_mapping
+
+        sku_query = db.query(SKU)
         if not user.is_platform_admin:
-            mappings = mappings.filter(
-                SupplierSKUMapping.organization_id == user.organization_id
-            )
-        for mapping, sku in mappings.filter(
-            SupplierSKUMapping.supplier_name == normalized_supplier
-        ).all():
-            normalized_mapping = (sku.id, sku.sku_code, sku.name)
-            mapping_lookup[
-                (_normalize_supplier_name(mapping.supplier_name), _normalize_supplier_code(mapping.supplier_code))
-            ] = normalized_mapping
-            supplier_scoped_candidates[_normalize_supplier_code(sku.sku_code)] = normalized_mapping
+            if user.organization_id:
+                sku_query = sku_query.filter(SKU.organization_id == user.organization_id)
+            else:
+                sku_query = sku_query.filter(SKU.organization_id.is_(None))
+        for sku in sku_query.all():
+            sku_candidates[_normalize_supplier_code(sku.sku_code)] = (sku.id, sku.sku_code, sku.name)
 
-    sku_query = db.query(SKU)
-    if not user.is_platform_admin:
-        if user.organization_id:
-            sku_query = sku_query.filter(SKU.organization_id == user.organization_id)
-        else:
-            sku_query = sku_query.filter(SKU.organization_id.is_(None))
-    for sku in sku_query.all():
-        sku_candidates[_normalize_supplier_code(sku.sku_code)] = (sku.id, sku.sku_code, sku.name)
+        for row in extracted.get("lines", []):
+            code = str(row.get("supplier_code", "")).strip()
+            qty = _to_int((row if isinstance(row, dict) else {}).get("quantity_boxes"), 0)
+            confidence = float(row.get("confidence", 0.0) or 0.0)
+            bbox = row.get("bbox") if isinstance(row.get("bbox"), dict) else None
 
-    for row in extracted.get("lines", []):
-        code = str(row.get("supplier_code", "")).strip()
-        qty = _to_int((row if isinstance(row, dict) else {}).get("quantity_boxes"), 0)
-        confidence = float(row.get("confidence", 0.0) or 0.0)
-        bbox = row.get("bbox") if isinstance(row.get("bbox"), dict) else None
+            matched_id = None
+            matched_code = None
+            matched_name = None
+            needs_confirmation = not code  # flag any no-code line for human review
+            match_source = "unresolved"
+            candidate_matches: list[ShipmentMatchCandidate] = []
+            if code:
+                # Resolution priority: supplier-specific mapping when supplier code exists
+                hit = mapping_lookup.get((normalized_supplier, _normalize_supplier_code(code)))
+                if hit:
+                    matched_id, matched_code, matched_name = hit
+                    match_source = "supplier_mapping"
 
-        matched_id = None
-        matched_code = None
-        matched_name = None
-        needs_confirmation = not code  # flag any no-code line for human review
-        match_source = "unresolved"
-        candidate_matches: list[ShipmentMatchCandidate] = []
-        if code:
-            # Resolution priority: supplier-specific mapping when supplier code exists
-            hit = mapping_lookup.get((normalized_supplier, _normalize_supplier_code(code)))
-            if hit:
-                matched_id, matched_code, matched_name = hit
-                match_source = "supplier_mapping"
+            # If supplier code is missing, use an LLM-only resolver on article description.
+            if not matched_id and not code and str(row.get("description", "")).strip():
+                llm_candidate_pool = supplier_scoped_candidates or sku_candidates
+                supplier_name_for_matcher = normalized_supplier or "(unknown)"
+                suggested_code, llm_confidence = await match_shipment_article_name(
+                    supplier_name=supplier_name_for_matcher,
+                    article_description=str(row.get("description", "")).strip(),
+                    candidates=[(v[1], v[2]) for v in llm_candidate_pool.values()],
+                )
+                normalized_suggested_code = _normalize_supplier_code(suggested_code)
+                if (
+                    normalized_suggested_code
+                    and normalized_suggested_code in llm_candidate_pool
+                ):
+                    c_id, c_code, c_name = llm_candidate_pool[normalized_suggested_code]
+                    candidate_matches = [ShipmentMatchCandidate(
+                        sku_id=c_id,
+                        sku_code=c_code,
+                        sku_name=c_name,
+                        confidence=llm_confidence,
+                    )]
+                    needs_confirmation = True
+                    match_source = "llm_suggestion"
+                    if llm_confidence >= LLM_ARTICLE_MATCH_MIN_CONFIDENCE:
+                        confidence = max(confidence, llm_confidence)
 
-        # If supplier code is missing, use an LLM-only resolver on article description.
-        if not matched_id and not code and str(row.get("description", "")).strip():
-            llm_candidate_pool = supplier_scoped_candidates or sku_candidates
-            supplier_name_for_matcher = normalized_supplier or "(unknown)"
-            suggested_code, llm_confidence = await match_shipment_article_name(
-                supplier_name=supplier_name_for_matcher,
-                article_description=str(row.get("description", "")).strip(),
-                candidates=[(v[1], v[2]) for v in llm_candidate_pool.values()],
-            )
-            normalized_suggested_code = _normalize_supplier_code(suggested_code)
-            if (
-                normalized_suggested_code
-                and normalized_suggested_code in llm_candidate_pool
-            ):
-                c_id, c_code, c_name = llm_candidate_pool[normalized_suggested_code]
-                candidate_matches = [ShipmentMatchCandidate(
-                    sku_id=c_id,
-                    sku_code=c_code,
-                    sku_name=c_name,
-                    confidence=llm_confidence,
-                )]
-                needs_confirmation = True
-                match_source = "llm_suggestion"
-                if llm_confidence >= LLM_ARTICLE_MATCH_MIN_CONFIDENCE:
-                    confidence = max(confidence, llm_confidence)
+            lines.append(ShipmentExtractedLine(
+                supplier_code=code,
+                description=str(row.get("description", "")).strip(),
+                quantity_boxes=max(0, qty),
+                confidence=max(0.0, min(confidence, 1.0)),
+                bbox=bbox,
+                matched_sku_id=matched_id,
+                matched_sku_code=matched_code,
+                matched_sku_name=matched_name,
+                needs_confirmation=needs_confirmation,
+                match_source=match_source,
+                candidate_matches=candidate_matches,
+            ))
 
-        lines.append(ShipmentExtractedLine(
-            supplier_code=code,
-            description=str(row.get("description", "")).strip(),
-            quantity_boxes=max(0, qty),
-            confidence=max(0.0, min(confidence, 1.0)),
-            bbox=bbox,
-            matched_sku_id=matched_id,
-            matched_sku_code=matched_code,
-            matched_sku_name=matched_name,
-            needs_confirmation=needs_confirmation,
-            match_source=match_source,
-            candidate_matches=candidate_matches,
-        ))
-
-    return ShipmentExtractPreviewResponse(
-        supplier_name=(supplier_name.strip() or str(extracted.get("supplier_name", "") or "").strip()),
-        reference=str(extracted.get("reference", "") or ""),
-        document_type=detected_type,
-        lines=lines,
-        image_url=storage.url(image_key),
-        raw_text=str(extracted.get("raw_text", "") or ""),
-    )
+        return ShipmentExtractPreviewResponse(
+            supplier_name=(supplier_name.strip() or str(extracted.get("supplier_name", "") or "").strip()),
+            reference=str(extracted.get("reference", "") or ""),
+            document_type=detected_type,
+            lines=lines,
+            image_url=storage.url(image_key),
+            raw_text=str(extracted.get("raw_text", "") or ""),
+        )
 
 
 @router.post("/shipments", response_model=ShipmentResponse, status_code=201)

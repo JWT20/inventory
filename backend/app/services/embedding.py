@@ -188,17 +188,18 @@ def optimize_for_vision(image_bytes: bytes) -> Image.Image:
 
 
 @observe(as_type="generation")
-async def _call_vision(image: Image.Image, prompt: str) -> str:
+async def _call_vision(image: Image.Image, prompt: str, *, model: str | None = None) -> str:
     """Call Gemini Vision asynchronously with retry logic. Returns raw response text."""
+    model = model or settings.gemini_vision_model
     client = _get_client()
-    logger.info("Calling Gemini Vision model=%s", settings.gemini_vision_model)
+    logger.info("Calling Gemini Vision model=%s", model)
     t0 = time.perf_counter()
 
     async with _get_semaphore():
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 response = await client.aio.models.generate_content(
-                    model=settings.gemini_vision_model,
+                    model=model,
                     contents=[prompt, image],
                 )
                 break
@@ -208,7 +209,7 @@ async def _call_vision(image: Image.Image, prompt: str) -> str:
                     logger.warning("Gemini rate limited (attempt %d/%d), retrying in %ds", attempt, MAX_RETRIES, delay)
                     await asyncio.sleep(delay)
                 else:
-                    logger.exception("Gemini Vision API call failed (model=%s, attempt=%d)", settings.gemini_vision_model, attempt)
+                    logger.exception("Gemini Vision API call failed (model=%s, attempt=%d)", model, attempt)
                     raise
 
     vision_ms = (time.perf_counter() - t0) * 1000
@@ -221,7 +222,7 @@ async def _call_vision(image: Image.Image, prompt: str) -> str:
         image.save(buf, format="JPEG")
         b64 = base64.b64encode(buf.getvalue()).decode()
         langfuse.update_current_generation(
-            model=settings.gemini_vision_model,
+            model=model,
             input=[
                 {"role": "user", "content": [
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
@@ -458,7 +459,7 @@ async def extract_shipment_document(image_bytes: bytes) -> dict:
     """Extract structured shipment data (with bboxes) from a pakbon/factuur photo."""
     image = await asyncio.to_thread(optimize_for_vision, image_bytes)
     prompt = get_prompt("extract-shipment-document", fallback=EXTRACT_SHIPMENT_DEFAULT)
-    raw_text = await _call_vision(image, prompt)
+    raw_text = await _call_vision(image, prompt, model=settings.gemini_extraction_model)
     cleaned = _strip_markdown_fences(raw_text)
     import json as _json
     try:
