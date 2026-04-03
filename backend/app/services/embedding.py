@@ -188,20 +188,32 @@ def optimize_for_vision(image_bytes: bytes) -> Image.Image:
 
 
 @observe(as_type="generation")
-async def _call_vision(image: Image.Image, prompt: str, *, model: str | None = None) -> str:
+async def _call_vision(
+    image: Image.Image,
+    prompt: str,
+    *,
+    model: str | None = None,
+    system_instruction: str | None = None,
+) -> str:
     """Call Gemini Vision asynchronously with retry logic. Returns raw response text."""
     model = model or settings.gemini_vision_model
     client = _get_client()
     logger.info("Calling Gemini Vision model=%s", model)
     t0 = time.perf_counter()
 
+    generate_kwargs: dict = {
+        "model": model,
+        "contents": [prompt, image],
+    }
+    if system_instruction:
+        generate_kwargs["config"] = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+        )
+
     async with _get_semaphore():
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                response = await client.aio.models.generate_content(
-                    model=model,
-                    contents=[prompt, image],
-                )
+                response = await client.aio.models.generate_content(**generate_kwargs)
                 break
             except ClientError as e:
                 if e.code == 429 and attempt < MAX_RETRIES:
@@ -221,14 +233,18 @@ async def _call_vision(image: Image.Image, prompt: str, *, model: str | None = N
         buf = io.BytesIO()
         image.save(buf, format="JPEG")
         b64 = base64.b64encode(buf.getvalue()).decode()
+        langfuse_input = []
+        if system_instruction:
+            langfuse_input.append({"role": "system", "content": system_instruction})
+        langfuse_input.append(
+            {"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                {"type": "text", "text": prompt},
+            ]},
+        )
         langfuse.update_current_generation(
             model=model,
-            input=[
-                {"role": "user", "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                    {"type": "text", "text": prompt},
-                ]},
-            ],
+            input=langfuse_input,
             output=response.text,
         )
     except Exception:
@@ -412,54 +428,74 @@ async def process_image(image_bytes: bytes) -> tuple[str, list[float] | None, bo
     return description, embedding, True
 
 
-EXTRACT_SHIPMENT_DEFAULT = """Analyze this delivery note or invoice image and extract data for inbound shipment receiving.
-Return ONLY valid JSON in this exact structure:
-{
-  "supplier_name": "string",
-  "reference": "string",
-  "document_type": "pakbon|invoice|unknown",
-  "raw_text": "short transcription summary",
-  "lines": [
-    {
-      "supplier_code": "string",
-      "description": "string",
-      "evidence": {
-        "line_text": "raw line text",
-        "quantity_text": "raw quantity fragment",
-        "packaging_text": "raw packaging/pack-size fragment"
-      },
-      "quantity_boxes": 12,
-      "confidence": 0.91,
-      "bbox": {"x": 0.1, "y": 0.2, "width": 0.6, "height": 0.04, "page": 1}
-    }
-  ]
-}
+EXTRACT_SHIPMENT_SYSTEM_DEFAULT = "\n".join([
+    "You are a delivery-note and invoice analysis agent for an inbound warehouse receiving system.",
+    "You will receive a single document image (pakbon, factuur, or similar).",
+    "Extract all product lines visible on the document.",
+    "Output MUST be valid JSON matching the structure below exactly.",
+    "",
+    "JSON structure:",
+    "{",
+    '  "supplier_name": "string",',
+    '  "reference": "string",',
+    '  "document_type": "pakbon|invoice|unknown",',
+    '  "raw_text": "short transcription summary",',
+    '  "lines": [',
+    "    {",
+    '      "supplier_code": "string",',
+    '      "description": "string",',
+    '      "evidence": {',
+    '        "line_text": "raw line text",',
+    '        "quantity_text": "raw quantity fragment",',
+    '        "packaging_text": "raw packaging/pack-size fragment"',
+    "      },",
+    '      "quantity_boxes": 12,',
+    '      "confidence": 0.91,',
+    '      "bbox": {"x": 0.1, "y": 0.2, "width": 0.6, "height": 0.04, "page": 1}',
+    "    }",
+    "  ]",
+    "}",
+    "",
+    "Quantity rules (IMPORTANT):",
+    "- quantity_boxes MUST ALWAYS be the number of boxes/cases/colli to receive for that line — never bottles or individual units.",
+    "- First transcribe evidence from the document into evidence.line_text, evidence.quantity_text, and evidence.packaging_text.",
+    "- Then infer quantity_boxes from that evidence as an integer (single best interpretation).",
+    '- If the document shows bottles or pieces (e.g. "18 fl", "24 btls") and a pack-size (e.g. "6x75cl", "12 btls/box"), convert to boxes using that pack-size (e.g. 18 bottles with pack-size 6 → quantity_boxes = 3).',
+    "- Never return a raw bottle or piece count in quantity_boxes, even if no packaging_text is present.",
+    "- If you cannot confidently infer boxes from the document, make a conservative guess and reflect uncertainty in the confidence score.",
+    "- Do not output quantity_unit or bottles_per_box.",
+    "",
+    "Evidence rules:",
+    "- Keep evidence fields as short verbatim snippets from the document.",
+    "- bbox values are normalized between 0 and 1.",
+    "",
+    "Filtering rules:",
+    "- Include only product lines.",
+    "- Ignore totals, pallet costs, transport, and signature fields.",
+    "- If uncertain about a line, include it with a lower confidence score.",
+    "",
+    "Examples:",
+    '- "ART123 Merlot 6x75cl 18 fl" → evidence.quantity_text = "18 fl", evidence.packaging_text = "6x75cl", quantity_boxes = 3 (18 ÷ 6 = 3).',
+    '- "ART456 Chardonnay 12 btls/box 24 btls" → evidence.quantity_text = "24 btls", evidence.packaging_text = "12 btls/box", quantity_boxes = 2.',
+])
 
-Rules:
-- quantity_boxes MUST ALWAYS be the number of boxes/cases/colli to receive for that line (never bottles or individual units).
-- For each line, first transcribe evidence from the document into evidence.line_text, evidence.quantity_text, and evidence.packaging_text.
-- Then infer quantity_boxes from that evidence (single best interpretation), and return it as an integer number of boxes/cases/colli.
-- If the document shows bottles or pieces (e.g. "18 fl", "24 btls") and also a pack-size (e.g. "6x75cl", "12 btls/box"), convert to boxes using that pack-size (e.g. 18 bottles with pack-size 6 → quantity_boxes = 3).
-- Never return a raw bottle or piece count in quantity_boxes, even if no packaging_text is present.
-- If you cannot confidently infer the number of boxes/cases from the document, make your best conservative guess and reflect the uncertainty in the confidence score.
-- Do not output quantity_unit or bottles_per_box.
-- Keep evidence fields as short verbatim snippets from the document whenever possible.
-- bbox values are normalized between 0 and 1.
-- Include only product lines, ignore totals, pallet costs, transport and signature fields.
-- If uncertain, still include best guess with lower confidence.
-
-Examples (illustrative, not exhaustive):
-- Document shows line: "ART123 Merlot 6x75cl 18 fl". Use evidence.quantity_text = "18 fl", evidence.packaging_text = "6x75cl", and quantity_boxes = 3 (because 18 ÷ 6 = 3 boxes).
-- Document shows line: "ART456 Chardonnay 12 btls/box 24 btls". Use evidence.quantity_text = "24 btls", evidence.packaging_text = "12 btls/box", and quantity_boxes = 2.
-"""
+EXTRACT_SHIPMENT_USER_PROMPT = "\n".join([
+    "Return ONLY JSON matching the schema.",
+    "Do not omit fields; use empty string for missing string fields and [] for missing arrays.",
+])
 
 
 @observe()
 async def extract_shipment_document(image_bytes: bytes) -> dict:
     """Extract structured shipment data (with bboxes) from a pakbon/factuur photo."""
     image = await asyncio.to_thread(optimize_for_vision, image_bytes)
-    prompt = get_prompt("extract-shipment-document", fallback=EXTRACT_SHIPMENT_DEFAULT)
-    raw_text = await _call_vision(image, prompt, model=settings.gemini_extraction_model)
+    system_prompt = get_prompt("extract-shipment-document", fallback=EXTRACT_SHIPMENT_SYSTEM_DEFAULT)
+    raw_text = await _call_vision(
+        image,
+        EXTRACT_SHIPMENT_USER_PROMPT,
+        model=settings.gemini_extraction_model,
+        system_instruction=system_prompt,
+    )
     cleaned = _strip_markdown_fences(raw_text)
     import json as _json
     try:
@@ -471,8 +507,18 @@ async def extract_shipment_document(image_bytes: bytes) -> dict:
         parsed.setdefault("document_type", "unknown")
         parsed.setdefault("raw_text", cleaned[:500])
         parsed.setdefault("lines", [])
+        # Normalize None to "" for top-level string fields so callers never see "None"
+        for _str_field in ("supplier_name", "reference", "document_type", "raw_text"):
+            if parsed.get(_str_field) is None:
+                parsed[_str_field] = ""
         if not isinstance(parsed["lines"], list):
             parsed["lines"] = []
+        # Normalize None → "" for string fields within each line
+        for line in parsed["lines"]:
+            if isinstance(line, dict):
+                for field_name in ("supplier_code", "description"):
+                    if line.get(field_name) is None:
+                        line[field_name] = ""
         return parsed
     except Exception:
         logger.warning("Shipment extraction not valid JSON; returning empty fallback")

@@ -249,6 +249,15 @@ export function InboundPage() {
     }
   }
 
+  function updateLineQuantity(lineIndex: number, newQty: number) {
+    setPreview((prev) => {
+      if (!prev) return prev;
+      const nextLines = [...prev.lines];
+      nextLines[lineIndex] = { ...nextLines[lineIndex], quantity_boxes: Math.max(0, newQty) };
+      return { ...prev, lines: nextLines };
+    });
+  }
+
   const selectedBox =
     selectedLineIndex != null && preview?.lines[selectedLineIndex]?.bbox
       ? preview.lines[selectedLineIndex].bbox
@@ -360,9 +369,37 @@ export function InboundPage() {
                   >
                     <p className="text-sm font-medium">{line.supplier_code || "(geen code)"}</p>
                     <p className="text-sm">{line.description || "-"}</p>
-                    <p className="text-xs text-muted-foreground">
-                      Boxes: {line.quantity_boxes} · Confidence: {(line.confidence * 100).toFixed(0)}%
-                    </p>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground" onClick={(e) => e.stopPropagation()}>
+                      <span>Boxes:</span>
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          type="button"
+                          aria-label="Decrease boxes"
+                          className="w-5 h-5 rounded bg-muted text-foreground text-xs font-bold flex items-center justify-center disabled:opacity-30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                          disabled={line.quantity_boxes <= 0}
+                          onClick={() => updateLineQuantity(idx, line.quantity_boxes - 1)}
+                        >
+                          &minus;
+                        </button>
+                        <input
+                          type="number"
+                          min={0}
+                          aria-label="Number of boxes"
+                          className="w-12 text-center border border-border rounded px-1 py-0.5 text-xs bg-background tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          value={line.quantity_boxes}
+                          onChange={(e) => updateLineQuantity(idx, parseInt(e.target.value, 10) || 0)}
+                        />
+                        <button
+                          type="button"
+                          aria-label="Increase boxes"
+                          className="w-5 h-5 rounded bg-muted text-foreground text-xs font-bold flex items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                          onClick={() => updateLineQuantity(idx, line.quantity_boxes + 1)}
+                        >
+                          +
+                        </button>
+                      </div>
+                      <span>· Confidence: {(line.confidence * 100).toFixed(0)}%</span>
+                    </div>
                     <p className="text-xs mt-1">
                       {line.matched_sku_code
                         ? `Match: ${line.matched_sku_code} - ${line.matched_sku_name}`
