@@ -374,7 +374,8 @@ export function InboundPage() {
                       <div className="inline-flex items-center gap-1">
                         <button
                           type="button"
-                          className="w-5 h-5 rounded bg-muted text-foreground text-xs font-bold flex items-center justify-center disabled:opacity-30"
+                          aria-label="Decrease boxes"
+                          className="w-5 h-5 rounded bg-muted text-foreground text-xs font-bold flex items-center justify-center disabled:opacity-30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
                           disabled={line.quantity_boxes <= 0}
                           onClick={() => updateLineQuantity(idx, line.quantity_boxes - 1)}
                         >
@@ -383,13 +384,15 @@ export function InboundPage() {
                         <input
                           type="number"
                           min={0}
+                          aria-label="Number of boxes"
                           className="w-12 text-center border border-border rounded px-1 py-0.5 text-xs bg-background tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           value={line.quantity_boxes}
                           onChange={(e) => updateLineQuantity(idx, parseInt(e.target.value, 10) || 0)}
                         />
                         <button
                           type="button"
-                          className="w-5 h-5 rounded bg-muted text-foreground text-xs font-bold flex items-center justify-center"
+                          aria-label="Increase boxes"
+                          className="w-5 h-5 rounded bg-muted text-foreground text-xs font-bold flex items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
                           onClick={() => updateLineQuantity(idx, line.quantity_boxes + 1)}
                         >
                           +

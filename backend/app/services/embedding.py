@@ -481,7 +481,7 @@ EXTRACT_SHIPMENT_SYSTEM_DEFAULT = "\n".join([
 
 EXTRACT_SHIPMENT_USER_PROMPT = "\n".join([
     "Return ONLY JSON matching the schema.",
-    "Do not omit fields; use null/[] as appropriate.",
+    "Do not omit fields; use empty string for missing string fields and [] for missing arrays.",
 ])
 
 
@@ -507,8 +507,18 @@ async def extract_shipment_document(image_bytes: bytes) -> dict:
         parsed.setdefault("document_type", "unknown")
         parsed.setdefault("raw_text", cleaned[:500])
         parsed.setdefault("lines", [])
+        # Normalize None to "" for top-level string fields so callers never see "None"
+        for _str_field in ("supplier_name", "reference", "document_type", "raw_text"):
+            if parsed.get(_str_field) is None:
+                parsed[_str_field] = ""
         if not isinstance(parsed["lines"], list):
             parsed["lines"] = []
+        # Normalize None → "" for string fields within each line
+        for line in parsed["lines"]:
+            if isinstance(line, dict):
+                for field_name in ("supplier_code", "description"):
+                    if line.get(field_name) is None:
+                        line[field_name] = ""
         return parsed
     except Exception:
         logger.warning("Shipment extraction not valid JSON; returning empty fallback")
