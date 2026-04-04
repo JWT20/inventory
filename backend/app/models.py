@@ -375,6 +375,52 @@ class SupplierSKUMapping(Base):
     sku: Mapped["SKU"] = relationship()
 
 
+class ProductAttribute(Base):
+    """Defines an attribute type (kenmerk) for products within an organization.
+
+    Examples: 'Druivensoort', 'Regio', 'Smaakprofiel', 'Allergenen'.
+    """
+    __tablename__ = "product_attributes"
+    __table_args__ = (UniqueConstraint("organization_id", "name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE")
+    )
+    name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    organization: Mapped["Organization"] = relationship()
+    values: Mapped[list["ProductAttributeValue"]] = relationship(
+        back_populates="attribute", cascade="all, delete-orphan",
+        order_by="ProductAttributeValue.sort_order, ProductAttributeValue.value",
+    )
+
+
+class ProductAttributeValue(Base):
+    """A predefined allowed value (kenmerk waarde) for a product attribute.
+
+    Examples for attribute 'Wijntype': 'Rood', 'Wit', 'Rosé', 'Mousseux'.
+    """
+    __tablename__ = "product_attribute_values"
+    __table_args__ = (UniqueConstraint("attribute_id", "value"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    attribute_id: Mapped[int] = mapped_column(
+        ForeignKey("product_attributes.id", ondelete="CASCADE")
+    )
+    value: Mapped[str] = mapped_column(String(255))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    attribute: Mapped["ProductAttribute"] = relationship(back_populates="values")
+
+
 class InventoryBalance(Base):
     __tablename__ = "inventory_balances"
     __table_args__ = (UniqueConstraint("sku_id", "organization_id"),)
