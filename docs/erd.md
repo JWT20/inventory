@@ -39,7 +39,7 @@ erDiagram
     sku_attributes {
         int id PK
         int sku_id FK
-        varchar key "producent, wijnaam, jaargang, ..."
+        varchar key "producent, wijnaam, wijntype, ..."
         varchar value
     }
 

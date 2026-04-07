@@ -174,7 +174,6 @@ function SKUDialog({
   const [producent, setProducent] = useState("");
   const [wijnaam, setWijnaam] = useState("");
   const [wijntype, setWijntype] = useState("");
-  const [jaargang, setJaargang] = useState("");
   const [volume, setVolume] = useState("");
   const [supplierId, setSupplierId] = useState<number | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -184,7 +183,6 @@ function SKUDialog({
     producent,
     wijnaam,
     wijntype,
-    jaargang,
     volume,
   });
   const [currentId, setCurrentId] = useState<number | null>(null);
@@ -205,7 +203,6 @@ function SKUDialog({
       setProducent(a.producent || "");
       setWijnaam(a.wijnaam || "");
       setWijntype(a.wijntype || "");
-      setJaargang(a.jaargang || "");
       setVolume(a.volume || "");
       setSupplierId(sku.supplier_id ?? null);
       setCurrentId(sku.id);
@@ -214,7 +211,6 @@ function SKUDialog({
       setProducent("");
       setWijnaam("");
       setWijntype("");
-      setJaargang("");
       setVolume("");
       setSupplierId(null);
       setCurrentId(null);
@@ -456,22 +452,13 @@ function SKUDialog({
               />
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-xs">Type</Label>
               <Input
                 value={wijntype}
                 onChange={(e) => setWijntype(e.target.value)}
                 placeholder="Rood"
-                required
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Jaargang</Label>
-              <Input
-                value={jaargang}
-                onChange={(e) => setJaargang(e.target.value)}
-                placeholder="2019"
                 required
               />
             </div>

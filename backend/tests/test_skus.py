@@ -9,7 +9,6 @@ WINE_DATA = {
         "producent": "Château Test",
         "wijnaam": "Grand Vin",
         "wijntype": "Rood",
-        "jaargang": "2020",
         "volume": "750",
     },
 }
@@ -69,7 +68,7 @@ class TestCreateSKU:
         )
         assert resp.status_code == 201
         data = resp.json()
-        assert data["sku_code"] == "CHAT-GRAN-ROO-2020-750"
+        assert data["sku_code"] == "CHAT-GRAN-ROO-750"
         assert data["attributes"]["producent"] == "Château Test"
         assert data["attributes"]["wijnaam"] == "Grand Vin"
         assert data["active"] is True
@@ -94,12 +93,12 @@ class TestCreateSKU:
         # Create first
         from app.models import SKU
         sku = SKU(
-            sku_code="CHAT-GRAN-ROO-2020-750", name="Existing",
+            sku_code="CHAT-GRAN-ROO-750", name="Existing",
             category="wine",
         )
         sku.set_attributes({
             "producent": "Château Test", "wijnaam": "Grand Vin",
-            "wijntype": "Rood", "jaargang": "2020", "volume": "750",
+            "wijntype": "Rood", "volume": "750",
         })
         db.add(sku)
         db.commit()

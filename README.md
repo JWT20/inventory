@@ -98,12 +98,12 @@ docker compose up -d
 ## Workflow
 
 ### 1. Register products (Producten tab)
-1. Click **+ Nieuw**, fill in wine details (producent, wijnaam, type, jaargang, volume)
-2. SKU code is auto-generated from wine fields (e.g. `CHAT-GRAN-ROO-2020-750`)
+1. Click **+ Nieuw**, fill in wine details (producent, wijnaam, type, volume)
+2. SKU code is auto-generated from wine fields (e.g. `CHAT-GRAN-ROO-750`)
 3. Upload one or more reference photos — each photo is processed through Gemini Vision → embedding pipeline
 
 ### 2. Create an order (Orders tab)
-1. **CSV upload**: Upload a semicolon-delimited CSV with columns: `klant;producent;wijnaam;type;jaargang;volume;aantal`
+1. **CSV upload**: Upload a semicolon-delimited CSV with columns: `klant;producent;wijnaam;type;volume;aantal`
 2. **Manual form**: Create an order with inline wine details per line
 3. The system auto-matches or creates SKUs and sets the order status:
    - `draft` — all SKUs already have reference images
@@ -188,9 +188,9 @@ docker compose up -d
 Semicolon-delimited, UTF-8 (BOM supported). Example:
 
 ```csv
-klant;producent;wijnaam;type;jaargang;volume;aantal
-Bakker;Château Margaux;Grand Vin;Rood;2019;750;6
-De Vries;Domaine Leflaive;Puligny-Montrachet;Wit;2020;750;12
+klant;producent;wijnaam;type;volume;aantal
+Bakker;Château Margaux;Grand Vin;Rood;750;6
+De Vries;Domaine Leflaive;Puligny-Montrachet;Wit;750;12
 ```
 
 Rows with the same SKU code and customer are deduplicated and quantities are summed.
