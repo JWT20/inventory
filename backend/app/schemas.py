@@ -102,6 +102,12 @@ class OrganizationCreate(BaseModel):
     enabled_modules: list[str] = ["inventory", "orders"]
 
 
+class OrganizationUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    slug: str | None = Field(None, min_length=1, max_length=100)
+    enabled_modules: list[str] | None = None
+
+
 class OrganizationResponse(BaseModel):
     id: int
     name: str
@@ -281,6 +287,16 @@ class ManualOrderLineCreate(BaseModel):
 class ManualOrderCreate(BaseModel):
     organization_id: int | None = None
     lines: list[ManualOrderLineCreate] = Field(..., min_length=1)
+
+
+class OrderLineAdd(BaseModel):
+    customer_id: int = Field(..., gt=0)
+    sku_id: int = Field(..., gt=0)
+    quantity: int = Field(..., gt=0)
+
+
+class OrderLineUpdate(BaseModel):
+    quantity: int = Field(..., gt=0)
 
 
 class BookingResponse(BaseModel):
@@ -494,6 +510,50 @@ class UpdateDefaultPriceRequest(BaseModel):
 
 class UpdateCustomerPriceRequest(BaseModel):
     unit_price: float | None = None
+
+
+# --- Product Attribute Definitions (Kenmerken) ---
+
+class ProductAttributeValueCreate(BaseModel):
+    value: str = Field(..., min_length=1, max_length=255)
+    sort_order: int = 0
+
+
+class ProductAttributeValueUpdate(BaseModel):
+    value: str | None = Field(None, min_length=1, max_length=255)
+    sort_order: int | None = None
+
+
+class ProductAttributeValueResponse(BaseModel):
+    id: int
+    attribute_id: int
+    value: str
+    sort_order: int = 0
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ProductAttributeCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str | None = Field(None, max_length=500)
+    values: list[ProductAttributeValueCreate] = []
+
+
+class ProductAttributeUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=100)
+    description: str | None = None
+
+
+class ProductAttributeResponse(BaseModel):
+    id: int
+    organization_id: int
+    name: str
+    description: str | None = None
+    values: list[ProductAttributeValueResponse] = []
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class UpdateCustomerSKUDiscountRequest(BaseModel):

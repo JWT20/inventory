@@ -35,6 +35,7 @@ from app.schemas import (
     LogoutRequest,
     OrganizationCreate,
     OrganizationResponse,
+    OrganizationUpdate,
     RefreshRequest,
     RefreshResponse,
     TokenResponse,
@@ -358,6 +359,44 @@ def create_organization(
         enabled_modules=json.dumps(data.enabled_modules),
     )
     db.add(org)
+    db.commit()
+    db.refresh(org)
+    return OrganizationResponse(
+        id=org.id,
+        name=org.name,
+        slug=org.slug,
+        enabled_modules=org.modules,
+        created_at=org.created_at,
+    )
+
+
+@router.patch("/organizations/{org_id}", response_model=OrganizationResponse)
+def update_organization(
+    org_id: int,
+    data: OrganizationUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    org = db.get(Organization, org_id)
+    if not org:
+        raise HTTPException(404, "Organization not found")
+
+    if data.name is not None:
+        org.name = data.name
+
+    if data.slug is not None:
+        conflict = (
+            db.query(Organization)
+            .filter(Organization.slug == data.slug, Organization.id != org_id)
+            .first()
+        )
+        if conflict:
+            raise HTTPException(400, f"Slug '{data.slug}' is already taken")
+        org.slug = data.slug
+
+    if data.enabled_modules is not None:
+        org.modules = data.enabled_modules
+
     db.commit()
     db.refresh(org)
     return OrganizationResponse(

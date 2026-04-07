@@ -14,7 +14,9 @@ from app.models import Customer, CustomerSKU, Order, OrderLine, SKU, User
 from app.schemas import (
     BookingResponse,
     ManualOrderCreate,
+    OrderLineAdd,
     OrderLineResponse,
+    OrderLineUpdate,
     OrderResponse,
 )
 
@@ -368,6 +370,220 @@ def delete_order(
         resource_type="order",
         resource_id=order_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Order line management
+# ---------------------------------------------------------------------------
+
+EDITABLE_STATUSES = ("draft", "pending_images")
+ADDABLE_STATUSES = ("draft", "pending_images", "active")
+
+
+def _get_editable_order(order_id: int, db: Session, user: User) -> Order:
+    """Fetch an order and check access. Raises 404/403 if not found or forbidden."""
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+    if not user.is_platform_admin:
+        if user.organization_id and order.organization_id != user.organization_id:
+            raise HTTPException(403, "Geen toegang tot deze order")
+        if user.role == "customer" and order.created_by != user.id:
+            raise HTTPException(403, "Geen toegang tot deze order")
+    return order
+
+
+def _recompute_order_status(order: Order) -> None:
+    """Recompute order status based on SKU images and booking progress."""
+    if order.status in ("completed", "cancelled"):
+        return
+    all_have_images = all(len(l.sku.reference_images) > 0 for l in order.lines)
+    all_booked = all(l.booked_count >= l.quantity for l in order.lines)
+    if all_booked and order.status == "active":
+        order.status = "completed"
+    elif order.status == "active":
+        pass  # stay active
+    elif all_have_images:
+        order.status = "active" if order.status == "active" else "draft"
+    else:
+        order.status = "pending_images"
+
+
+@router.post("/{order_id}/lines", response_model=OrderResponse)
+def add_order_line(
+    order_id: int,
+    body: OrderLineAdd,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_can_create_orders),
+):
+    """Add a line to an order. Allowed on draft, pending_images, and active orders."""
+    order = _get_editable_order(order_id, db, user)
+
+    if order.status not in ADDABLE_STATUSES:
+        raise HTTPException(
+            409, f"Kan geen regels toevoegen aan een order met status '{order.status}'"
+        )
+
+    # Customer-role users can only add for their linked customer
+    if user.role == "customer" and user.customer_id:
+        if body.customer_id != user.customer_id:
+            raise HTTPException(403, "Klantgebruikers kunnen alleen voor hun eigen klant bestellen")
+
+    customer = db.get(Customer, body.customer_id)
+    if not customer:
+        raise HTTPException(404, f"Klant met id {body.customer_id} niet gevonden")
+    sku = db.get(SKU, body.sku_id)
+    if not sku:
+        raise HTTPException(404, f"SKU met id {body.sku_id} niet gevonden")
+
+    # Check if a line for this (customer, sku) already exists — merge quantities
+    existing_line = (
+        db.query(OrderLine)
+        .filter(
+            OrderLine.order_id == order_id,
+            OrderLine.customer_id == body.customer_id,
+            OrderLine.sku_id == body.sku_id,
+        )
+        .first()
+    )
+    if existing_line:
+        existing_line.quantity += body.quantity
+    else:
+        db.add(OrderLine(
+            order_id=order_id,
+            sku_id=body.sku_id,
+            customer_id=body.customer_id,
+            klant=customer.name,
+            quantity=body.quantity,
+        ))
+
+    _upsert_customer_skus(db, {(body.customer_id, body.sku_id)})
+    _recompute_order_status(order)
+    db.commit()
+    db.refresh(order)
+
+    publish_event(
+        "order_line_added",
+        details={
+            "order_reference": order.reference,
+            "sku_id": body.sku_id,
+            "customer_id": body.customer_id,
+            "quantity": body.quantity,
+        },
+        user=user,
+        resource_type="order",
+        resource_id=order.id,
+    )
+    return _order_to_response(order, db)
+
+
+@router.patch("/{order_id}/lines/{line_id}", response_model=OrderResponse)
+def update_order_line(
+    order_id: int,
+    line_id: int,
+    body: OrderLineUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_can_create_orders),
+):
+    """Update quantity of an order line.
+
+    - Draft/pending_images: quantity can be freely changed (>= 1).
+    - Active: quantity can only be increased (not decreased below booked_count).
+    """
+    order = _get_editable_order(order_id, db, user)
+
+    if order.status not in ADDABLE_STATUSES:
+        raise HTTPException(
+            409, f"Kan geen regels wijzigen op een order met status '{order.status}'"
+        )
+
+    line = (
+        db.query(OrderLine)
+        .filter(OrderLine.id == line_id, OrderLine.order_id == order_id)
+        .first()
+    )
+    if not line:
+        raise HTTPException(404, "Orderregel niet gevonden")
+
+    if body.quantity < line.booked_count:
+        raise HTTPException(
+            409,
+            f"Kan hoeveelheid niet verlagen onder het aantal al gescande dozen ({line.booked_count})",
+        )
+
+    if order.status == "active" and body.quantity < line.quantity:
+        raise HTTPException(
+            409, "Kan hoeveelheid niet verlagen op een actieve order — alleen verhogen is toegestaan"
+        )
+
+    line.quantity = body.quantity
+    _recompute_order_status(order)
+    db.commit()
+    db.refresh(order)
+
+    publish_event(
+        "order_line_updated",
+        details={
+            "order_reference": order.reference,
+            "line_id": line_id,
+            "new_quantity": body.quantity,
+        },
+        user=user,
+        resource_type="order",
+        resource_id=order.id,
+    )
+    return _order_to_response(order, db)
+
+
+@router.delete("/{order_id}/lines/{line_id}", response_model=OrderResponse)
+def delete_order_line(
+    order_id: int,
+    line_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_can_create_orders),
+):
+    """Delete an order line. Only allowed on draft/pending_images orders with no bookings."""
+    order = _get_editable_order(order_id, db, user)
+
+    if order.status not in EDITABLE_STATUSES:
+        raise HTTPException(
+            409, f"Kan geen regels verwijderen van een order met status '{order.status}'"
+        )
+
+    line = (
+        db.query(OrderLine)
+        .filter(OrderLine.id == line_id, OrderLine.order_id == order_id)
+        .first()
+    )
+    if not line:
+        raise HTTPException(404, "Orderregel niet gevonden")
+
+    if line.booked_count > 0:
+        raise HTTPException(
+            409, f"Kan regel niet verwijderen — er zijn al {line.booked_count} dozen gescand"
+        )
+
+    if len(order.lines) <= 1:
+        raise HTTPException(
+            409, "Kan de laatste regel niet verwijderen — verwijder de hele order"
+        )
+
+    db.delete(line)
+    _recompute_order_status(order)
+    db.commit()
+    db.refresh(order)
+
+    publish_event(
+        "order_line_removed",
+        details={
+            "order_reference": order.reference,
+            "line_id": line_id,
+        },
+        user=user,
+        resource_type="order",
+        resource_id=order.id,
+    )
+    return _order_to_response(order, db)
 
 
 @router.get("/{order_id}/bookings", response_model=list[BookingResponse])
