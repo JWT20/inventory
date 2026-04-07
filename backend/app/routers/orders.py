@@ -394,7 +394,7 @@ def weekly_order_summary(
     grand_total_qty = 0
     grand_total_val = 0.0
 
-    for (sup_id, sup_name), sku_map in sorted(supplier_groups.items(), key=lambda x: x[1]):
+    for (sup_id, sup_name), sku_map in sorted(supplier_groups.items(), key=lambda x: x[0][1]):
         wines_out: list[WeeklySummaryWine] = []
         sup_qty = 0
         sup_val = 0.0
