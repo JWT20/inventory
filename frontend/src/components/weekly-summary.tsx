@@ -3,6 +3,15 @@ import { toast } from "@/App";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 interface CustomerOrder {
   customer_name: string;
@@ -112,7 +121,20 @@ export function WeeklySummaryPage() {
       </div>
 
       {loading && (
-        <p className="text-center text-muted-foreground py-10">Laden...</p>
+        <div className="space-y-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Card key={i} className="p-4">
+              <div className="flex justify-between items-center">
+                <Skeleton className="h-5 w-40" />
+                <Skeleton className="h-5 w-24" />
+              </div>
+              <div className="mt-3 space-y-2">
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-full" />
+              </div>
+            </Card>
+          ))}
+        </div>
       )}
 
       {!loading && data && data.suppliers.length === 0 && (
@@ -170,25 +192,30 @@ export function WeeklySummaryPage() {
                             )}
                           </div>
                         </div>
-                        <div className="divide-y divide-border/50">
-                          {wine.orders.map((order, i) => (
-                            <div
-                              key={i}
-                              className="px-4 py-1.5 flex justify-between items-center text-sm"
-                            >
-                              <span>{order.customer_name}</span>
-                              <div className="flex items-center gap-4">
-                                <span>{order.quantity}x</span>
-                                <span className="w-20 text-right text-muted-foreground">
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="border-border/50">
+                              <TableHead className="h-8 text-xs">Klant</TableHead>
+                              <TableHead className="h-8 text-xs text-right">Aantal</TableHead>
+                              <TableHead className="h-8 text-xs text-right">Prijs</TableHead>
+                              <TableHead className="h-8 text-xs text-right">Totaal</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {wine.orders.map((order, i) => (
+                              <TableRow key={i} className="border-border/50">
+                                <TableCell className="py-1.5">{order.customer_name}</TableCell>
+                                <TableCell className="py-1.5 text-right">{order.quantity}x</TableCell>
+                                <TableCell className="py-1.5 text-right text-muted-foreground">
                                   {formatPrice(order.effective_price)}
-                                </span>
-                                <span className="w-24 text-right font-medium">
+                                </TableCell>
+                                <TableCell className="py-1.5 text-right font-medium">
                                   {formatPrice(order.line_total)}
-                                </span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
                       </div>
                     ))}
                   </div>

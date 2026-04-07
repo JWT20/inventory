@@ -9,11 +9,19 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface Supplier {
   id: number;
@@ -41,9 +49,24 @@ interface RefImage {
   processing_status: string;
 }
 
+function SKUCardSkeleton() {
+  return (
+    <Card className="p-4">
+      <div className="flex justify-between items-center mb-1">
+        <Skeleton className="h-5 w-44" />
+        <Skeleton className="h-5 w-14 rounded-full" />
+      </div>
+      <Skeleton className="h-4 w-28 mt-1" />
+      <Skeleton className="h-4 w-36 mt-1" />
+    </Card>
+  );
+}
+
 export function SKUsPage() {
   const { user } = useAuth();
   const [skus, setSkus] = useState<SKU[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<SKU | null>(null);
   const [showNew, setShowNew] = useState(false);
 
@@ -52,12 +75,25 @@ export function SKUsPage() {
       setSkus(await api.listSKUs());
     } catch {
       toast.error("Kan SKU's niet laden");
+    } finally {
+      setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  const filteredSkus = skus.filter((s) => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (
+      s.name.toLowerCase().includes(q) ||
+      s.sku_code.toLowerCase().includes(q) ||
+      (s.attributes?.producent || "").toLowerCase().includes(q) ||
+      (s.category || "").toLowerCase().includes(q)
+    );
+  });
 
   return (
     <>
@@ -70,13 +106,22 @@ export function SKUsPage() {
         )}
       </div>
 
+      <Input
+        placeholder="Zoek op naam, code, producent..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="mb-4"
+      />
+
       <div className="space-y-3">
-        {skus.length === 0 ? (
+        {loading ? (
+          Array.from({ length: 3 }).map((_, i) => <SKUCardSkeleton key={i} />)
+        ) : filteredSkus.length === 0 ? (
           <p className="text-center text-muted-foreground py-10">
             Geen SKU's gevonden
           </p>
         ) : (
-          skus.map((s) => (
+          filteredSkus.map((s) => (
             <Card
               key={s.id}
               className="p-4 cursor-pointer active:scale-[0.98] transition-transform"
@@ -377,18 +422,18 @@ function SKUDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>
+    <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
+      <SheetContent side="bottom" className="max-h-[90vh]">
+        <SheetHeader>
+          <SheetTitle>
             {sku ? "Product bewerken" : "Nieuw product"}
             {sku && (
               <span className="ml-2 text-sm font-normal text-muted-foreground">
                 {sku.sku_code}
               </span>
             )}
-          </DialogTitle>
-        </DialogHeader>
+          </SheetTitle>
+        </SheetHeader>
 
         <form onSubmit={submit} className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
@@ -442,16 +487,20 @@ function SKUDialog({
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Leverancier</Label>
-            <select
-              value={supplierId ?? ""}
-              onChange={(e) => setSupplierId(e.target.value ? Number(e.target.value) : null)}
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            <Select
+              value={supplierId ? String(supplierId) : "none"}
+              onValueChange={(v) => setSupplierId(v === "none" ? null : Number(v))}
             >
-              <option value="">Geen leverancier</option>
-              {suppliers.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
+              <SelectTrigger>
+                <SelectValue placeholder="Geen leverancier" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Geen leverancier</SelectItem>
+                {suppliers.map((s) => (
+                  <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           {user && user.role !== "courier" && (
             <Button type="submit" className="w-full" disabled={submitting}>
@@ -634,7 +683,7 @@ function SKUDialog({
             </Button>
           </div>
         )}
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }

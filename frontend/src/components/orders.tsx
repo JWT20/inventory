@@ -13,6 +13,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface SKUOption {
   id: number;
@@ -88,9 +103,23 @@ const money = new Intl.NumberFormat("nl-NL", {
   currency: "EUR",
 });
 
+function OrderCardSkeleton() {
+  return (
+    <Card className="p-4">
+      <div className="flex justify-between items-center mb-1">
+        <Skeleton className="h-5 w-32" />
+        <Skeleton className="h-5 w-16 rounded-full" />
+      </div>
+      <Skeleton className="h-4 w-48 mt-2" />
+      <Skeleton className="h-4 w-36 mt-1" />
+    </Card>
+  );
+}
+
 export function OrdersPage() {
   const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [showManual, setShowManual] = useState(false);
 
@@ -99,6 +128,8 @@ export function OrdersPage() {
       setOrders(await api.listOrders());
     } catch {
       toast.error("Kan orders niet laden");
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -126,7 +157,9 @@ export function OrdersPage() {
       </div>
 
       <div className="space-y-3">
-        {orders.length === 0 ? (
+        {loading ? (
+          Array.from({ length: 3 }).map((_, i) => <OrderCardSkeleton key={i} />)
+        ) : orders.length === 0 ? (
           <p className="text-center text-muted-foreground py-10">
             Geen orders gevonden
           </p>
@@ -328,19 +361,16 @@ function ManualOrderDialog({
     }
   }
 
-  const inp =
-    "rounded-md border border-border bg-background px-2 py-1.5 text-sm w-full";
-
   const filteredCustomers = allCustomers.filter((c) =>
     c.name.toLowerCase().includes(customerSearch.toLowerCase()),
   );
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Order aanmaken</DialogTitle>
-        </DialogHeader>
+    <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
+      <SheetContent side="bottom" className="max-h-[90vh]">
+        <SheetHeader>
+          <SheetTitle>Order aanmaken</SheetTitle>
+        </SheetHeader>
 
         <div className="space-y-4">
           {/* Customer selection */}
@@ -355,8 +385,7 @@ function ManualOrderDialog({
           <div>
             <Label className="mb-1 block text-sm">Klanten</Label>
             <div className="flex gap-2 mb-2">
-              <input
-                className={inp}
+              <Input
                 placeholder="Zoek klant..."
                 value={customerSearch}
                 onChange={(e) => setCustomerSearch(e.target.value)}
@@ -373,10 +402,9 @@ function ManualOrderDialog({
                     key={c.id}
                     className="flex items-center gap-2 px-2 py-1.5 hover:bg-muted cursor-pointer text-sm"
                   >
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={selectedCustomerIds.includes(c.id)}
-                      onChange={() => toggleCustomer(c.id)}
+                      onCheckedChange={() => toggleCustomer(c.id)}
                     />
                     <span>{c.name}</span>
                     <span className="text-xs text-muted-foreground ml-auto">
@@ -389,8 +417,7 @@ function ManualOrderDialog({
             </div>
             {/* Add new customer inline */}
             <div className="flex gap-2 mt-2">
-              <input
-                className={inp}
+              <Input
                 placeholder="Nieuwe klant..."
                 value={newCustomerName}
                 onChange={(e) => setNewCustomerName(e.target.value)}
@@ -435,10 +462,9 @@ function ManualOrderDialog({
                           key={line.sku_id}
                           className="flex items-center gap-2"
                         >
-                          <input
-                            type="checkbox"
+                          <Checkbox
                             checked={line.checked}
-                            onChange={() =>
+                            onCheckedChange={() =>
                               toggleSkuLine(customerId, line.sku_id)
                             }
                           />
@@ -469,26 +495,27 @@ function ManualOrderDialog({
                   )}
                   {/* Add other SKU */}
                   <div className="pt-2">
-                    <select
-                      className={inp}
+                    <Select
                       value=""
-                      onChange={(e) => {
-                        if (e.target.value)
-                          addExtraSku(customerId, Number(e.target.value));
-                        e.target.value = "";
+                      onValueChange={(v) => {
+                        if (v) addExtraSku(customerId, Number(v));
                       }}
                     >
-                      <option value="">+ Ander product toevoegen...</option>
-                      {allSkus
-                        .filter(
-                          (s) => !lines.some((l) => l.sku_id === s.id),
-                        )
-                        .map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.name} ({s.sku_code})
-                          </option>
-                        ))}
-                    </select>
+                      <SelectTrigger className="h-9 text-sm">
+                        <SelectValue placeholder="+ Ander product toevoegen..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {allSkus
+                          .filter(
+                            (s) => !lines.some((l) => l.sku_id === s.id),
+                          )
+                          .map((s) => (
+                            <SelectItem key={s.id} value={String(s.id)}>
+                              {s.name} ({s.sku_code})
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
               </div>
@@ -503,8 +530,8 @@ function ManualOrderDialog({
             {submitting ? "Aanmaken..." : "Order aanmaken"}
           </Button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }
 

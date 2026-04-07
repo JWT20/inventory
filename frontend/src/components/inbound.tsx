@@ -4,6 +4,14 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface BBox {
   x: number;
@@ -269,33 +277,40 @@ export function InboundPage() {
 
       <Card className="p-3 space-y-3">
         {user?.is_platform_admin && (
-          <select
-            className="w-full border border-border rounded px-2 py-1 text-sm"
-            value={selectedOrgId ?? ""}
-            onChange={(e) => setSelectedOrgId(e.target.value ? Number(e.target.value) : null)}
+          <Select
+            value={selectedOrgId ? String(selectedOrgId) : ""}
+            onValueChange={(v) => setSelectedOrgId(v ? Number(v) : null)}
           >
-            <option value="">Selecteer organisatie...</option>
-            {organizations.map((org) => (
-              <option key={org.id} value={org.id}>{org.name}</option>
-            ))}
-          </select>
+            <SelectTrigger className="text-sm">
+              <SelectValue placeholder="Selecteer organisatie..." />
+            </SelectTrigger>
+            <SelectContent>
+              {organizations.map((org) => (
+                <SelectItem key={org.id} value={String(org.id)}>{org.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
         <div className="grid grid-cols-2 gap-2">
-          <input
-            className="border border-border rounded px-2 py-1 text-sm"
+          <Input
+            className="text-sm"
             placeholder="Leverancier (optioneel)"
             value={supplierName}
             onChange={(e) => setSupplierName(e.target.value)}
           />
-          <select
-            className="border border-border rounded px-2 py-1 text-sm"
+          <Select
             value={documentType}
-            onChange={(e) => setDocumentType(e.target.value as "pakbon" | "invoice" | "unknown")}
+            onValueChange={(v) => setDocumentType(v as "pakbon" | "invoice" | "unknown")}
           >
-            <option value="unknown">Auto detect</option>
-            <option value="pakbon">Pakbon</option>
-            <option value="invoice">Factuur</option>
-          </select>
+            <SelectTrigger className="text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unknown">Auto detect</SelectItem>
+              <SelectItem value="pakbon">Pakbon</SelectItem>
+              <SelectItem value="invoice">Factuur</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="rounded-md overflow-hidden border border-border bg-black/5">
@@ -408,23 +423,26 @@ export function InboundPage() {
                     {!line.matched_sku_code && (
                       <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
                         <div className="flex gap-2">
-                          <select
-                            className="flex-1 border border-border rounded px-2 py-1 text-xs bg-background"
-                            value={selectedSkuByLine[idx] ?? ""}
-                            onChange={(e) =>
+                          <Select
+                            value={selectedSkuByLine[idx] ? String(selectedSkuByLine[idx]) : ""}
+                            onValueChange={(v) =>
                               setSelectedSkuByLine((prev) => ({
                                 ...prev,
-                                [idx]: Number(e.target.value),
+                                [idx]: Number(v),
                               }))
                             }
                           >
-                            <option value="">Kies bestaande SKU...</option>
-                            {skuOptions.map((sku) => (
-                              <option key={sku.id} value={sku.id}>
-                                {sku.sku_code} - {sku.name}
-                              </option>
-                            ))}
-                          </select>
+                            <SelectTrigger className="flex-1 text-xs h-8">
+                              <SelectValue placeholder="Kies bestaande SKU..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {skuOptions.map((sku) => (
+                                <SelectItem key={sku.id} value={String(sku.id)}>
+                                  {sku.sku_code} - {sku.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                           <Button
                             type="button"
                             variant="outline"

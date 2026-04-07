@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ImageSlideshow } from "@/components/image-slideshow";
 import { QuantityPicker } from "@/components/quantity-picker";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface Order {
   id: number;
@@ -197,7 +198,20 @@ function OrderSelectStep({
   }, []);
 
   if (loading) {
-    return <p className="text-center text-muted-foreground py-10">Laden...</p>;
+    return (
+      <div className="space-y-3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Card key={i} className="p-4">
+            <div className="flex justify-between items-center mb-1">
+              <Skeleton className="h-5 w-32" />
+              <Skeleton className="h-5 w-14 rounded-full" />
+            </div>
+            <Skeleton className="h-4 w-44 mt-2" />
+            <Skeleton className="h-4 w-36 mt-1" />
+          </Card>
+        ))}
+      </div>
+    );
   }
 
   return (
