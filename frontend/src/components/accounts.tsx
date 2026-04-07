@@ -14,6 +14,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Trash2, KeyRound, Pencil } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 
 interface User {
   id: number;
@@ -454,54 +462,56 @@ function NewUserDialog({
           </div>
           <div className="space-y-2">
             <Label>Rol</Label>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            >
-              <option value="courier">Koerier</option>
-              <option value="owner">Eigenaar (organisatie)</option>
-              <option value="member">Medewerker (organisatie)</option>
-              <option value="customer">Klant (organisatie)</option>
-            </select>
+            <Select value={role} onValueChange={setRole}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="courier">Koerier</SelectItem>
+                <SelectItem value="owner">Eigenaar (organisatie)</SelectItem>
+                <SelectItem value="member">Medewerker (organisatie)</SelectItem>
+                <SelectItem value="customer">Klant (organisatie)</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           {needsOrg && (
             <div className="space-y-2">
               <Label>Organisatie</Label>
-              <select
-                value={orgId}
-                onChange={(e) =>
-                  setOrgId(e.target.value ? Number(e.target.value) : "")
-                }
-                required
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              <Select
+                value={orgId ? String(orgId) : ""}
+                onValueChange={(v) => setOrgId(v ? Number(v) : "")}
               >
-                <option value="">Selecteer organisatie...</option>
-                {organizations.map((org) => (
-                  <option key={org.id} value={org.id}>
-                    {org.name}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecteer organisatie..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {organizations.map((org) => (
+                    <SelectItem key={org.id} value={String(org.id)}>
+                      {org.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           )}
           {role === "customer" && orgId && (
             <div className="space-y-2">
               <Label>Koppel aan klant</Label>
-              <select
-                value={customerId}
-                onChange={(e) =>
-                  setCustomerId(e.target.value ? Number(e.target.value) : "")
-                }
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              <Select
+                value={customerId ? String(customerId) : ""}
+                onValueChange={(v) => setCustomerId(v ? Number(v) : "")}
               >
-                <option value="">Selecteer klant...</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecteer klant..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {customers.map((c) => (
+                    <SelectItem key={c.id} value={String(c.id)}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <p className="text-xs text-muted-foreground">
                 De gebruiker kan alleen orders plaatsen voor deze klant
               </p>
@@ -711,30 +721,28 @@ function NewCustomerDialog({
           {me?.is_platform_admin && (
             <div className="space-y-2">
               <Label>Organisatie</Label>
-              <select
-                value={orgId}
-                onChange={(e) =>
-                  setOrgId(e.target.value ? Number(e.target.value) : "")
-                }
-                required
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              <Select
+                value={orgId ? String(orgId) : ""}
+                onValueChange={(v) => setOrgId(v ? Number(v) : "")}
               >
-                <option value="">Selecteer organisatie...</option>
-                {organizations.map((org) => (
-                  <option key={org.id} value={org.id}>
-                    {org.name}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecteer organisatie..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {organizations.map((org) => (
+                    <SelectItem key={org.id} value={String(org.id)}>
+                      {org.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           )}
           <div className="flex items-center gap-3">
-            <input
-              type="checkbox"
+            <Switch
               id="show-prices-new"
               checked={showPrices}
-              onChange={(e) => setShowPrices(e.target.checked)}
-              className="h-4 w-4 rounded border-input"
+              onCheckedChange={setShowPrices}
             />
             <Label htmlFor="show-prices-new">Prijzen zichtbaar voor klant</Label>
           </div>
@@ -800,12 +808,10 @@ function EditCustomerDialog({
             />
           </div>
           <div className="flex items-center gap-3">
-            <input
-              type="checkbox"
+            <Switch
               id="show-prices-edit"
               checked={showPrices}
-              onChange={(e) => setShowPrices(e.target.checked)}
-              className="h-4 w-4 rounded border-input"
+              onCheckedChange={setShowPrices}
             />
             <Label htmlFor="show-prices-edit">Prijzen zichtbaar voor klant</Label>
           </div>

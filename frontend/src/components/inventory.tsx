@@ -9,6 +9,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface CustomerPrice {
   customer_id: number;
@@ -33,8 +42,28 @@ interface InventoryItem {
 
 const LOW_STOCK_THRESHOLD = 3;
 
+function InventoryCardSkeleton() {
+  return (
+    <Card className="p-4">
+      <div className="flex gap-3">
+        <Skeleton className="w-14 h-14 rounded flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="flex justify-between items-start">
+            <div className="min-w-0">
+              <Skeleton className="h-5 w-40" />
+              <Skeleton className="h-4 w-32 mt-1" />
+            </div>
+            <Skeleton className="h-7 w-10 ml-2" />
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<InventoryItem | null>(null);
 
@@ -46,6 +75,8 @@ export function InventoryPage() {
       setItems(await api.listInventoryOverview(qs ? `?${qs}` : ""));
     } catch {
       toast.error("Kan voorraad niet laden");
+    } finally {
+      setLoading(false);
     }
   }, [search]);
 
@@ -67,7 +98,9 @@ export function InventoryPage() {
       />
 
       <div className="space-y-3">
-        {items.length === 0 ? (
+        {loading ? (
+          Array.from({ length: 4 }).map((_, i) => <InventoryCardSkeleton key={i} />)
+        ) : items.length === 0 ? (
           <p className="text-center text-muted-foreground py-10">
             Geen voorraad gevonden
           </p>
@@ -260,7 +293,8 @@ function InventoryDetailDialog({
           </div>
 
           {/* Default price */}
-          <div className="border-t border-border pt-3">
+          <Separator />
+          <div className="pt-1">
             <div className="flex justify-between items-center">
               <span className="text-sm font-medium">Standaardprijs</span>
               {editingDefaultPrice ? (
@@ -310,7 +344,8 @@ function InventoryDetailDialog({
           </div>
 
           {/* Customer prices */}
-          <div className="border-t border-border pt-3">
+          <Separator />
+          <div className="pt-1">
             <p className="text-sm font-medium mb-2">Klantprijzen</p>
             {item.customer_prices.length === 0 ? (
               <p className="text-sm text-muted-foreground">
@@ -382,18 +417,23 @@ function InventoryDetailDialog({
                       <span className="text-muted-foreground">Korting</span>
                       {editingDiscountId === cp.customer_id ? (
                         <div className="flex items-center gap-2">
-                          <select
-                            value={discountType}
-                            onChange={(e) => {
-                              setDiscountType(e.target.value);
-                              if (!e.target.value) setDiscountValue("");
+                          <Select
+                            value={discountType || "none"}
+                            onValueChange={(v) => {
+                              const val = v === "none" ? "" : v;
+                              setDiscountType(val);
+                              if (!val) setDiscountValue("");
                             }}
-                            className="h-8 text-sm rounded-md border border-input bg-background px-2"
                           >
-                            <option value="">Geen</option>
-                            <option value="percentage">%</option>
-                            <option value="fixed">{"\u20AC"}</option>
-                          </select>
+                            <SelectTrigger className="h-8 w-24 text-sm">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">Geen</SelectItem>
+                              <SelectItem value="percentage">%</SelectItem>
+                              <SelectItem value="fixed">{"\u20AC"}</SelectItem>
+                            </SelectContent>
+                          </Select>
                           {discountType && (
                             <Input
                               type="number"

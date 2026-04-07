@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Toaster, toast } from "sonner";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { LoginPage } from "@/components/login";
@@ -9,6 +8,7 @@ import { AccountsPage } from "@/components/accounts";
 import { InventoryPage } from "@/components/inventory";
 import { InboundPage } from "@/components/inbound";
 import { WeeklySummaryPage } from "@/components/weekly-summary";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { LogOut } from "lucide-react";
 
 export { toast };
@@ -18,7 +18,6 @@ type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "accounts"
 function Main() {
   const { user, loading, logout } = useAuth();
   const defaultPage: Page = user?.role === "courier" ? "receive" : "orders";
-  const [page, setPage] = useState<Page>(defaultPage);
 
   if (loading) {
     return (
@@ -36,7 +35,7 @@ function Main() {
     {
       id: "orders",
       label: "Orders",
-      show: true, // Everyone sees orders
+      show: true,
     },
     {
       id: "receive",
@@ -73,7 +72,7 @@ function Main() {
   const visibleTabs = tabs.filter((t) => t.show);
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <Tabs defaultValue={defaultPage} className="min-h-screen flex flex-col">
       <header className="sticky top-0 z-50 bg-background border-b border-border px-4 pt-3 pb-0">
         <div className="flex justify-between items-center mb-2">
           <h1 className="text-lg font-bold">Magazijn</h1>
@@ -85,33 +84,29 @@ function Main() {
             <LogOut className="h-4 w-4" />
           </button>
         </div>
-        <nav className="flex gap-1">
+        <TabsList>
           {visibleTabs.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setPage(t.id)}
-              className={`flex-1 py-2.5 text-sm font-semibold border-b-2 transition-colors ${
-                page === t.id
-                  ? "text-primary border-primary"
-                  : "text-muted-foreground border-transparent hover:text-foreground"
-              }`}
-            >
+            <TabsTrigger key={t.id} value={t.id}>
               {t.label}
-            </button>
+            </TabsTrigger>
           ))}
-        </nav>
+        </TabsList>
       </header>
 
       <main className="flex-1 p-4 pb-20">
-        {page === "orders" && <OrdersPage />}
-        {page === "receive" && <ReceivePage />}
-        {page === "inbound" && <InboundPage />}
-        {page === "skus" && <SKUsPage />}
-        {page === "inventory" && <InventoryPage />}
-        {page === "weekly" && <WeeklySummaryPage />}
-        {page === "accounts" && <AccountsPage />}
+        {visibleTabs.map((t) => (
+          <TabsContent key={t.id} value={t.id}>
+            {t.id === "orders" && <OrdersPage />}
+            {t.id === "receive" && <ReceivePage />}
+            {t.id === "inbound" && <InboundPage />}
+            {t.id === "skus" && <SKUsPage />}
+            {t.id === "inventory" && <InventoryPage />}
+            {t.id === "weekly" && <WeeklySummaryPage />}
+            {t.id === "accounts" && <AccountsPage />}
+          </TabsContent>
+        ))}
       </main>
-    </div>
+    </Tabs>
   );
 }
 
