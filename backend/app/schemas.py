@@ -120,11 +120,11 @@ class OrganizationResponse(BaseModel):
 
 # --- SKU ---
 
-WINE_ATTRIBUTE_KEYS = ("producent", "wijnaam", "wijntype", "jaargang", "volume")
+WINE_ATTRIBUTE_KEYS = ("producent", "wijnaam", "wijntype", "volume")
 
 
 def generate_wine_sku_code(attrs: dict[str, str]) -> str:
-    """Generate SKU code from wine attributes like CHAT-GRAN-ROO-2019-750."""
+    """Generate SKU code from wine attributes like CHAT-GRAN-ROO-750."""
     def abbrev(s: str, length: int = 4) -> str:
         normalized = unicodedata.normalize("NFKD", s)
         ascii_only = "".join(c for c in normalized if not unicodedata.combining(c))
@@ -135,13 +135,12 @@ def generate_wine_sku_code(attrs: dict[str, str]) -> str:
         abbrev(attrs["producent"]),
         abbrev(attrs["wijnaam"]),
         abbrev(attrs["wijntype"], 3),
-        attrs["jaargang"].strip(),
         attrs["volume"].strip().replace("ml", "").replace("cl", ""),
     ])
 
 
 def generate_wine_display_name(attrs: dict[str, str]) -> str:
-    return f"{attrs['producent']} {attrs['wijnaam']} {attrs['wijntype']} {attrs['jaargang']}"
+    return f"{attrs['producent']} {attrs['wijnaam']} {attrs['wijntype']}"
 
 
 class SupplierCreate(BaseModel):

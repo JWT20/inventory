@@ -176,10 +176,9 @@ class TestSKUCodeGeneration:
             "producent": "Château Grand",
             "wijnaam": "Cru Rouge",
             "wijntype": "Rood",
-            "jaargang": "2019",
             "volume": "750",
         }
-        assert generate_wine_sku_code(attrs) == "CHAT-CRUR-ROO-2019-750"
+        assert generate_wine_sku_code(attrs) == "CHAT-CRUR-ROO-750"
 
     def test_sku_code_with_spaces(self):
         from app.schemas import generate_wine_sku_code
@@ -188,10 +187,9 @@ class TestSKUCodeGeneration:
             "producent": "Domaine Belle",
             "wijnaam": "Blanc Premier",
             "wijntype": "Wit",
-            "jaargang": "2021",
             "volume": "750",
         }
-        assert generate_wine_sku_code(attrs) == "DOMA-BLAN-WIT-2021-750"
+        assert generate_wine_sku_code(attrs) == "DOMA-BLAN-WIT-750"
 
     def test_display_name(self):
         from app.schemas import generate_wine_display_name
@@ -200,7 +198,6 @@ class TestSKUCodeGeneration:
             "producent": "Château Grand",
             "wijnaam": "Cru Rouge",
             "wijntype": "Rood",
-            "jaargang": "2019",
             "volume": "750",
         }
-        assert generate_wine_display_name(attrs) == "Château Grand Cru Rouge Rood 2019"
+        assert generate_wine_display_name(attrs) == "Château Grand Cru Rouge Rood"
