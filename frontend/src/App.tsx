@@ -8,11 +8,12 @@ import { OrdersPage } from "@/components/orders";
 import { AccountsPage } from "@/components/accounts";
 import { InventoryPage } from "@/components/inventory";
 import { InboundPage } from "@/components/inbound";
+import { WeeklySummaryPage } from "@/components/weekly-summary";
 import { LogOut } from "lucide-react";
 
 export { toast };
 
-type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "accounts";
+type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "accounts" | "weekly";
 
 function Main() {
   const { user, loading, logout } = useAuth();
@@ -55,6 +56,11 @@ function Main() {
     {
       id: "inventory",
       label: "Voorraad",
+      show: isAdmin || user.role === "owner" || user.role === "member",
+    },
+    {
+      id: "weekly",
+      label: "Weekoverzicht",
       show: isAdmin || user.role === "owner" || user.role === "member",
     },
     {
@@ -102,6 +108,7 @@ function Main() {
         {page === "inbound" && <InboundPage />}
         {page === "skus" && <SKUsPage />}
         {page === "inventory" && <InventoryPage />}
+        {page === "weekly" && <WeeklySummaryPage />}
         {page === "accounts" && <AccountsPage />}
       </main>
     </div>

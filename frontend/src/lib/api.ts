@@ -158,6 +158,12 @@ export const api = {
     json("/auth/organizations", "POST", data),
   deleteOrganization: (id: number) => request(`/auth/organizations/${id}`, { method: "DELETE" }),
 
+  // Suppliers
+  listSuppliers: () => request("/suppliers"),
+  createSupplier: (data: { name: string }) => json("/suppliers", "POST", data),
+  updateSupplier: (id: number, data: { name: string }) => json(`/suppliers/${id}`, "PATCH", data),
+  deleteSupplier: (id: number) => request(`/suppliers/${id}`, { method: "DELETE" }),
+
   // SKUs
   listSKUs: (activeOnly = false) =>
     request(`/skus${activeOnly ? "?active_only=true" : ""}`),
@@ -167,6 +173,7 @@ export const api = {
     category?: string;
     attributes: Record<string, string>;
     active?: boolean;
+    supplier_id?: number | null;
   }) => json("/skus", "POST", data),
   getSKU: (id: number) => request(`/skus/${id}`),
   updateSKU: (id: number, data: Record<string, unknown>) =>
@@ -236,6 +243,8 @@ export const api = {
     request(`/orders/${id}/activate`, { method: "POST" }),
   deleteOrder: (id: number) => request(`/orders/${id}`, { method: "DELETE" }),
   listBookings: (orderId: number) => request(`/orders/${orderId}/bookings`),
+  weeklyOrderSummary: (week?: string) =>
+    request(`/orders/weekly-summary${week ? `?week=${week}` : ""}`),
 
   // Receiving - book (1 scan = 1 box = 1 booking)
   bookBox: (blob: Blob, orderId: number) => {

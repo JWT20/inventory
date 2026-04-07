@@ -15,6 +15,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+interface Supplier {
+  id: number;
+  name: string;
+}
+
 interface SKU {
   id: number;
   sku_code: string;
@@ -23,6 +28,8 @@ interface SKU {
   active: boolean;
   category: string | null;
   attributes: Record<string, string>;
+  supplier_id: number | null;
+  supplier_name: string | null;
   image_count: number;
 }
 
@@ -124,6 +131,8 @@ function SKUDialog({
   const [wijntype, setWijntype] = useState("");
   const [jaargang, setJaargang] = useState("");
   const [volume, setVolume] = useState("");
+  const [supplierId, setSupplierId] = useState<number | null>(null);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
 
   // Helper to build attributes dict from individual state fields
   const getAttributes = () => ({
@@ -143,6 +152,9 @@ function SKUDialog({
   const [duplicateRejected, setDuplicateRejected] = useState<{ file: File; preview: string; detail: string }[]>([]);
 
   useEffect(() => {
+    if (open) {
+      api.listSuppliers().then(setSuppliers).catch(() => {});
+    }
     if (open && sku) {
       const a = sku.attributes || {};
       setProducent(a.producent || "");
@@ -150,6 +162,7 @@ function SKUDialog({
       setWijntype(a.wijntype || "");
       setJaargang(a.jaargang || "");
       setVolume(a.volume || "");
+      setSupplierId(sku.supplier_id ?? null);
       setCurrentId(sku.id);
       loadImages(sku.id);
     } else if (open) {
@@ -158,6 +171,7 @@ function SKUDialog({
       setWijntype("");
       setJaargang("");
       setVolume("");
+      setSupplierId(null);
       setCurrentId(null);
       setImages([]);
     }
@@ -194,12 +208,14 @@ function SKUDialog({
       if (skuId) {
         await api.updateSKU(skuId, {
           attributes: getAttributes(),
+          supplier_id: supplierId,
         });
         toast.success("SKU bijgewerkt");
       } else {
         const created = await api.createSKU({
           category: "wine",
           attributes: getAttributes(),
+          supplier_id: supplierId,
         });
         skuId = created.id;
         setCurrentId(skuId);
@@ -423,6 +439,19 @@ function SKUDialog({
                 required
               />
             </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Leverancier</Label>
+            <select
+              value={supplierId ?? ""}
+              onChange={(e) => setSupplierId(e.target.value ? Number(e.target.value) : null)}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              <option value="">Geen leverancier</option>
+              {suppliers.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
           </div>
           {user && user.role !== "courier" && (
             <Button type="submit" className="w-full" disabled={submitting}>

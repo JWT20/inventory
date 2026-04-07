@@ -1,16 +1,18 @@
 """Order management: manual order creation and lifecycle."""
 
+import datetime
 import logging
 import uuid
+from collections import defaultdict
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session, selectinload
 
 from app.auth import get_current_user, require_admin, require_can_create_orders
 from app.database import get_db
 from app.events import publish_event
-from app.models import Customer, CustomerSKU, Order, OrderLine, SKU, User
+from app.models import Customer, CustomerSKU, Order, OrderLine, SKU, Supplier, User
 from app.schemas import (
     BookingResponse,
     ManualOrderCreate,
@@ -18,6 +20,10 @@ from app.schemas import (
     OrderLineResponse,
     OrderLineUpdate,
     OrderResponse,
+    WeeklySummaryCustomerOrder,
+    WeeklySummaryResponse,
+    WeeklySummarySupplier,
+    WeeklySummaryWine,
 )
 
 logger = logging.getLogger(__name__)
@@ -276,6 +282,182 @@ def list_orders(
 
     orders = query.order_by(Order.created_at.desc()).offset(offset).limit(limit).all()
     return [_order_to_response(o, db) for o in orders]
+
+
+# ---------------------------------------------------------------------------
+# Weekly order summary per supplier
+# ---------------------------------------------------------------------------
+
+def _parse_iso_week(week_str: str) -> tuple[datetime.date, datetime.date]:
+    """Parse an ISO week string like '2026-W15' into (monday, sunday) dates."""
+    try:
+        monday = datetime.datetime.strptime(week_str + "-1", "%G-W%V-%u").date()
+    except ValueError:
+        raise HTTPException(400, f"Ongeldig weekformaat: '{week_str}'. Gebruik bijv. '2026-W15'.")
+    sunday = monday + datetime.timedelta(days=6)
+    return monday, sunday
+
+
+@router.get("/weekly-summary", response_model=WeeklySummaryResponse)
+def weekly_order_summary(
+    week: str = Query(None, description="ISO week, bijv. '2026-W15'. Standaard: huidige week."),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Weekly order summary grouped by supplier, then by wine, showing customer orders with prices."""
+    if not user.is_platform_admin and not user.organization_id:
+        raise HTTPException(400, "Gebruiker heeft geen organisatie")
+
+    # Determine week range
+    if not week:
+        today = datetime.date.today()
+        week = f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"
+    monday, sunday = _parse_iso_week(week)
+
+    start_dt = datetime.datetime.combine(monday, datetime.time.min)
+    end_dt = datetime.datetime.combine(sunday, datetime.time.max)
+
+    org_id = user.organization_id
+
+    # Fetch all order lines within the week for this org
+    query = (
+        db.query(OrderLine)
+        .join(Order, OrderLine.order_id == Order.id)
+        .options(
+            selectinload(OrderLine.sku).selectinload(SKU.supplier),
+            selectinload(OrderLine.customer),
+        )
+        .filter(
+            Order.created_at >= start_dt,
+            Order.created_at <= end_dt,
+            Order.status.in_(("draft", "pending_images", "active")),
+        )
+    )
+    if not user.is_platform_admin:
+        query = query.filter(Order.organization_id == org_id)
+
+    lines = query.all()
+
+    if not lines:
+        return WeeklySummaryResponse(
+            week=week,
+            deadline=sunday.isoformat(),
+            suppliers=[],
+            grand_total_quantity=0,
+            grand_total_value=0,
+        )
+
+    # Batch-load customer prices
+    customer_sku_keys = {
+        (l.customer_id, l.sku_id) for l in lines if l.customer_id is not None
+    }
+    customer_price_map: dict[tuple[int, int], CustomerSKU] = {}
+    if customer_sku_keys:
+        c_ids = sorted({cid for cid, _ in customer_sku_keys})
+        s_ids = sorted({sid for _, sid in customer_sku_keys})
+        links = (
+            db.query(CustomerSKU)
+            .filter(CustomerSKU.customer_id.in_(c_ids), CustomerSKU.sku_id.in_(s_ids))
+            .all()
+        )
+        customer_price_map = {
+            (lk.customer_id, lk.sku_id): lk
+            for lk in links
+            if (lk.customer_id, lk.sku_id) in customer_sku_keys
+        }
+
+    # Group: supplier -> sku -> list of (customer_name, quantity, effective_price)
+    supplier_groups: dict[tuple[int | None, str], dict[int, list]] = defaultdict(lambda: defaultdict(list))
+
+    for line in lines:
+        sku = line.sku
+        supplier_id = sku.supplier_id
+        supplier_name = sku.supplier.name if sku.supplier else "Geen leverancier toegewezen"
+
+        default_price = float(sku.default_price) if sku.default_price is not None else None
+        link = customer_price_map.get((line.customer_id, line.sku_id)) if line.customer_id else None
+        unit_price = float(link.unit_price) if link and link.unit_price is not None else None
+        discount_type = link.discount_type if link else None
+        discount_value = float(link.discount_value) if link and link.discount_value is not None else None
+        effective_price = _calc_effective_price(unit_price, discount_type, discount_value, default_price)
+
+        supplier_groups[(supplier_id, supplier_name)][sku.id].append({
+            "customer_name": line.customer_name,
+            "quantity": line.quantity,
+            "effective_price": effective_price,
+            "sku": sku,
+            "default_price": default_price,
+        })
+
+    # Build response
+    suppliers_out: list[WeeklySummarySupplier] = []
+    grand_total_qty = 0
+    grand_total_val = 0.0
+
+    for (sup_id, sup_name), sku_map in sorted(supplier_groups.items(), key=lambda x: x[1]):
+        wines_out: list[WeeklySummaryWine] = []
+        sup_qty = 0
+        sup_val = 0.0
+
+        for sku_id, entries in sku_map.items():
+            sku_obj = entries[0]["sku"]
+            customer_agg: dict[str, dict] = {}
+            for e in entries:
+                cname = e["customer_name"]
+                if cname in customer_agg:
+                    customer_agg[cname]["quantity"] += e["quantity"]
+                else:
+                    customer_agg[cname] = {
+                        "quantity": e["quantity"],
+                        "effective_price": e["effective_price"],
+                    }
+
+            orders_out = []
+            wine_total = 0.0
+            wine_qty = 0
+            for cname, agg in customer_agg.items():
+                qty = agg["quantity"]
+                ep = agg["effective_price"]
+                lt = round(ep * qty, 2) if ep is not None else None
+                orders_out.append(WeeklySummaryCustomerOrder(
+                    customer_name=cname,
+                    quantity=qty,
+                    effective_price=ep,
+                    line_total=lt,
+                ))
+                wine_qty += qty
+                if lt is not None:
+                    wine_total += lt
+
+            wines_out.append(WeeklySummaryWine(
+                sku_id=sku_id,
+                sku_code=sku_obj.sku_code,
+                sku_name=sku_obj.name,
+                default_price=entries[0]["default_price"],
+                total_quantity=wine_qty,
+                orders=orders_out,
+                wine_total=round(wine_total, 2) if wine_total else None,
+            ))
+            sup_qty += wine_qty
+            sup_val += wine_total
+
+        suppliers_out.append(WeeklySummarySupplier(
+            supplier_id=sup_id,
+            supplier_name=sup_name,
+            wines=wines_out,
+            supplier_total_quantity=sup_qty,
+            supplier_total_value=round(sup_val, 2) if sup_val else None,
+        ))
+        grand_total_qty += sup_qty
+        grand_total_val += sup_val
+
+    return WeeklySummaryResponse(
+        week=week,
+        deadline=sunday.isoformat(),
+        suppliers=suppliers_out,
+        grand_total_quantity=grand_total_qty,
+        grand_total_value=round(grand_total_val, 2) if grand_total_val else None,
+    )
 
 
 @router.get("/{order_id}", response_model=OrderResponse)
