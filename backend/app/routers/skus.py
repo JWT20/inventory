@@ -99,9 +99,8 @@ def list_skus(
     if not user.is_platform_admin:
         if user.organization_id:
             query = query.filter(SKU.organization_id == user.organization_id)
-        else:
-            # Users without an org (e.g. couriers) must not see all SKUs
-            query = query.filter(SKU.organization_id.is_(None))
+        # Couriers (no org) are platform-level warehouse workers and need
+        # visibility into all SKUs to link inbound shipment lines.
     skus = query.order_by(SKU.name).offset(offset).limit(limit).all()
     return [_sku_to_response(s) for s in skus]
 
