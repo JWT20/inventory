@@ -99,6 +99,23 @@ class User(Base):
         return self.is_platform_admin or self.role in ("owner", "member")
 
 
+class Supplier(Base):
+    """A supplier (leverancier) that wines can be ordered from."""
+    __tablename__ = "suppliers"
+    __table_args__ = (UniqueConstraint("organization_id", "name", name="uq_supplier_org_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    organization: Mapped["Organization | None"] = relationship()
+
+
 class SKU(Base):
     __tablename__ = "skus"
 
@@ -110,6 +127,9 @@ class SKU(Base):
     category: Mapped[str | None] = mapped_column(String(50), nullable=True)
     organization_id: Mapped[int | None] = mapped_column(
         ForeignKey("organizations.id"), nullable=True
+    )
+    supplier_id: Mapped[int | None] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True
     )
     default_price: Mapped[float | None] = mapped_column(
         Numeric(10, 2), nullable=True
@@ -129,6 +149,7 @@ class SKU(Base):
         back_populates="sku", cascade="all, delete-orphan"
     )
     organization: Mapped["Organization | None"] = relationship()
+    supplier: Mapped["Supplier | None"] = relationship()
 
     @property
     def attributes_dict(self) -> dict[str, str]:

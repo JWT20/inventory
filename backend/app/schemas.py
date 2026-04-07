@@ -144,12 +144,26 @@ def generate_wine_display_name(attrs: dict[str, str]) -> str:
     return f"{attrs['producent']} {attrs['wijnaam']} {attrs['wijntype']} {attrs['jaargang']}"
 
 
+class SupplierCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+
+
+class SupplierResponse(BaseModel):
+    id: int
+    name: str
+    organization_id: int | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class SKUCreate(BaseModel):
     sku_code: str | None = None
     name: str | None = None
     category: str = "wine"
     attributes: dict[str, str] = {}
     active: bool = True
+    supplier_id: int | None = None
 
     @field_validator("attributes")
     @classmethod
@@ -165,6 +179,7 @@ class SKUCreate(BaseModel):
 class SKUUpdate(BaseModel):
     attributes: dict[str, str] | None = None
     active: bool | None = None
+    supplier_id: int | None = None
 
 
 class SKUResponse(BaseModel):
@@ -175,6 +190,8 @@ class SKUResponse(BaseModel):
     active: bool
     category: str | None = None
     attributes: dict[str, str] = {}
+    supplier_id: int | None = None
+    supplier_name: str | None = None
     created_at: datetime
     updated_at: datetime
     image_count: int = 0
@@ -580,3 +597,38 @@ class UpdateCustomerSKUDiscountRequest(BaseModel):
         if dtype == "percentage" and v is not None and v > 100:
             raise ValueError("Percentage korting mag niet hoger dan 100 zijn")
         return v
+
+
+# --- Weekly Order Summary ---
+
+class WeeklySummaryCustomerOrder(BaseModel):
+    customer_name: str
+    quantity: int
+    effective_price: float | None = None
+    line_total: float | None = None
+
+
+class WeeklySummaryWine(BaseModel):
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    default_price: float | None = None
+    total_quantity: int
+    orders: list[WeeklySummaryCustomerOrder] = []
+    wine_total: float | None = None
+
+
+class WeeklySummarySupplier(BaseModel):
+    supplier_id: int | None = None
+    supplier_name: str
+    wines: list[WeeklySummaryWine] = []
+    supplier_total_quantity: int = 0
+    supplier_total_value: float | None = None
+
+
+class WeeklySummaryResponse(BaseModel):
+    week: str
+    deadline: str
+    suppliers: list[WeeklySummarySupplier] = []
+    grand_total_quantity: int = 0
+    grand_total_value: float | None = None

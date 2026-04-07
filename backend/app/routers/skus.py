@@ -79,6 +79,8 @@ def _sku_to_response(sku: SKU) -> SKUResponse:
         active=sku.active,
         category=sku.category,
         attributes=sku.attributes_dict,
+        supplier_id=sku.supplier_id,
+        supplier_name=sku.supplier.name if sku.supplier else None,
         created_at=sku.created_at,
         updated_at=sku.updated_at,
         image_count=len(sku.reference_images),
@@ -93,7 +95,11 @@ def list_skus(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    query = db.query(SKU).options(selectinload(SKU.reference_images), selectinload(SKU.attributes))
+    query = db.query(SKU).options(
+        selectinload(SKU.reference_images),
+        selectinload(SKU.attributes),
+        selectinload(SKU.supplier),
+    )
     if active_only:
         query = query.filter(SKU.active.is_(True))
     if not user.is_platform_admin:
@@ -136,6 +142,7 @@ def create_sku(
         active=data.active,
         category=data.category,
         organization_id=user.organization_id,
+        supplier_id=data.supplier_id,
     )
     sku.set_attributes(data.attributes)
     db.add(sku)
@@ -184,6 +191,9 @@ def update_sku(
 
     if data.active is not None:
         sku.active = data.active
+
+    if "supplier_id" in changed_fields:
+        sku.supplier_id = data.supplier_id
 
     if data.attributes is not None:
         sku.set_attributes(data.attributes)
