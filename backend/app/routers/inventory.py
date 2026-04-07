@@ -619,6 +619,35 @@ def book_shipment(
     return _shipment_to_response(shipment)
 
 
+@router.delete("/shipments/{shipment_id}", status_code=204)
+def delete_shipment(
+    shipment_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    """Delete a draft shipment. Booked shipments cannot be deleted."""
+    shipment = db.query(InboundShipment).filter(InboundShipment.id == shipment_id).first()
+    if not shipment:
+        raise HTTPException(404, "Pakbon niet gevonden")
+    if not user.is_platform_admin and shipment.organization_id != user.organization_id:
+        raise HTTPException(404, "Pakbon niet gevonden")
+    if shipment.status != "draft":
+        raise HTTPException(
+            409, "Kan een geboekte pakbon niet verwijderen — alleen drafts kunnen verwijderd worden"
+        )
+
+    reference = shipment.reference
+    db.delete(shipment)
+    db.commit()
+    publish_event(
+        "shipment_deleted",
+        details={"shipment_id": shipment_id, "reference": reference},
+        user=user,
+        resource_type="shipment",
+        resource_id=shipment_id,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Inventory endpoints
 # ---------------------------------------------------------------------------

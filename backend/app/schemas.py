@@ -102,6 +102,12 @@ class OrganizationCreate(BaseModel):
     enabled_modules: list[str] = ["inventory", "orders"]
 
 
+class OrganizationUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    slug: str | None = Field(None, min_length=1, max_length=100)
+    enabled_modules: list[str] | None = None
+
+
 class OrganizationResponse(BaseModel):
     id: int
     name: str
@@ -281,6 +287,16 @@ class ManualOrderLineCreate(BaseModel):
 class ManualOrderCreate(BaseModel):
     organization_id: int | None = None
     lines: list[ManualOrderLineCreate] = Field(..., min_length=1)
+
+
+class OrderLineAdd(BaseModel):
+    customer_id: int = Field(..., gt=0)
+    sku_id: int = Field(..., gt=0)
+    quantity: int = Field(..., gt=0)
+
+
+class OrderLineUpdate(BaseModel):
+    quantity: int = Field(..., gt=0)
 
 
 class BookingResponse(BaseModel):
