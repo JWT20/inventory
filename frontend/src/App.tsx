@@ -46,7 +46,7 @@ function Main() {
     {
       id: "inbound",
       label: "Inbound",
-      show: isAdmin || user.role === "courier" || user.role === "owner" || user.role === "member",
+      show: isAdmin || user.role === "courier",
     },
     {
       id: "skus",
