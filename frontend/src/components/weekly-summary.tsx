@@ -18,6 +18,7 @@ interface CustomerOrder {
   quantity: number;
   effective_price: number | null;
   line_total: number | null;
+  remarks: string;
 }
 
 interface Wine {
@@ -196,7 +197,7 @@ export function WeeklySummaryPage() {
                           <TableHeader>
                             <TableRow className="border-border/50">
                               <TableHead className="h-8 text-xs">Klant</TableHead>
-                              <TableHead className="h-8 text-xs text-right">Aantal</TableHead>
+                              <TableHead className="h-8 text-xs text-right">Aantal dozen</TableHead>
                               <TableHead className="h-8 text-xs text-right">Prijs</TableHead>
                               <TableHead className="h-8 text-xs text-right">Totaal</TableHead>
                             </TableRow>
@@ -204,7 +205,12 @@ export function WeeklySummaryPage() {
                           <TableBody>
                             {wine.orders.map((order, i) => (
                               <TableRow key={i} className="border-border/50">
-                                <TableCell className="py-1.5">{order.customer_name}</TableCell>
+                                <TableCell className="py-1.5">
+                                  {order.customer_name}
+                                  {order.remarks && (
+                                    <p className="text-xs text-muted-foreground italic mt-0.5">{order.remarks}</p>
+                                  )}
+                                </TableCell>
                                 <TableCell className="py-1.5 text-right">{order.quantity}x</TableCell>
                                 <TableCell className="py-1.5 text-right text-muted-foreground">
                                   {formatPrice(order.effective_price)}

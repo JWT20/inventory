@@ -20,6 +20,7 @@ from app.schemas import (
     OrderLineResponse,
     OrderLineUpdate,
     OrderResponse,
+    OrderUpdate,
     WeeklySummaryCustomerOrder,
     WeeklySummaryResponse,
     WeeklySummarySupplier,
@@ -140,6 +141,7 @@ def _order_to_response(order: Order, db: Session) -> OrderResponse:
         id=order.id,
         reference=order.reference,
         status=order.status,
+        remarks=order.remarks or "",
         organization_name=order.organization.name if order.organization else "",
         created_by_name=order.creator.username if order.creator else "",
         created_at=order.created_at,
@@ -199,6 +201,7 @@ def create_order(
         created_by=user.id,
         reference=ref,
         status="draft",
+        remarks=body.remarks,
     )
     db.add(order)
     db.flush()
@@ -326,6 +329,7 @@ def weekly_order_summary(
         .options(
             selectinload(OrderLine.sku).selectinload(SKU.supplier),
             selectinload(OrderLine.customer),
+            selectinload(OrderLine.order),
         )
         .filter(
             Order.created_at >= start_dt,
@@ -387,6 +391,7 @@ def weekly_order_summary(
             "effective_price": effective_price,
             "sku": sku,
             "default_price": default_price,
+            "remarks": line.order.remarks or "",
         })
 
     # Build response
@@ -406,10 +411,17 @@ def weekly_order_summary(
                 cname = e["customer_name"]
                 if cname in customer_agg:
                     customer_agg[cname]["quantity"] += e["quantity"]
+                    if e["remarks"]:
+                        existing = customer_agg[cname].get("remarks", "")
+                        if e["remarks"] not in existing:
+                            customer_agg[cname]["remarks"] = (
+                                f"{existing}; {e['remarks']}" if existing else e["remarks"]
+                            )
                 else:
                     customer_agg[cname] = {
                         "quantity": e["quantity"],
                         "effective_price": e["effective_price"],
+                        "remarks": e.get("remarks", ""),
                     }
 
             orders_out = []
@@ -424,6 +436,7 @@ def weekly_order_summary(
                     quantity=qty,
                     effective_price=ep,
                     line_total=lt,
+                    remarks=agg.get("remarks", ""),
                 ))
                 wine_qty += qty
                 if lt is not None:
@@ -527,6 +540,28 @@ def activate_order(
         resource_id=order.id,
     )
 
+    return _order_to_response(order, db)
+
+
+@router.patch("/{order_id}", response_model=OrderResponse)
+def update_order(
+    order_id: int,
+    body: OrderUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Update order remarks. Allowed in any status."""
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+
+    if not user.is_platform_admin:
+        if user.organization_id and order.organization_id != user.organization_id:
+            raise HTTPException(403, "Geen toegang tot deze order")
+
+    order.remarks = body.remarks
+    db.commit()
+    db.refresh(order)
     return _order_to_response(order, db)
 
 

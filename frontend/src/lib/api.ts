@@ -231,12 +231,15 @@ export const api = {
   // Orders
   createOrder: (data: {
     organization_id?: number | null;
+    remarks?: string;
     lines: {
       customer_id: number;
       sku_id: number;
       quantity: number;
     }[];
   }) => json("/orders", "POST", data),
+  updateOrder: (id: number, data: { remarks: string }) =>
+    json(`/orders/${id}`, "PATCH", data),
   listOrders: () => request("/orders"),
   getOrder: (id: number) => request(`/orders/${id}`),
   activateOrder: (id: number) =>
