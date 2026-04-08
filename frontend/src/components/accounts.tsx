@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Trash2, KeyRound } from "lucide-react";
+import { Trash2, KeyRound, Pencil } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -66,6 +66,7 @@ export function AccountsPage() {
   const [showNewOrg, setShowNewOrg] = useState(false);
   const [showNewSupplier, setShowNewSupplier] = useState(false);
   const [resetUser, setResetUser] = useState<User | null>(null);
+  const [editOrg, setEditOrg] = useState<Organization | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -149,13 +150,23 @@ export function AccountsPage() {
                 <p className="font-semibold">{org.name}</p>
                 <p className="text-xs text-muted-foreground">{org.slug}{org.custom_label ? ` · ${org.custom_label}` : ""}</p>
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => handleDeleteOrg(org)}
-              >
-                <Trash2 className="h-4 w-4 text-destructive" />
-              </Button>
+              <div className="flex gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setEditOrg(org)}
+                  title="Bewerken"
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => handleDeleteOrg(org)}
+                >
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              </div>
             </div>
           </Card>
         ))}
@@ -266,6 +277,12 @@ export function AccountsPage() {
         open={showNewOrg}
         onClose={() => setShowNewOrg(false)}
         onCreated={load}
+      />
+
+      <EditOrgDialog
+        org={editOrg}
+        onClose={() => setEditOrg(null)}
+        onSaved={load}
       />
 
       <ResetPasswordDialog
@@ -523,6 +540,90 @@ function NewOrgDialog({
           </div>
           <Button type="submit" className="w-full">
             Aanmaken
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditOrgDialog({
+  org,
+  onClose,
+  onSaved,
+}: {
+  org: Organization | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [customLabel, setCustomLabel] = useState("");
+
+  useEffect(() => {
+    if (org) {
+      setName(org.name);
+      setSlug(org.slug);
+      setCustomLabel(org.custom_label || "");
+    }
+  }, [org]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!org) return;
+    try {
+      await api.updateOrganization(org.id, {
+        name,
+        slug,
+        custom_label: customLabel || null,
+      });
+      toast.success(`Organisatie '${name}' bijgewerkt`);
+      onClose();
+      onSaved();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Fout");
+    }
+  }
+
+  return (
+    <Dialog open={!!org} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Organisatie bewerken</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-4">
+          <div className="space-y-2">
+            <Label>Naam</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              minLength={1}
+              required
+              autoFocus
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Slug</Label>
+            <Input
+              value={slug}
+              onChange={(e) => setSlug(e.target.value)}
+              minLength={1}
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Custom label (optioneel)</Label>
+            <Input
+              value={customLabel}
+              onChange={(e) => setCustomLabel(e.target.value)}
+              placeholder="bijv. Wijn van Jurjen"
+            />
+            <p className="text-xs text-muted-foreground">
+              Vervangt "Magazijn" in de header voor deze organisatie
+            </p>
+          </div>
+          <Button type="submit" className="w-full">
+            Opslaan
           </Button>
         </form>
       </DialogContent>
