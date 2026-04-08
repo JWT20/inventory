@@ -5,6 +5,7 @@ import { ReceivePage } from "@/components/receive";
 import { SKUsPage } from "@/components/skus";
 import { OrdersPage } from "@/components/orders";
 import { AccountsPage } from "@/components/accounts";
+import { CustomersPage } from "@/components/customers";
 import { InventoryPage } from "@/components/inventory";
 import { InboundPage } from "@/components/inbound";
 import { WeeklySummaryPage } from "@/components/weekly-summary";
@@ -13,7 +14,7 @@ import { LogOut } from "lucide-react";
 
 export { toast };
 
-type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "accounts" | "weekly";
+type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "customers" | "accounts" | "weekly";
 
 function Main() {
   const { user, loading, logout } = useAuth();
@@ -63,8 +64,13 @@ function Main() {
       show: isAdmin || user.role === "owner" || user.role === "member",
     },
     {
+      id: "customers",
+      label: "Klanten",
+      show: isAdmin || user.role === "owner" || user.role === "member",
+    },
+    {
       id: "accounts",
-      label: isAdmin ? "Accounts" : "Klanten",
+      label: "Beheer",
       show: isAdmin || user.role === "owner" || user.role === "member",
     },
   ];
@@ -102,6 +108,7 @@ function Main() {
             {t.id === "skus" && <SKUsPage />}
             {t.id === "inventory" && <InventoryPage />}
             {t.id === "weekly" && <WeeklySummaryPage />}
+            {t.id === "customers" && <CustomersPage />}
             {t.id === "accounts" && <AccountsPage />}
           </TabsContent>
         ))}

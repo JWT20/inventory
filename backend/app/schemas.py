@@ -238,21 +238,42 @@ class CustomerCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=150)
     organization_id: int | None = None
     show_prices: bool = True
+    discount_percentage: float | None = Field(None, ge=0, le=100)
 
 
 class CustomerUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=150)
     show_prices: bool | None = None
+    discount_percentage: float | None = None
 
 
 class CustomerResponse(BaseModel):
     id: int
     name: str
     show_prices: bool = True
+    discount_percentage: float | None = None
     sku_ids: list[int] = []
+    sku_count: int = 0
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class CustomerSKUResponse(BaseModel):
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    default_price: float | None = None
+    unit_price: float | None = None
+    discount_type: str | None = None
+    discount_value: float | None = None
+    effective_price: float | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class CustomerSKUAdd(BaseModel):
+    sku_ids: list[int] = Field(..., min_length=1)
 
 
 # --- Order ---

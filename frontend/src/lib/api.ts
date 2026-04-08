@@ -222,11 +222,17 @@ export const api = {
 
   // Customers
   listCustomers: () => request("/customers"),
-  createCustomer: (data: { name: string; organization_id?: number | null; show_prices?: boolean }) =>
+  getCustomer: (id: number) => request(`/customers/${id}`),
+  createCustomer: (data: { name: string; organization_id?: number | null; show_prices?: boolean; discount_percentage?: number | null }) =>
     json("/customers", "POST", data),
-  updateCustomer: (id: number, data: { name?: string; show_prices?: boolean }) =>
+  updateCustomer: (id: number, data: { name?: string; show_prices?: boolean; discount_percentage?: number | null }) =>
     json(`/customers/${id}`, "PATCH", data),
   deleteCustomer: (id: number) => request(`/customers/${id}`, { method: "DELETE" }),
+  listCustomerSKUs: (customerId: number) => request(`/customers/${customerId}/skus`),
+  addCustomerSKUs: (customerId: number, skuIds: number[]) =>
+    json(`/customers/${customerId}/skus`, "POST", { sku_ids: skuIds }),
+  removeCustomerSKU: (customerId: number, skuId: number) =>
+    request(`/customers/${customerId}/skus/${skuId}`, { method: "DELETE" }),
 
   // Orders
   createOrder: (data: {

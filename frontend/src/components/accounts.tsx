@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Trash2, KeyRound, Pencil } from "lucide-react";
+import { Trash2, KeyRound } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -21,7 +21,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 
 interface User {
   id: number;
@@ -44,14 +43,6 @@ interface Organization {
   created_at: string;
 }
 
-interface Customer {
-  id: number;
-  name: string;
-  show_prices: boolean;
-  sku_ids: number[];
-  created_at: string;
-}
-
 interface Supplier {
   id: number;
   name: string;
@@ -69,33 +60,26 @@ export function AccountsPage() {
   const { user: me } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [showNew, setShowNew] = useState(false);
   const [showNewOrg, setShowNewOrg] = useState(false);
-  const [showNewCustomer, setShowNewCustomer] = useState(false);
   const [showNewSupplier, setShowNewSupplier] = useState(false);
-  const [editCustomer, setEditCustomer] = useState<Customer | null>(null);
   const [resetUser, setResetUser] = useState<User | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const customerPromise = api.listCustomers();
       const supplierPromise = api.listSuppliers();
       if (me?.is_platform_admin) {
-        const [u, o, c, s] = await Promise.all([
+        const [u, o, s] = await Promise.all([
           api.listUsers(),
           api.listOrganizations(),
-          customerPromise,
           supplierPromise,
         ]);
         setUsers(u);
         setOrganizations(o);
-        setCustomers(c);
         setSuppliers(s);
       } else {
-        const [c, s] = await Promise.all([customerPromise, supplierPromise]);
-        setCustomers(c);
+        const [s] = await Promise.all([supplierPromise]);
         setSuppliers(s);
       }
     } catch {
@@ -116,17 +100,6 @@ export function AccountsPage() {
     try {
       await api.deleteUser(u.id);
       toast.success("Gebruiker verwijderd");
-      load();
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Fout");
-    }
-  }
-
-  async function handleDeleteCustomer(c: Customer) {
-    if (!confirm(`Klant '${c.name}' verwijderen?`)) return;
-    try {
-      await api.deleteCustomer(c.id);
-      toast.success("Klant verwijderd");
       load();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Fout");
@@ -193,56 +166,6 @@ export function AccountsPage() {
       </div>
       </>
       )}
-
-      {/* Customers section */}
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="text-xl font-bold">Klanten</h2>
-        <Button size="sm" onClick={() => setShowNewCustomer(true)}>
-          + Klant
-        </Button>
-      </div>
-
-      <div className="space-y-3 mb-8">
-        {customers.map((c) => (
-          <Card key={c.id} className="p-4">
-            <div className="flex justify-between items-center">
-              <div>
-                <p className="font-semibold">{c.name}</p>
-                <div className="flex gap-2 mt-1">
-                  <Badge variant={c.show_prices ? "default" : "secondary"}>
-                    {c.show_prices ? "Prijzen zichtbaar" : "Prijzen verborgen"}
-                  </Badge>
-                  <Badge variant="outline">
-                    {c.sku_ids.length} producten
-                  </Badge>
-                </div>
-              </div>
-              <div className="flex gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setEditCustomer(c)}
-                  title="Bewerken"
-                >
-                  <Pencil className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleDeleteCustomer(c)}
-                >
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
-              </div>
-            </div>
-          </Card>
-        ))}
-        {customers.length === 0 && (
-          <p className="text-center text-muted-foreground py-4">
-            Geen klanten
-          </p>
-        )}
-      </div>
 
       {/* Suppliers section */}
       <div className="flex justify-between items-center mb-4">
@@ -342,19 +265,6 @@ export function AccountsPage() {
         open={showNewOrg}
         onClose={() => setShowNewOrg(false)}
         onCreated={load}
-      />
-
-      <NewCustomerDialog
-        open={showNewCustomer}
-        onClose={() => setShowNewCustomer(false)}
-        onCreated={load}
-        organizations={organizations}
-      />
-
-      <EditCustomerDialog
-        customer={editCustomer}
-        onClose={() => setEditCustomer(null)}
-        onUpdated={load}
       />
 
       <ResetPasswordDialog
@@ -654,169 +564,6 @@ function ResetPasswordDialog({
           </div>
           <Button type="submit" className="w-full">
             Wachtwoord opslaan
-          </Button>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function NewCustomerDialog({
-  open,
-  onClose,
-  onCreated,
-  organizations,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onCreated: () => void;
-  organizations: { id: number; name: string }[];
-}) {
-  const { user: me } = useAuth();
-  const [name, setName] = useState("");
-  const [orgId, setOrgId] = useState<number | "">("");
-  const [showPrices, setShowPrices] = useState(true);
-
-  useEffect(() => {
-    if (open) {
-      setName("");
-      setOrgId(me?.organization_id || "");
-      setShowPrices(true);
-    }
-  }, [open, me]);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    try {
-      await api.createCustomer({
-        name,
-        organization_id: orgId ? (orgId as number) : undefined,
-        show_prices: showPrices,
-      });
-      toast.success(`Klant '${name}' aangemaakt`);
-      onClose();
-      onCreated();
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Fout");
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Nieuwe klant</DialogTitle>
-        </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-2">
-            <Label>Naam</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              minLength={1}
-              required
-              autoFocus
-            />
-          </div>
-          {me?.is_platform_admin && (
-            <div className="space-y-2">
-              <Label>Organisatie</Label>
-              <Select
-                value={orgId ? String(orgId) : ""}
-                onValueChange={(v) => setOrgId(v ? Number(v) : "")}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecteer organisatie..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {organizations.map((org) => (
-                    <SelectItem key={org.id} value={String(org.id)}>
-                      {org.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          <div className="flex items-center gap-3">
-            <Switch
-              id="show-prices-new"
-              checked={showPrices}
-              onCheckedChange={setShowPrices}
-            />
-            <Label htmlFor="show-prices-new">Prijzen zichtbaar voor klant</Label>
-          </div>
-          <Button type="submit" className="w-full">
-            Aanmaken
-          </Button>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function EditCustomerDialog({
-  customer,
-  onClose,
-  onUpdated,
-}: {
-  customer: Customer | null;
-  onClose: () => void;
-  onUpdated: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [showPrices, setShowPrices] = useState(true);
-
-  useEffect(() => {
-    if (customer) {
-      setName(customer.name);
-      setShowPrices(customer.show_prices);
-    }
-  }, [customer]);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!customer) return;
-    try {
-      await api.updateCustomer(customer.id, {
-        name: name.trim(),
-        show_prices: showPrices,
-      });
-      toast.success("Klant bijgewerkt");
-      onClose();
-      onUpdated();
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Fout");
-    }
-  }
-
-  return (
-    <Dialog open={!!customer} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Klant bewerken</DialogTitle>
-        </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-2">
-            <Label>Naam</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              minLength={1}
-              required
-              autoFocus
-            />
-          </div>
-          <div className="flex items-center gap-3">
-            <Switch
-              id="show-prices-edit"
-              checked={showPrices}
-              onCheckedChange={setShowPrices}
-            />
-            <Label htmlFor="show-prices-edit">Prijzen zichtbaar voor klant</Label>
-          </div>
-          <Button type="submit" className="w-full">
-            Opslaan
           </Button>
         </form>
       </DialogContent>

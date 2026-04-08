@@ -211,6 +211,9 @@ class Customer(Base):
         ForeignKey("organizations.id"), nullable=True
     )
     show_prices: Mapped[bool] = mapped_column(Boolean, default=True)
+    discount_percentage: Mapped[float | None] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
