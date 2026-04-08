@@ -71,7 +71,7 @@ function Main() {
     {
       id: "accounts",
       label: "Beheer",
-      show: isAdmin || user.role === "owner" || user.role === "member",
+      show: isAdmin || user.role === "owner",
     },
   ];
 
