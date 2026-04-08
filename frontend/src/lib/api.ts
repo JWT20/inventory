@@ -154,7 +154,7 @@ export const api = {
 
   // Organizations
   listOrganizations: () => request("/auth/organizations"),
-  createOrganization: (data: { name: string; slug: string; enabled_modules?: string[] }) =>
+  createOrganization: (data: { name: string; slug: string; custom_label?: string; enabled_modules?: string[] }) =>
     json("/auth/organizations", "POST", data),
   deleteOrganization: (id: number) => request(`/auth/organizations/${id}`, { method: "DELETE" }),
 
