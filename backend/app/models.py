@@ -37,6 +37,7 @@ class Organization(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
     slug: Mapped[str] = mapped_column(String(100), unique=True)
+    custom_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     enabled_modules: Mapped[str] = mapped_column(
         Text, default='["inventory","orders"]'
     )

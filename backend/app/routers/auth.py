@@ -56,15 +56,20 @@ class _LoginCredentials:
 
 
 def _user_to_response(user: User, db: Session | None = None) -> UserResponse:
-    # Resolve org name: use relationship if already loaded, else query via db
+    # Resolve org name + custom_label: use relationship if already loaded, else query via db
     org_name = None
+    custom_label = None
     if user.organization_id:
         try:
-            org_name = user.organization.name if user.organization else None
+            if user.organization:
+                org_name = user.organization.name
+                custom_label = user.organization.custom_label
         except Exception:
             if db:
                 org = db.get(Organization, user.organization_id)
-                org_name = org.name if org else None
+                if org:
+                    org_name = org.name
+                    custom_label = org.custom_label
     # Resolve customer name
     customer_name = None
     if user.customer_id:
@@ -81,6 +86,7 @@ def _user_to_response(user: User, db: Session | None = None) -> UserResponse:
         is_platform_admin=user.is_platform_admin,
         organization_id=user.organization_id,
         organization_name=org_name,
+        custom_label=custom_label,
         customer_id=user.customer_id,
         customer_name=customer_name,
         is_active=user.is_active,
@@ -121,11 +127,14 @@ async def login(
     # Create access token via FastAPI-Users' JWT strategy (includes exp)
     access_token = await create_access_token_for_user(user)
 
-    # Resolve organization name via sync session (async lazy-load not possible)
+    # Resolve organization name + custom_label via sync session (async lazy-load not possible)
     org_name = None
+    custom_label = None
     if user.organization_id:
         org = db.get(Organization, user.organization_id)
-        org_name = org.name if org else None
+        if org:
+            org_name = org.name
+            custom_label = org.custom_label
 
     publish_event(
         "user_login",
@@ -141,6 +150,7 @@ async def login(
         is_platform_admin=user.is_platform_admin,
         organization_id=user.organization_id,
         organization_name=org_name,
+        custom_label=custom_label,
         customer_id=user.customer_id,
     )
 
@@ -338,6 +348,7 @@ def list_organizations(db: Session = Depends(get_db), _: User = Depends(require_
             id=o.id,
             name=o.name,
             slug=o.slug,
+            custom_label=o.custom_label,
             enabled_modules=o.modules,
             created_at=o.created_at,
         )
@@ -356,6 +367,7 @@ def create_organization(
     org = Organization(
         name=data.name,
         slug=data.slug,
+        custom_label=data.custom_label,
         enabled_modules=json.dumps(data.enabled_modules),
     )
     db.add(org)
@@ -365,6 +377,7 @@ def create_organization(
         id=org.id,
         name=org.name,
         slug=org.slug,
+        custom_label=org.custom_label,
         enabled_modules=org.modules,
         created_at=org.created_at,
     )
@@ -383,6 +396,9 @@ def update_organization(
 
     if data.name is not None:
         org.name = data.name
+
+    if data.custom_label is not None:
+        org.custom_label = data.custom_label if data.custom_label else None
 
     if data.slug is not None:
         conflict = (
@@ -403,6 +419,7 @@ def update_organization(
         id=org.id,
         name=org.name,
         slug=org.slug,
+        custom_label=org.custom_label,
         enabled_modules=org.modules,
         created_at=org.created_at,
     )

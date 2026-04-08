@@ -81,7 +81,7 @@ function Main() {
     <Tabs defaultValue={defaultPage} className="min-h-screen flex flex-col">
       <header className="sticky top-0 z-50 bg-background border-b border-border px-4 pt-3 pb-0">
         <div className="flex justify-between items-center mb-2">
-          <h1 className="text-lg font-bold">Magazijn</h1>
+          <h1 className="text-lg font-bold">{user.custom_label || "Magazijn"}</h1>
           <button
             onClick={logout}
             className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"

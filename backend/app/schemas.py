@@ -22,6 +22,7 @@ class TokenResponse(BaseModel):
     is_platform_admin: bool = False
     organization_id: int | None = None
     organization_name: str | None = None
+    custom_label: str | None = None
     customer_id: int | None = None
 
 
@@ -86,6 +87,7 @@ class UserResponse(BaseModel):
     is_platform_admin: bool = False
     organization_id: int | None = None
     organization_name: str | None = None
+    custom_label: str | None = None
     customer_id: int | None = None
     customer_name: str | None = None
     is_active: bool
@@ -99,12 +101,14 @@ class UserResponse(BaseModel):
 class OrganizationCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     slug: str = Field(..., min_length=1, max_length=100)
+    custom_label: str | None = Field(None, max_length=255)
     enabled_modules: list[str] = ["inventory", "orders"]
 
 
 class OrganizationUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     slug: str | None = Field(None, min_length=1, max_length=100)
+    custom_label: str | None = None
     enabled_modules: list[str] | None = None
 
 
@@ -112,6 +116,7 @@ class OrganizationResponse(BaseModel):
     id: int
     name: str
     slug: str
+    custom_label: str | None = None
     enabled_modules: list[str] = []
     created_at: datetime
 

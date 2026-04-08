@@ -10,6 +10,7 @@ interface AuthUser {
   is_platform_admin: boolean;
   organization_id: number | null;
   organization_name: string | null;
+  custom_label: string | null;
   customer_id: number | null;
 }
 
@@ -50,6 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       is_platform_admin: resp.is_platform_admin ?? false,
       organization_id: resp.organization_id ?? null,
       organization_name: resp.organization_name ?? null,
+      custom_label: resp.custom_label ?? null,
       customer_id: resp.customer_id ?? null,
     });
     // Refresh full user data

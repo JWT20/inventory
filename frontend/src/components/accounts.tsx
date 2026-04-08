@@ -39,6 +39,7 @@ interface Organization {
   id: number;
   name: string;
   slug: string;
+  custom_label: string | null;
   enabled_modules: string[];
   created_at: string;
 }
@@ -146,7 +147,7 @@ export function AccountsPage() {
             <div className="flex justify-between items-center">
               <div>
                 <p className="font-semibold">{org.name}</p>
-                <p className="text-xs text-muted-foreground">{org.slug}</p>
+                <p className="text-xs text-muted-foreground">{org.slug}{org.custom_label ? ` · ${org.custom_label}` : ""}</p>
               </div>
               <Button
                 variant="ghost"
@@ -447,11 +448,13 @@ function NewOrgDialog({
 }) {
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
+  const [customLabel, setCustomLabel] = useState("");
 
   useEffect(() => {
     if (open) {
       setName("");
       setSlug("");
+      setCustomLabel("");
     }
   }, [open]);
 
@@ -469,7 +472,7 @@ function NewOrgDialog({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     try {
-      await api.createOrganization({ name, slug });
+      await api.createOrganization({ name, slug, custom_label: customLabel || undefined });
       toast.success(`Organisatie '${name}' aangemaakt`);
       onClose();
       onCreated();
@@ -505,6 +508,17 @@ function NewOrgDialog({
             />
             <p className="text-xs text-muted-foreground">
               Unieke identifier (bijv. "de-druif")
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label>Custom label (optioneel)</Label>
+            <Input
+              value={customLabel}
+              onChange={(e) => setCustomLabel(e.target.value)}
+              placeholder="bijv. Wijn van Jurjen"
+            />
+            <p className="text-xs text-muted-foreground">
+              Vervangt "Magazijn" in de header voor deze organisatie
             </p>
           </div>
           <Button type="submit" className="w-full">
