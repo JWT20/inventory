@@ -281,6 +281,7 @@ class OrderResponse(BaseModel):
     id: int
     reference: str
     status: str
+    remarks: str = ""
     organization_name: str = ""
     created_by_name: str = ""
     created_at: datetime
@@ -302,6 +303,7 @@ class ManualOrderLineCreate(BaseModel):
 
 class ManualOrderCreate(BaseModel):
     organization_id: int | None = None
+    remarks: str = ""
     lines: list[ManualOrderLineCreate] = Field(..., min_length=1)
 
 
@@ -309,6 +311,10 @@ class OrderLineAdd(BaseModel):
     customer_id: int = Field(..., gt=0)
     sku_id: int = Field(..., gt=0)
     quantity: int = Field(..., gt=0)
+
+
+class OrderUpdate(BaseModel):
+    remarks: str
 
 
 class OrderLineUpdate(BaseModel):
@@ -605,6 +611,7 @@ class WeeklySummaryCustomerOrder(BaseModel):
     quantity: int
     effective_price: float | None = None
     line_total: float | None = None
+    remarks: str = ""
 
 
 class WeeklySummaryWine(BaseModel):

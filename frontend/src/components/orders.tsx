@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
   Dialog,
@@ -66,6 +67,7 @@ interface Order {
   id: number;
   reference: string;
   status: string;
+  remarks: string;
   organization_name: string;
   created_by_name: string;
   created_at: string;
@@ -225,6 +227,7 @@ function ManualOrderDialog({
   const [customerSearch, setCustomerSearch] = useState("");
   const [newCustomerName, setNewCustomerName] = useState("");
   const [creatingCustomer, setCreatingCustomer] = useState(false);
+  const [remarks, setRemarks] = useState("");
 
   const isLinkedCustomer = user?.role === "customer" && !!user?.customer_id;
 
@@ -346,6 +349,7 @@ function ManualOrderDialog({
     try {
       await api.createOrder({
         organization_id: user?.organization_id,
+        remarks: remarks.trim(),
         lines: orderLines,
       });
       toast.success("Order aangemaakt");
@@ -354,6 +358,7 @@ function ManualOrderDialog({
       setSelectedCustomerIds([]);
       setCustomerLines({});
       setCustomerSearch("");
+      setRemarks("");
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Aanmaken mislukt");
     } finally {
@@ -478,7 +483,7 @@ function ManualOrderDialog({
                             type="number"
                             min={1}
                             className="w-20 h-7 text-sm"
-                            placeholder="Aantal"
+                            placeholder="Dozen"
                             value={line.checked ? line.quantity : ""}
                             disabled={!line.checked}
                             onChange={(e) =>
@@ -522,6 +527,17 @@ function ManualOrderDialog({
             );
           })}
 
+          <div>
+            <Label className="mb-1 block text-sm">Opmerking</Label>
+            <Textarea
+              placeholder="Optionele opmerking bij dit order..."
+              value={remarks}
+              onChange={(e) => setRemarks(e.target.value)}
+              rows={2}
+              className="text-sm"
+            />
+          </div>
+
           <Button
             className="w-full"
             onClick={submit}
@@ -551,6 +567,9 @@ function OrderDetailDialog({
   const [deleting, setDeleting] = useState(false);
   const [uploadingSkuId, setUploadingSkuId] = useState<number | null>(null);
   const fileRefs = useRef<Record<number, HTMLInputElement | null>>({});
+  const [editingRemarks, setEditingRemarks] = useState(false);
+  const [remarksValue, setRemarksValue] = useState("");
+  const [savingRemarks, setSavingRemarks] = useState(false);
 
   if (!order) return null;
 
@@ -602,6 +621,21 @@ function OrderDetailDialog({
     }
   }
 
+  async function saveRemarks() {
+    if (!order) return;
+    setSavingRemarks(true);
+    try {
+      await api.updateOrder(order.id, { remarks: remarksValue.trim() });
+      toast.success("Opmerking opgeslagen");
+      setEditingRemarks(false);
+      onUpdated();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Opslaan mislukt");
+    } finally {
+      setSavingRemarks(false);
+    }
+  }
+
   async function handleImageUpload(
     skuId: number,
     e: React.ChangeEvent<HTMLInputElement>,
@@ -644,6 +678,38 @@ function OrderDetailDialog({
           <p className="text-sm text-muted-foreground">
             Voortgang: {order.booked_boxes}/{order.total_boxes} dozen geboekt
           </p>
+
+          <div>
+            <Label className="mb-1 block text-sm">Opmerking</Label>
+            {editingRemarks ? (
+              <div className="space-y-2">
+                <Textarea
+                  value={remarksValue}
+                  onChange={(e) => setRemarksValue(e.target.value)}
+                  rows={2}
+                  className="text-sm"
+                />
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={saveRemarks} disabled={savingRemarks}>
+                    {savingRemarks ? "Opslaan..." : "Opslaan"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditingRemarks(false)}>
+                    Annuleren
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p
+                className="text-sm p-2 rounded border border-border bg-card min-h-[2rem] cursor-pointer hover:bg-muted/50"
+                onClick={() => {
+                  setRemarksValue(order.remarks || "");
+                  setEditingRemarks(true);
+                }}
+              >
+                {order.remarks || <span className="text-muted-foreground">Klik om opmerking toe te voegen...</span>}
+              </p>
+            )}
+          </div>
 
           <div>
             <Label className="mb-2 block">Orderregels</Label>
