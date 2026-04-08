@@ -70,7 +70,7 @@ function Main() {
     },
     {
       id: "accounts",
-      label: "Beheer",
+      label: isAdmin ? "Beheer" : "Leveranciers",
       show: isAdmin || user.role === "owner",
     },
   ];
