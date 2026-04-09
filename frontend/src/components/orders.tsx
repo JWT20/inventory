@@ -205,6 +205,74 @@ export function OrdersPage() {
     return Array.from(days).sort();
   };
 
+  // Group orders by ISO week
+  const getISOWeek = (dateStr: string): string => {
+    const d = new Date(dateStr);
+    const jan4 = new Date(d.getFullYear(), 0, 4);
+    const dayOfYear = Math.floor((d.getTime() - new Date(d.getFullYear(), 0, 1).getTime()) / 86400000) + 1;
+    const weekDay = (d.getDay() + 6) % 7; // Monday = 0
+    const weekNum = Math.floor((dayOfYear - weekDay + 9) / 7);
+    // Use a simpler approach: get the Thursday of the week to determine ISO week
+    const thu = new Date(d);
+    thu.setDate(d.getDate() - weekDay + 3);
+    const yearStart = new Date(thu.getFullYear(), 0, 1);
+    const week = Math.ceil(((thu.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+    return `${thu.getFullYear()}-W${String(week).padStart(2, "0")}`;
+  };
+
+  const getWeekMonday = (weekStr: string): Date => {
+    const [yearStr, weekNum] = weekStr.split("-W");
+    const jan4 = new Date(Number(yearStr), 0, 4);
+    const jan4Day = (jan4.getDay() + 6) % 7;
+    const monday = new Date(jan4);
+    monday.setDate(jan4.getDate() - jan4Day + (Number(weekNum) - 1) * 7);
+    return monday;
+  };
+
+  const formatWeekRange = (weekStr: string): string => {
+    const mon = getWeekMonday(weekStr);
+    const wed = new Date(mon);
+    wed.setDate(mon.getDate() + 2);
+    const fri = new Date(mon);
+    fri.setDate(mon.getDate() + 4);
+    const fmtShort = (d: Date) =>
+      d.toLocaleDateString("nl-NL", { weekday: "short", day: "numeric", month: "short" });
+    return `${fmtShort(wed)} - ${fmtShort(fri)}`;
+  };
+
+  const currentWeek = deadline?.week || getISOWeek(new Date().toISOString());
+
+  const getWeekLabel = (weekStr: string): string => {
+    const weekNum = weekStr.split("-W")[1];
+    if (weekStr === currentWeek) return `Deze week (week ${weekNum})`;
+    // Check if it's previous week
+    const mon = getWeekMonday(weekStr);
+    const curMon = getWeekMonday(currentWeek);
+    const diff = (curMon.getTime() - mon.getTime()) / (7 * 86400000);
+    if (Math.abs(diff - 1) < 0.5) return `Vorige week (week ${weekNum})`;
+    if (Math.abs(diff + 1) < 0.5) return `Volgende week (week ${weekNum})`;
+    return `Week ${weekNum}`;
+  };
+
+  // Build grouped structure
+  const groupedOrders: { week: string; label: string; range: string; orders: Order[] }[] = (() => {
+    if (orders.length === 0) return [];
+    const groups: Record<string, Order[]> = {};
+    for (const o of orders) {
+      const week = getISOWeek(o.created_at);
+      if (!groups[week]) groups[week] = [];
+      groups[week].push(o);
+    }
+    return Object.keys(groups)
+      .sort((a, b) => b.localeCompare(a)) // newest first
+      .map((week) => ({
+        week,
+        label: getWeekLabel(week),
+        range: formatWeekRange(week),
+        orders: groups[week],
+      }));
+  })();
+
   return (
     <>
       {deadline && (
@@ -248,7 +316,7 @@ export function OrdersPage() {
         )}
       </div>
 
-      <div className="space-y-3">
+      <div className="space-y-4">
         {loading ? (
           Array.from({ length: 3 }).map((_, i) => <OrderCardSkeleton key={i} />)
         ) : orders.length === 0 ? (
@@ -256,34 +324,49 @@ export function OrdersPage() {
             Geen orders gevonden
           </p>
         ) : (
-          orders.map((o) => (
-            <Card
-              key={o.id}
-              className="p-4 cursor-pointer active:scale-[0.98] transition-transform"
-              onClick={() => setSelectedOrder(o)}
-            >
-              <div className="flex justify-between items-center mb-1">
-                <span className="font-semibold">{o.reference}</span>
-                <Badge variant={STATUS_VARIANT[o.status] ?? "inactive"}>
-                  {STATUS_LABELS[o.status] ?? o.status}
-                </Badge>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {o.organization_name || o.created_by_name} &middot;{" "}
-                {o.lines.length} product
-                {o.lines.length !== 1 ? "en" : ""}
-              </p>
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <span>{o.booked_boxes}/{o.total_boxes} dozen geboekt</span>
-                <span className="ml-auto flex gap-1">
-                  {getOrderDeliveryDays(o).map((day) => (
-                    <Badge key={day} variant="secondary" className="text-xs px-1.5 py-0">
-                      {DELIVERY_DAY_LABELS[day] ?? day}
-                    </Badge>
-                  ))}
+          groupedOrders.map((group) => (
+            <div key={group.week}>
+              <div className="flex items-center gap-2 mb-2">
+                <span className={`text-sm font-semibold ${group.week === currentWeek ? "" : "text-muted-foreground"}`}>
+                  {group.label}
                 </span>
+                <span className="text-xs text-muted-foreground">
+                  levering {group.range}
+                </span>
+                <div className="flex-1 border-t border-border" />
               </div>
-            </Card>
+              <div className="space-y-3">
+                {group.orders.map((o) => (
+                  <Card
+                    key={o.id}
+                    className={`p-4 cursor-pointer active:scale-[0.98] transition-transform ${group.week !== currentWeek ? "opacity-70" : ""}`}
+                    onClick={() => setSelectedOrder(o)}
+                  >
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="font-semibold">{o.reference}</span>
+                      <Badge variant={STATUS_VARIANT[o.status] ?? "inactive"}>
+                        {STATUS_LABELS[o.status] ?? o.status}
+                      </Badge>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {o.organization_name || o.created_by_name} &middot;{" "}
+                      {o.lines.length} product
+                      {o.lines.length !== 1 ? "en" : ""}
+                    </p>
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <span>{o.booked_boxes}/{o.total_boxes} dozen geboekt</span>
+                      <span className="ml-auto flex gap-1">
+                        {getOrderDeliveryDays(o).map((day) => (
+                          <Badge key={day} variant="secondary" className="text-xs px-1.5 py-0">
+                            {DELIVERY_DAY_LABELS[day] ?? day}
+                          </Badge>
+                        ))}
+                      </span>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </div>
           ))
         )}
       </div>
