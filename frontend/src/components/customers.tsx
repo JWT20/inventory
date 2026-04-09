@@ -22,6 +22,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ArrowLeft, Plus, Trash2, Search } from "lucide-react";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -31,10 +38,17 @@ interface Customer {
   name: string;
   show_prices: boolean;
   discount_percentage: number | null;
+  delivery_day: string;
   sku_ids: number[];
   sku_count: number;
   created_at: string;
 }
+
+const DELIVERY_DAY_LABELS: Record<string, string> = {
+  wednesday: "Woensdag",
+  thursday: "Donderdag",
+  friday: "Vrijdag",
+};
 
 interface CustomerSKU {
   sku_id: number;
@@ -116,6 +130,7 @@ function CustomerList({ onSelect }: { onSelect: (id: number) => void }) {
             <TableHeader>
               <TableRow>
                 <TableHead>Naam</TableHead>
+                <TableHead className="w-[120px]">Leverdag</TableHead>
                 <TableHead className="w-[100px] text-right">Korting</TableHead>
                 <TableHead className="w-[100px] text-right">Producten</TableHead>
               </TableRow>
@@ -128,6 +143,11 @@ function CustomerList({ onSelect }: { onSelect: (id: number) => void }) {
                   onClick={() => onSelect(c.id)}
                 >
                   <TableCell className="font-medium">{c.name}</TableCell>
+                  <TableCell>
+                    <Badge variant="secondary">
+                      {DELIVERY_DAY_LABELS[c.delivery_day] ?? c.delivery_day}
+                    </Badge>
+                  </TableCell>
                   <TableCell className="text-right">
                     {c.discount_percentage != null
                       ? `${c.discount_percentage}%`
@@ -169,6 +189,7 @@ function CustomerDetail({
   const [name, setName] = useState("");
   const [showPrices, setShowPrices] = useState(true);
   const [discountPct, setDiscountPct] = useState("");
+  const [deliveryDay, setDeliveryDay] = useState("thursday");
   const [dirty, setDirty] = useState(false);
 
   // Add product dialog
@@ -185,6 +206,7 @@ function CustomerDetail({
       setName(c.name);
       setShowPrices(c.show_prices);
       setDiscountPct(c.discount_percentage != null ? String(c.discount_percentage) : "");
+      setDeliveryDay(c.delivery_day || "thursday");
       setDirty(false);
     } catch {
       toast.error("Fout bij laden klant");
@@ -209,6 +231,7 @@ function CustomerDetail({
         name: name.trim(),
         show_prices: showPrices,
         discount_percentage: dp,
+        delivery_day: deliveryDay,
       });
       toast.success("Klant opgeslagen");
       load();
@@ -290,7 +313,7 @@ function CustomerDetail({
       {/* General settings */}
       <Card className="p-4 space-y-4">
         <h3 className="font-semibold">Algemeen</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="space-y-1">
             <Label>Naam</Label>
             <Input
@@ -309,6 +332,22 @@ function CustomerDetail({
               value={discountPct}
               onChange={(e) => markDirty(setDiscountPct, e.target.value)}
             />
+          </div>
+          <div className="space-y-1">
+            <Label>Leverdag</Label>
+            <Select
+              value={deliveryDay}
+              onValueChange={(v) => { setDeliveryDay(v); setDirty(true); }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="wednesday">Woensdag</SelectItem>
+                <SelectItem value="thursday">Donderdag</SelectItem>
+                <SelectItem value="friday">Vrijdag</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex items-end gap-2 pb-1">
             <Switch

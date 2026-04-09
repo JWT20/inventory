@@ -41,6 +41,7 @@ def _customer_to_response(customer: Customer) -> CustomerResponse:
             if customer.discount_percentage is not None
             else None
         ),
+        delivery_day=customer.delivery_day,
         sku_ids=[link.sku_id for link in customer.sku_links],
         sku_count=len(customer.sku_links),
         created_at=customer.created_at,
@@ -134,6 +135,7 @@ def create_customer(
         organization_id=org_id,
         show_prices=body.show_prices,
         discount_percentage=body.discount_percentage,
+        delivery_day=body.delivery_day,
     )
     db.add(customer)
     db.commit()
@@ -176,6 +178,9 @@ def update_customer(
     # Since Pydantic default is None, we check if the field was actually sent
     elif "discount_percentage" in (body.model_fields_set or set()):
         customer.discount_percentage = None
+
+    if body.delivery_day is not None:
+        customer.delivery_day = body.delivery_day
 
     db.commit()
     db.refresh(customer)
