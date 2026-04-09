@@ -9,6 +9,12 @@ import { ImageSlideshow } from "@/components/image-slideshow";
 import { QuantityPicker } from "@/components/quantity-picker";
 import { Skeleton } from "@/components/ui/skeleton";
 
+interface OrderLine {
+  delivery_day: string;
+  customer_name: string;
+  quantity: number;
+}
+
 interface Order {
   id: number;
   reference: string;
@@ -16,7 +22,20 @@ interface Order {
   merchant_name: string;
   total_boxes: number;
   booked_boxes: number;
+  lines?: OrderLine[];
 }
+
+const DELIVERY_DAY_LABELS: Record<string, string> = {
+  wednesday: "woensdag",
+  thursday: "donderdag",
+  friday: "vrijdag",
+};
+
+const DELIVERY_DAY_SHORT: Record<string, string> = {
+  wednesday: "wo",
+  thursday: "do",
+  friday: "vr",
+};
 
 interface BookingResult {
   id: number;
@@ -170,6 +189,38 @@ export function ReceivePage() {
   );
 }
 
+/* ---------- Order Card ---------- */
+
+function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (order: Order) => void }) {
+  const days = [...new Set(o.lines?.map((l) => l.delivery_day) ?? [])];
+  const dayOrderMap: Record<string, number> = { wednesday: 0, thursday: 1, friday: 2 };
+  days.sort((a, b) => (dayOrderMap[a] ?? 9) - (dayOrderMap[b] ?? 9));
+
+  return (
+    <Card
+      className="p-4 cursor-pointer active:scale-[0.98] transition-transform"
+      onClick={() => onSelect(o)}
+    >
+      <div className="flex justify-between items-center mb-1">
+        <span className="font-semibold">{o.reference}</span>
+        <div className="flex gap-1">
+          {days.map((d) => (
+            <Badge key={d} variant="secondary" className="text-xs">
+              {DELIVERY_DAY_SHORT[d] || d}
+            </Badge>
+          ))}
+        </div>
+      </div>
+      <p className="text-sm text-muted-foreground">
+        {o.merchant_name}
+      </p>
+      <p className="text-sm text-muted-foreground">
+        {o.booked_boxes}/{o.total_boxes} dozen geboekt
+      </p>
+    </Card>
+  );
+}
+
 /* ---------- Step 1: Select Active Order ---------- */
 
 function OrderSelectStep({
@@ -224,25 +275,41 @@ function OrderSelectStep({
           Geen actieve orders
         </p>
       ) : (
-        <div className="space-y-3">
-          {orders.map((o) => (
-            <Card
-              key={o.id}
-              className="p-4 cursor-pointer active:scale-[0.98] transition-transform"
-              onClick={() => onSelect(o)}
-            >
-              <div className="flex justify-between items-center mb-1">
-                <span className="font-semibold">{o.reference}</span>
-                <Badge variant="active">Actief</Badge>
+        <div className="space-y-4">
+          {(() => {
+            // Group orders by delivery day
+            const dayOrder = ["wednesday", "thursday", "friday"];
+            const ordersByDay: Record<string, Order[]> = {};
+            for (const o of orders) {
+              const days = new Set(o.lines?.map((l) => l.delivery_day) ?? []);
+              if (days.size === 0) days.add("thursday"); // fallback
+              for (const day of days) {
+                if (!ordersByDay[day]) ordersByDay[day] = [];
+                if (!ordersByDay[day].some((existing) => existing.id === o.id)) {
+                  ordersByDay[day].push(o);
+                }
+              }
+            }
+            const sortedDays = dayOrder.filter((d) => ordersByDay[d]?.length);
+            // If only one day, skip headers
+            if (sortedDays.length <= 1) {
+              return orders.map((o) => (
+                <OrderCard key={o.id} order={o} onSelect={onSelect} />
+              ));
+            }
+            return sortedDays.map((day) => (
+              <div key={day}>
+                <p className="text-sm font-semibold text-muted-foreground mb-2 capitalize">
+                  {DELIVERY_DAY_LABELS[day] || day}
+                </p>
+                <div className="space-y-3">
+                  {ordersByDay[day].map((o) => (
+                    <OrderCard key={o.id} order={o} onSelect={onSelect} />
+                  ))}
+                </div>
               </div>
-              <p className="text-sm text-muted-foreground">
-                {o.merchant_name}
-              </p>
-              <p className="text-sm text-muted-foreground">
-                {o.booked_boxes}/{o.total_boxes} dozen geboekt
-              </p>
-            </Card>
-          ))}
+            ));
+          })()}
         </div>
       )}
 

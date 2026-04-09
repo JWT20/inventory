@@ -42,6 +42,7 @@ interface SupplierGroup {
 interface WeeklySummary {
   week: string;
   deadline: string;
+  deadline_extended: boolean;
   suppliers: SupplierGroup[];
   grand_total_quantity: number;
   grand_total_value: number | null;
@@ -244,7 +245,8 @@ export function WeeklySummaryPage() {
 
           {data.deadline && (
             <p className="text-xs text-muted-foreground text-center">
-              Deadline: zondag {data.deadline}
+              Deadline: {new Date(data.deadline).toLocaleDateString("nl-NL", { weekday: "long", day: "numeric", month: "long" })} om {new Date(data.deadline).toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" })}
+              {data.deadline_extended && " (verlengd i.v.m. feestdag)"}
             </p>
           )}
         </div>

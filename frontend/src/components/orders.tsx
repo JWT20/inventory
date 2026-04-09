@@ -240,7 +240,7 @@ export function OrdersPage() {
     return `${fmtShort(wed)} - ${fmtShort(fri)}`;
   };
 
-  const currentWeek = deadline?.week || getISOWeek(new Date().toISOString());
+  const currentWeek = getISOWeek(new Date().toISOString());
 
   const getWeekLabel = (weekStr: string): string => {
     const weekNum = weekStr.split("-W")[1];
