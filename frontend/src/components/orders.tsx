@@ -69,6 +69,11 @@ interface DeadlineInfo {
   deadline: string;
   deadline_extended: boolean;
   is_past: boolean;
+  delivery_wednesday: string;
+  delivery_thursday: string;
+  delivery_friday: string;
+  customer_delivery_day: string | null;
+  customer_delivery_date: string | null;
 }
 
 const DELIVERY_DAY_LABELS: Record<string, string> = {
@@ -178,6 +183,21 @@ export function OrdersPage() {
     });
   };
 
+  const formatDate = (iso: string) => {
+    const d = new Date(iso + "T00:00:00");
+    return d.toLocaleDateString("nl-NL", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+    });
+  };
+
+  const DELIVERY_DAY_LABELS_FULL: Record<string, string> = {
+    wednesday: "woensdag",
+    thursday: "donderdag",
+    friday: "vrijdag",
+  };
+
   // Determine unique delivery days across all order lines for display on cards
   const getOrderDeliveryDays = (order: Order): string[] => {
     const days = new Set(order.lines.map((l) => l.delivery_day));
@@ -188,21 +208,32 @@ export function OrdersPage() {
     <>
       {deadline && (
         <Card className={`p-3 mb-4 ${deadline.is_past ? "border-muted" : "border-primary/50"}`}>
-          <div className="flex items-center justify-between text-sm">
-            <div>
-              <span className="font-medium">
-                Deadline {deadline.week}:
-              </span>{" "}
-              <span className={deadline.is_past ? "text-muted-foreground" : ""}>
-                {formatDeadline(deadline)}
-              </span>
-              {deadline.deadline_extended && (
-                <span className="text-amber-500 ml-2">(verlengd i.v.m. feestdag)</span>
+          <div className="text-sm space-y-1">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="font-medium">Bestel voor: </span>
+                <span className={deadline.is_past ? "text-muted-foreground" : ""}>
+                  {formatDeadline(deadline)}
+                </span>
+                {deadline.deadline_extended && (
+                  <span className="text-amber-500 ml-2">(verlengd i.v.m. feestdag)</span>
+                )}
+              </div>
+              {deadline.is_past && (
+                <Badge variant="inactive">Gesloten</Badge>
               )}
             </div>
-            {deadline.is_past && (
-              <Badge variant="inactive">Gesloten</Badge>
-            )}
+            <div className="text-muted-foreground">
+              {deadline.customer_delivery_date ? (
+                <span>
+                  Jouw levering: {formatDate(deadline.customer_delivery_date)}
+                </span>
+              ) : (
+                <span>
+                  Levering week {deadline.week.split("-W")[1]}: woensdag t/m vrijdag
+                </span>
+              )}
+            </div>
           </div>
         </Card>
       )}

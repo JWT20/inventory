@@ -679,3 +679,8 @@ class DeadlineResponse(BaseModel):
     deadline: str
     deadline_extended: bool = False
     is_past: bool = False
+    delivery_wednesday: str = ""
+    delivery_thursday: str = ""
+    delivery_friday: str = ""
+    customer_delivery_day: str | None = None
+    customer_delivery_date: str | None = None

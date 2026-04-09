@@ -35,13 +35,23 @@ def get_order_deadline(week: str) -> tuple[datetime.datetime, bool]:
     return deadline_dt, extended
 
 
-def get_current_week_deadline() -> tuple[str, datetime.datetime, bool]:
-    """Get deadline info for the current ISO week.
+def get_next_deadline() -> tuple[str, datetime.datetime, bool]:
+    """Get the next upcoming deadline.
+
+    If the current week's deadline has passed, return next week's deadline.
 
     Returns:
         Tuple of (week_string, deadline_datetime, was_extended).
     """
-    today = datetime.date.today()
+    now = datetime.datetime.now()
+    today = now.date()
     week = f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"
     deadline_dt, extended = get_order_deadline(week)
+
+    if now > deadline_dt:
+        # Deadline passed, show next week
+        next_week_date = today + datetime.timedelta(days=7)
+        week = f"{next_week_date.isocalendar().year}-W{next_week_date.isocalendar().week:02d}"
+        deadline_dt, extended = get_order_deadline(week)
+
     return week, deadline_dt, extended

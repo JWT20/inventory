@@ -27,7 +27,7 @@ from app.schemas import (
     WeeklySummarySupplier,
     WeeklySummaryWine,
 )
-from app.services.deadlines import get_order_deadline, get_current_week_deadline
+from app.services.deadlines import get_order_deadline, get_next_deadline
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -299,20 +299,44 @@ def list_orders(
 # ---------------------------------------------------------------------------
 
 
+DELIVERY_DAY_OFFSETS = {"wednesday": 2, "thursday": 3, "friday": 4}
+
+
 @router.get("/deadline", response_model=DeadlineResponse)
 def get_deadline(
     week: str = Query(None, description="ISO week, bijv. '2026-W15'. Standaard: huidige week."),
+    db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Get the order deadline for a given week. Accessible by all authenticated users."""
-    if not week:
-        today = datetime.date.today()
-        week = f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"
+    """Get the order deadline. Without a week param, returns the next upcoming deadline.
 
-    try:
-        deadline_dt, extended = get_order_deadline(week)
-    except ValueError:
-        raise HTTPException(400, f"Ongeldig weekformaat: '{week}'. Gebruik bijv. '2026-W15'.")
+    If the current week's deadline has passed, automatically shows next week's.
+    Includes delivery dates (wed/thu/fri) for the week and the customer's
+    personal delivery date if applicable.
+    """
+    if week:
+        try:
+            deadline_dt, extended = get_order_deadline(week)
+        except ValueError:
+            raise HTTPException(400, f"Ongeldig weekformaat: '{week}'. Gebruik bijv. '2026-W15'.")
+    else:
+        week, deadline_dt, extended = get_next_deadline()
+
+    # Calculate delivery dates for this week (wed/thu/fri)
+    monday = datetime.datetime.strptime(week + "-1", "%G-W%V-%u").date()
+    wed = (monday + datetime.timedelta(days=2)).isoformat()
+    thu = (monday + datetime.timedelta(days=3)).isoformat()
+    fri = (monday + datetime.timedelta(days=4)).isoformat()
+
+    # If user is a customer, resolve their personal delivery date
+    customer_delivery_day = None
+    customer_delivery_date = None
+    if user.role == "customer" and user.customer_id:
+        customer = db.get(Customer, user.customer_id)
+        if customer:
+            customer_delivery_day = customer.delivery_day
+            offset = DELIVERY_DAY_OFFSETS.get(customer.delivery_day, 3)
+            customer_delivery_date = (monday + datetime.timedelta(days=offset)).isoformat()
 
     now = datetime.datetime.now()
     return DeadlineResponse(
@@ -320,6 +344,11 @@ def get_deadline(
         deadline=deadline_dt.isoformat(),
         deadline_extended=extended,
         is_past=now > deadline_dt,
+        delivery_wednesday=wed,
+        delivery_thursday=thu,
+        delivery_friday=fri,
+        customer_delivery_day=customer_delivery_day,
+        customer_delivery_date=customer_delivery_date,
     )
 
 
