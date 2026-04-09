@@ -42,6 +42,7 @@ interface CustomerOption {
   id: number;
   name: string;
   sku_ids: number[];
+  delivery_day: string;
 }
 
 interface OrderLine {
@@ -319,6 +320,9 @@ function ManualOrderDialog({
   const [customerLines, setCustomerLines] = useState<
     Record<number, CustomerSkuLine[]>
   >({});
+  const [customerDeliveryDays, setCustomerDeliveryDays] = useState<
+    Record<number, string>
+  >({});
   const [submitting, setSubmitting] = useState(false);
   const [customerSearch, setCustomerSearch] = useState("");
   const [newCustomerName, setNewCustomerName] = useState("");
@@ -341,6 +345,7 @@ function ManualOrderDialog({
             (skuId) => ({ sku_id: skuId, checked: false, quantity: 1 }),
           );
           setCustomerLines({ [linked.id]: lines });
+          setCustomerDeliveryDays({ [linked.id]: linked.delivery_day || "thursday" });
         }
       }
     });
@@ -364,6 +369,13 @@ function ManualOrderDialog({
         }),
       );
       setCustomerLines((prev) => ({ ...prev, [customerId]: lines }));
+    }
+    if (!customerDeliveryDays[customerId]) {
+      const customer = allCustomers.find((c) => c.id === customerId);
+      setCustomerDeliveryDays((prev) => ({
+        ...prev,
+        [customerId]: customer?.delivery_day || "thursday",
+      }));
     }
   }
 
@@ -424,8 +436,10 @@ function ManualOrderDialog({
       customer_id: number;
       sku_id: number;
       quantity: number;
+      delivery_day: string;
     }[] = [];
     for (const customerId of selectedCustomerIds) {
+      const deliveryDay = customerDeliveryDays[customerId] || "thursday";
       const lines = customerLines[customerId] || [];
       for (const line of lines) {
         if (line.checked && line.quantity > 0) {
@@ -433,6 +447,7 @@ function ManualOrderDialog({
             customer_id: customerId,
             sku_id: line.sku_id,
             quantity: line.quantity,
+            delivery_day: deliveryDay,
           });
         }
       }
@@ -453,6 +468,7 @@ function ManualOrderDialog({
       onClose();
       setSelectedCustomerIds([]);
       setCustomerLines({});
+      setCustomerDeliveryDays({});
       setCustomerSearch("");
       setRemarks("");
     } catch (err: unknown) {
@@ -543,11 +559,27 @@ function ManualOrderDialog({
             const customer = allCustomers.find((c) => c.id === customerId);
             if (!customer) return null;
             const lines = customerLines[customerId] || [];
+            const chosenDay = customerDeliveryDays[customerId] || customer.delivery_day || "thursday";
 
             return (
               <div key={customerId} className="border border-border rounded-lg">
-                <div className="px-3 py-2 bg-muted rounded-t-lg">
+                <div className="px-3 py-2 bg-muted rounded-t-lg flex items-center justify-between gap-2">
                   <span className="font-medium text-sm">{customer.name}</span>
+                  <Select
+                    value={chosenDay}
+                    onValueChange={(v) =>
+                      setCustomerDeliveryDays((prev) => ({ ...prev, [customerId]: v }))
+                    }
+                  >
+                    <SelectTrigger className="h-7 w-[130px] text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="wednesday">Woensdag</SelectItem>
+                      <SelectItem value="thursday">Donderdag</SelectItem>
+                      <SelectItem value="friday">Vrijdag</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="p-3 space-y-1">
                   {lines.length === 0 ? (

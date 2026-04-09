@@ -83,10 +83,6 @@ def _order_line_to_response(
         else None
     )
 
-    delivery_day = "thursday"
-    if line.customer is not None:
-        delivery_day = line.customer.delivery_day or "thursday"
-
     return OrderLineResponse(
         id=line.id,
         sku_id=line.sku_id,
@@ -95,7 +91,7 @@ def _order_line_to_response(
         klant=line.klant,
         customer_id=line.customer_id,
         customer_name=line.customer_name,
-        delivery_day=delivery_day,
+        delivery_day=line.delivery_day,
         quantity=line.quantity,
         booked_count=line.booked_count,
         has_image=len(line.sku.reference_images) > 0,
@@ -213,23 +209,31 @@ def create_order(
     db.add(order)
     db.flush()
 
-    # Group by (customer_id, sku_id), sum quantities
+    # Group by (customer_id, sku_id), sum quantities; track delivery_day per customer
     line_quantities: dict[tuple[int, int], int] = {}
+    customer_delivery_days: dict[int, str | None] = {}
     for line in body.lines:
         key = (line.customer_id, line.sku_id)
         line_quantities[key] = line_quantities.get(key, 0) + line.quantity
+        if line.delivery_day is not None:
+            customer_delivery_days[line.customer_id] = line.delivery_day
 
     sku_cache: dict[int, SKU] = {}
+    customer_cache: dict[int, Customer] = {}
     customer_sku_pairs: set[tuple[int, int]] = set()
 
     for (customer_id, sku_id), qty in line_quantities.items():
-        customer = db.get(Customer, customer_id)
+        customer = customer_cache.get(customer_id) or db.get(Customer, customer_id)
         if not customer:
             raise HTTPException(404, f"Klant met id {customer_id} niet gevonden")
+        customer_cache[customer_id] = customer
         sku = sku_cache.get(sku_id) or db.get(SKU, sku_id)
         if not sku:
             raise HTTPException(404, f"SKU met id {sku_id} niet gevonden")
         sku_cache[sku_id] = sku
+
+        # Use explicitly chosen delivery_day, fall back to customer default
+        delivery_day = customer_delivery_days.get(customer_id) or customer.delivery_day
 
         db.add(OrderLine(
             order_id=order.id,
@@ -237,6 +241,7 @@ def create_order(
             customer_id=customer_id,
             klant=customer.name,
             quantity=qty,
+            delivery_day=delivery_day,
         ))
         customer_sku_pairs.add((customer_id, sku_id))
 
@@ -722,6 +727,8 @@ def add_order_line(
     if not sku:
         raise HTTPException(404, f"SKU met id {body.sku_id} niet gevonden")
 
+    delivery_day = body.delivery_day or customer.delivery_day
+
     # Check if a line for this (customer, sku) already exists — merge quantities
     existing_line = (
         db.query(OrderLine)
@@ -734,6 +741,7 @@ def add_order_line(
     )
     if existing_line:
         existing_line.quantity += body.quantity
+        existing_line.delivery_day = delivery_day
     else:
         db.add(OrderLine(
             order_id=order_id,
@@ -741,6 +749,7 @@ def add_order_line(
             customer_id=body.customer_id,
             klant=customer.name,
             quantity=body.quantity,
+            delivery_day=delivery_day,
         ))
 
     _upsert_customer_skus(db, {(body.customer_id, body.sku_id)})
