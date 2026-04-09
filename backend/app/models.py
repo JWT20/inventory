@@ -264,6 +264,7 @@ class Order(Base):
     reference: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="draft")
     remarks: Mapped[str] = mapped_column(Text, default="", server_default="")
+    delivery_week: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
