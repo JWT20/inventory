@@ -52,6 +52,7 @@ interface OrderLine {
   klant: string;
   customer_id: number | null;
   customer_name: string;
+  delivery_day: string;
   quantity: number;
   booked_count: number;
   has_image: boolean;
@@ -62,6 +63,19 @@ interface OrderLine {
   effective_price: number | null;
   line_total: number | null;
 }
+
+interface DeadlineInfo {
+  week: string;
+  deadline: string;
+  deadline_extended: boolean;
+  is_past: boolean;
+}
+
+const DELIVERY_DAY_LABELS: Record<string, string> = {
+  wednesday: "Wo",
+  thursday: "Do",
+  friday: "Vr",
+};
 
 interface Order {
   id: number;
@@ -124,10 +138,16 @@ export function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [showManual, setShowManual] = useState(false);
+  const [deadline, setDeadline] = useState<DeadlineInfo | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setOrders(await api.listOrders());
+      const [ordersData, deadlineData] = await Promise.all([
+        api.listOrders(),
+        api.getDeadline(),
+      ]);
+      setOrders(ordersData);
+      setDeadline(deadlineData);
     } catch {
       toast.error("Kan orders niet laden");
     } finally {
@@ -147,8 +167,46 @@ export function OrdersPage() {
       user.role === "member" ||
       user.role === "customer");
 
+  const formatDeadline = (dl: DeadlineInfo) => {
+    const d = new Date(dl.deadline);
+    return d.toLocaleDateString("nl-NL", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  // Determine unique delivery days across all order lines for display on cards
+  const getOrderDeliveryDays = (order: Order): string[] => {
+    const days = new Set(order.lines.map((l) => l.delivery_day));
+    return Array.from(days).sort();
+  };
+
   return (
     <>
+      {deadline && (
+        <Card className={`p-3 mb-4 ${deadline.is_past ? "border-muted" : "border-primary/50"}`}>
+          <div className="flex items-center justify-between text-sm">
+            <div>
+              <span className="font-medium">
+                Deadline {deadline.week}:
+              </span>{" "}
+              <span className={deadline.is_past ? "text-muted-foreground" : ""}>
+                {formatDeadline(deadline)}
+              </span>
+              {deadline.deadline_extended && (
+                <span className="text-amber-500 ml-2">(verlengd i.v.m. feestdag)</span>
+              )}
+            </div>
+            {deadline.is_past && (
+              <Badge variant="inactive">Gesloten</Badge>
+            )}
+          </div>
+        </Card>
+      )}
+
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Orders</h2>
         {canCreate && (
@@ -183,9 +241,16 @@ export function OrdersPage() {
                 {o.lines.length} product
                 {o.lines.length !== 1 ? "en" : ""}
               </p>
-              <p className="text-sm text-muted-foreground">
-                {o.booked_boxes}/{o.total_boxes} dozen geboekt
-              </p>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <span>{o.booked_boxes}/{o.total_boxes} dozen geboekt</span>
+                <span className="ml-auto flex gap-1">
+                  {getOrderDeliveryDays(o).map((day) => (
+                    <Badge key={day} variant="secondary" className="text-xs px-1.5 py-0">
+                      {DELIVERY_DAY_LABELS[day] ?? day}
+                    </Badge>
+                  ))}
+                </span>
+              </div>
             </Card>
           ))
         )}
@@ -724,6 +789,10 @@ function OrderDetailDialog({
                     <p className="text-xs text-muted-foreground">
                       {line.sku_code} &middot; Klant:{" "}
                       {line.customer_name || line.klant}
+                      {" "}&middot;{" "}
+                      <Badge variant="secondary" className="text-xs px-1 py-0">
+                        {DELIVERY_DAY_LABELS[line.delivery_day] ?? line.delivery_day}
+                      </Badge>
                     </p>
                   </div>
                   <div className="text-right flex items-center gap-2">

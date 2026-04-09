@@ -20,6 +20,7 @@ sentry-sdk[fastapi]>=2.0
 itsdangerous>=2.2.0
 redis>=5.0.0
 boto3>=1.35.0
+holidays>=0.63
 
 # Testing
 pytest>=8.3.4

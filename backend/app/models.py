@@ -28,6 +28,7 @@ VALID_ROLES = ("owner", "member", "courier", "customer")
 VALID_SHIPMENT_STATUSES = ("draft", "booked")
 VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count")
 VALID_DISCOUNT_TYPES = ("percentage", "fixed")
+VALID_DELIVERY_DAYS = ("wednesday", "thursday", "friday")
 
 
 class Organization(Base):
@@ -214,6 +215,9 @@ class Customer(Base):
     show_prices: Mapped[bool] = mapped_column(Boolean, default=True)
     discount_percentage: Mapped[float | None] = mapped_column(
         Numeric(5, 2), nullable=True
+    )
+    delivery_day: Mapped[str] = mapped_column(
+        String(20), default="thursday", server_default="thursday"
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()

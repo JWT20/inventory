@@ -15,6 +15,7 @@ from app.events import publish_event
 from app.models import Customer, CustomerSKU, Order, OrderLine, SKU, Supplier, User
 from app.schemas import (
     BookingResponse,
+    DeadlineResponse,
     ManualOrderCreate,
     OrderLineAdd,
     OrderLineResponse,
@@ -26,6 +27,7 @@ from app.schemas import (
     WeeklySummarySupplier,
     WeeklySummaryWine,
 )
+from app.services.deadlines import get_order_deadline, get_current_week_deadline
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -81,6 +83,10 @@ def _order_line_to_response(
         else None
     )
 
+    delivery_day = "thursday"
+    if line.customer is not None:
+        delivery_day = line.customer.delivery_day or "thursday"
+
     return OrderLineResponse(
         id=line.id,
         sku_id=line.sku_id,
@@ -89,6 +95,7 @@ def _order_line_to_response(
         klant=line.klant,
         customer_id=line.customer_id,
         customer_name=line.customer_name,
+        delivery_day=delivery_day,
         quantity=line.quantity,
         booked_count=line.booked_count,
         has_image=len(line.sku.reference_images) > 0,
@@ -288,6 +295,35 @@ def list_orders(
 
 
 # ---------------------------------------------------------------------------
+# Order deadline
+# ---------------------------------------------------------------------------
+
+
+@router.get("/deadline", response_model=DeadlineResponse)
+def get_deadline(
+    week: str = Query(None, description="ISO week, bijv. '2026-W15'. Standaard: huidige week."),
+    user: User = Depends(get_current_user),
+):
+    """Get the order deadline for a given week. Accessible by all authenticated users."""
+    if not week:
+        today = datetime.date.today()
+        week = f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"
+
+    try:
+        deadline_dt, extended = get_order_deadline(week)
+    except ValueError:
+        raise HTTPException(400, f"Ongeldig weekformaat: '{week}'. Gebruik bijv. '2026-W15'.")
+
+    now = datetime.datetime.now()
+    return DeadlineResponse(
+        week=week,
+        deadline=deadline_dt.isoformat(),
+        deadline_extended=extended,
+        is_past=now > deadline_dt,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Weekly order summary per supplier
 # ---------------------------------------------------------------------------
 
@@ -342,10 +378,13 @@ def weekly_order_summary(
 
     lines = query.all()
 
+    deadline_dt, deadline_extended = get_order_deadline(week)
+
     if not lines:
         return WeeklySummaryResponse(
             week=week,
-            deadline=sunday.isoformat(),
+            deadline=deadline_dt.isoformat(),
+            deadline_extended=deadline_extended,
             suppliers=[],
             grand_total_quantity=0,
             grand_total_value=0,
@@ -466,7 +505,8 @@ def weekly_order_summary(
 
     return WeeklySummaryResponse(
         week=week,
-        deadline=sunday.isoformat(),
+        deadline=deadline_dt.isoformat(),
+        deadline_extended=deadline_extended,
         suppliers=suppliers_out,
         grand_total_quantity=grand_total_qty,
         grand_total_value=round(grand_total_val, 2) if grand_total_val else None,

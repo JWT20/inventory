@@ -225,9 +225,9 @@ export const api = {
   // Customers
   listCustomers: () => request("/customers"),
   getCustomer: (id: number) => request(`/customers/${id}`),
-  createCustomer: (data: { name: string; organization_id?: number | null; show_prices?: boolean; discount_percentage?: number | null }) =>
+  createCustomer: (data: { name: string; organization_id?: number | null; show_prices?: boolean; discount_percentage?: number | null; delivery_day?: string }) =>
     json("/customers", "POST", data),
-  updateCustomer: (id: number, data: { name?: string; show_prices?: boolean; discount_percentage?: number | null }) =>
+  updateCustomer: (id: number, data: { name?: string; show_prices?: boolean; discount_percentage?: number | null; delivery_day?: string }) =>
     json(`/customers/${id}`, "PATCH", data),
   deleteCustomer: (id: number) => request(`/customers/${id}`, { method: "DELETE" }),
   listCustomerSKUs: (customerId: number) => request(`/customers/${customerId}/skus`),
@@ -256,6 +256,8 @@ export const api = {
   listBookings: (orderId: number) => request(`/orders/${orderId}/bookings`),
   weeklyOrderSummary: (week?: string) =>
     request(`/orders/weekly-summary${week ? `?week=${week}` : ""}`),
+  getDeadline: (week?: string) =>
+    request(`/orders/deadline${week ? `?week=${week}` : ""}`),
 
   // Receiving - book (1 scan = 1 box = 1 booking)
   bookBox: (blob: Blob, orderId: number) => {

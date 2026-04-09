@@ -239,17 +239,22 @@ class MatchResult(BaseModel):
 
 
 # --- Customer ---
+VALID_DELIVERY_DAYS = ("wednesday", "thursday", "friday")
+
+
 class CustomerCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=150)
     organization_id: int | None = None
     show_prices: bool = True
     discount_percentage: float | None = Field(None, ge=0, le=100)
+    delivery_day: Literal["wednesday", "thursday", "friday"] = "thursday"
 
 
 class CustomerUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=150)
     show_prices: bool | None = None
     discount_percentage: float | None = None
+    delivery_day: Literal["wednesday", "thursday", "friday"] | None = None
 
 
 class CustomerResponse(BaseModel):
@@ -257,6 +262,7 @@ class CustomerResponse(BaseModel):
     name: str
     show_prices: bool = True
     discount_percentage: float | None = None
+    delivery_day: str = "thursday"
     sku_ids: list[int] = []
     sku_count: int = 0
     created_at: datetime
@@ -290,6 +296,7 @@ class OrderLineResponse(BaseModel):
     klant: str
     customer_id: int | None = None
     customer_name: str = ""
+    delivery_day: str = "thursday"
     quantity: int
     booked_count: int
     has_image: bool
@@ -661,6 +668,14 @@ class WeeklySummarySupplier(BaseModel):
 class WeeklySummaryResponse(BaseModel):
     week: str
     deadline: str
+    deadline_extended: bool = False
     suppliers: list[WeeklySummarySupplier] = []
     grand_total_quantity: int = 0
     grand_total_value: float | None = None
+
+
+class DeadlineResponse(BaseModel):
+    week: str
+    deadline: str
+    deadline_extended: bool = False
+    is_past: bool = False
