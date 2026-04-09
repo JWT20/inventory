@@ -244,6 +244,7 @@ export const api = {
       customer_id: number;
       sku_id: number;
       quantity: number;
+      delivery_day?: string;
     }[];
   }) => json("/orders", "POST", data),
   updateOrder: (id: number, data: { remarks: string }) =>

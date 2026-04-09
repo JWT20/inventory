@@ -293,6 +293,9 @@ class OrderLine(Base):
     )
     quantity: Mapped[int] = mapped_column(Integer)
     booked_count: Mapped[int] = mapped_column(Integer, default=0)
+    delivery_day: Mapped[str] = mapped_column(
+        String(20), default="thursday", server_default="thursday"
+    )
 
     order: Mapped["Order"] = relationship(back_populates="lines")
     sku: Mapped["SKU"] = relationship()

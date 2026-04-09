@@ -332,6 +332,7 @@ class ManualOrderLineCreate(BaseModel):
     customer_id: int = Field(..., gt=0)
     sku_id: int = Field(..., gt=0)
     quantity: int = Field(..., gt=0)
+    delivery_day: Literal["wednesday", "thursday", "friday"] | None = None
 
 
 class ManualOrderCreate(BaseModel):
@@ -344,6 +345,7 @@ class OrderLineAdd(BaseModel):
     customer_id: int = Field(..., gt=0)
     sku_id: int = Field(..., gt=0)
     quantity: int = Field(..., gt=0)
+    delivery_day: Literal["wednesday", "thursday", "friday"] | None = None
 
 
 class OrderUpdate(BaseModel):
