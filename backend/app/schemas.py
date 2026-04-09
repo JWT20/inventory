@@ -315,6 +315,7 @@ class OrderResponse(BaseModel):
     reference: str
     status: str
     remarks: str = ""
+    delivery_week: str | None = None
     organization_name: str = ""
     created_by_name: str = ""
     created_at: datetime

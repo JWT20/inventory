@@ -7,6 +7,7 @@ from collections import defaultdict
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth import get_current_user, require_admin, require_can_create_orders
@@ -145,6 +146,7 @@ def _order_to_response(order: Order, db: Session) -> OrderResponse:
         reference=order.reference,
         status=order.status,
         remarks=order.remarks or "",
+        delivery_week=order.delivery_week,
         organization_name=order.organization.name if order.organization else "",
         created_by_name=order.creator.username if order.creator else "",
         created_at=order.created_at,
@@ -199,12 +201,14 @@ def create_order(
                 )
 
     ref = f"ORD-{uuid.uuid4().hex[:8].upper()}"
+    delivery_week, _, _ = get_next_deadline()
     order = Order(
         organization_id=org_id,
         created_by=user.id,
         reference=ref,
         status="draft",
         remarks=body.remarks,
+        delivery_week=delivery_week,
     )
     db.add(order)
     db.flush()
@@ -387,12 +391,12 @@ def weekly_order_summary(
         week = f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"
     monday, sunday = _parse_iso_week(week)
 
+    org_id = user.organization_id
+
+    # Fetch all order lines for the delivery week
     start_dt = datetime.datetime.combine(monday, datetime.time.min)
     end_dt = datetime.datetime.combine(sunday, datetime.time.max)
 
-    org_id = user.organization_id
-
-    # Fetch all order lines within the week for this org
     query = (
         db.query(OrderLine)
         .join(Order, OrderLine.order_id == Order.id)
@@ -402,9 +406,12 @@ def weekly_order_summary(
             selectinload(OrderLine.order),
         )
         .filter(
-            Order.created_at >= start_dt,
-            Order.created_at <= end_dt,
             Order.status.in_(("draft", "pending_images", "active")),
+            or_(
+                Order.delivery_week == week,
+                # Fallback for legacy orders without delivery_week
+                (Order.delivery_week.is_(None)) & (Order.created_at >= start_dt) & (Order.created_at <= end_dt),
+            ),
         )
     )
     if not user.is_platform_admin:

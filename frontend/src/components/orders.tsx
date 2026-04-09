@@ -88,6 +88,7 @@ interface Order {
   reference: string;
   status: string;
   remarks: string;
+  delivery_week: string | null;
   organization_name: string;
   created_by_name: string;
   created_at: string;
@@ -259,7 +260,7 @@ export function OrdersPage() {
     if (orders.length === 0) return [];
     const groups: Record<string, Order[]> = {};
     for (const o of orders) {
-      const week = getISOWeek(o.created_at);
+      const week = o.delivery_week || getISOWeek(o.created_at);
       if (!groups[week]) groups[week] = [];
       groups[week].push(o);
     }
