@@ -27,7 +27,7 @@ from app.schemas import (
     WeeklySummarySupplier,
     WeeklySummaryWine,
 )
-from app.services.deadlines import get_order_deadline, get_current_week_deadline
+from app.services.deadlines import get_order_deadline, get_next_deadline
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -304,15 +304,17 @@ def get_deadline(
     week: str = Query(None, description="ISO week, bijv. '2026-W15'. Standaard: huidige week."),
     user: User = Depends(get_current_user),
 ):
-    """Get the order deadline for a given week. Accessible by all authenticated users."""
-    if not week:
-        today = datetime.date.today()
-        week = f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"
+    """Get the order deadline. Without a week param, returns the next upcoming deadline.
 
-    try:
-        deadline_dt, extended = get_order_deadline(week)
-    except ValueError:
-        raise HTTPException(400, f"Ongeldig weekformaat: '{week}'. Gebruik bijv. '2026-W15'.")
+    If the current week's deadline has passed, automatically shows next week's.
+    """
+    if week:
+        try:
+            deadline_dt, extended = get_order_deadline(week)
+        except ValueError:
+            raise HTTPException(400, f"Ongeldig weekformaat: '{week}'. Gebruik bijv. '2026-W15'.")
+    else:
+        week, deadline_dt, extended = get_next_deadline()
 
     now = datetime.datetime.now()
     return DeadlineResponse(
