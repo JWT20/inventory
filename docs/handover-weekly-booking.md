@@ -47,6 +47,10 @@ zoveel mogelijk klantorders compleet worden gemaakt wanneer de voorraad beperkt 
 - Zoveel mogelijk orders **compleet** worden afgerond
 - Geen enkele klant op **0** eindigt (tenzij wiskundig onmogelijk)
 
+**Dubbele orders:** Dezelfde klant kan meerdere orders in dezelfde week hebben met dezelfde wijn
+(verschillende leverdagen = verschillende cross-docking dagen). Elke OrderLine wordt **apart**
+behandeld in de allocatie — niet samengevoegd per klant.
+
 **Algoritme (greedy, smallest-first):**
 
 ```
@@ -58,28 +62,52 @@ Stappen:
   1. remaining_per_line = {line: line.quantity - line.booked_count} voor elke line
   2. Verwijder lines met remaining == 0
   3. available = stock
-  4. Reserveer 1 doos per line → beschikbaar = available - len(lines)
-     Als available < len(lines): verdeel evenredig (iedereen krijgt minstens 0 of 1)
-  5. Loop door lines (kleinste remaining eerst):
-     - give = min(remaining, available - reservations_for_rest)
-     - cap[line] = booked_count + give
-     - available -= give
-  6. Return caps
+  4. Als available >= som(remaining): iedereen krijgt alles → return {line: line.quantity}
+  5. Als available <= len(lines): verdeel eerlijk — elke line krijgt max 1 doos
+     (eerste `available` lines krijgen 1, rest krijgt 0)
+  6. Anders (genoeg voor minimaal 1 per line, maar niet genoeg voor alles):
+     a. Reserveer 1 doos per line → pool = available - len(lines)
+     b. Loop door lines (kleinste remaining eerst):
+        - extra = min(remaining - 1, pool)
+        - cap[line] = booked_count + 1 + extra
+        - pool -= extra
+  7. Return caps: {line_id: max_total_booked_count}
 ```
 
-**Verificatie met voorbeeld van gebruiker:**
+**Verificatie — voorbeeld 1 (gebruiker):**
 
 ```
 Stock = 10, A wil 2, B wil 4, C wil 8 (alle booked_count = 0)
 Gesorteerd: A(2), B(4), C(8)
-Beschikbaar: 10
-Reserveer 1 per resterende: na A → B en C houden 1 elk gereserveerd
+Totaal gewenst = 14 > 10, dus niet genoeg
+available = 10 > 3 lines, dus stap 6
 
-Stap A: give = min(2, 10 - 2) = 2 → cap A = 2 ✓ compleet, available = 8
-Stap B: give = min(4, 8 - 1) = 4 → cap B = 4 ✓ compleet, available = 4
-Stap C: give = min(8, 4 - 0) = 4 → cap C = 4 (deels), available = 0
+Reserveer 1 per line → pool = 10 - 3 = 7
+Stap A: remaining=2, give = min(2-1, 7) = 1, pool = 6, cap = 0+1+1 = 2 ✓ compleet
+Stap B: remaining=4, give = min(4-1, 6) = 3, pool = 3, cap = 0+1+3 = 4 ✓ compleet
+Stap C: remaining=8, give = min(8-1, 3) = 3, pool = 0, cap = 0+1+3 = 4 (deels)
 
-Resultaat: A=2, B=4, C=4 ✓ (precies wat de gebruiker wil)
+Resultaat: A=2, B=4, C=4 ✓
+```
+
+**Verificatie — voorbeeld 2 (extreme schaarste):**
+
+```
+Stock = 2, 5 orders die elk 2 dozen willen (A=2, B=2, C=2, D=2, E=2)
+available = 2 < 5 lines → stap 5: eerlijke verdeling
+Eerste 2 lines krijgen elk 1 doos, rest krijgt 0
+
+Resultaat: A=1, B=1, C=0, D=0, E=0
+(wiskundig onmogelijk om iedereen minstens 1 te geven)
+```
+
+**Verificatie — voorbeeld 3 (genoeg voorraad):**
+
+```
+Stock = 20, A=2, B=4, C=8
+Totaal gewenst = 14 <= 20 → stap 4: iedereen krijgt alles
+
+Resultaat: A=2, B=4, C=8 ✓
 ```
 
 ### 2. Backend: Week-filter op orders
@@ -103,6 +131,12 @@ def list_orders(week: str | None = None, ...):
 
 **Bestanden:** `backend/app/routers/receiving.py`, `backend/app/schemas.py`
 
+**Timing:** Allocatie wordt **alleen berekend bij het scan-resultaat** (`POST /receiving/book`),
+niet bij elke boeking. De cap wordt meegestuurd in de response en de frontend gebruikt die totdat
+de volgende scan plaatsvindt. De `POST /receiving/book/confirm` en `/book/more` endpoints
+herberekenen de allocatie als server-side validatie (409 safety net als de cap ondertussen
+veranderd is door een andere scanner).
+
 **Wijziging in `/receiving/book` (scan-resultaat):**
 Na SKU-match, roep `compute_allocation()` aan. Voeg toe aan `BookingConfirmation` response:
 
@@ -113,7 +147,7 @@ ordered_by_customer: int | None  # hoeveel deze klant besteld heeft
 ```
 
 **Wijziging in `/receiving/book/confirm` en `/receiving/book/more`:**
-Controleer of de gevraagde hoeveelheid de cap niet overschrijdt. Zo ja, return 409:
+Herbereken allocatie server-side. Als de gevraagde hoeveelheid de cap overschrijdt, return 409:
 
 ```json
 {
@@ -140,8 +174,8 @@ Controleer of de gevraagde hoeveelheid de cap niet overschrijdt. Zo ja, return 4
 - Voeg `week` state toe (default: huidige week)
 - Vervang dag-groepering door weeknavigatie (← Week → + "Vandaag" knop)
 - Pas `api.listOrders()` aan met week-parameter
-- Sorteer orders: `booked_count == 0` eerst → bijna klaar → rest → compleet
-- Voeg badges toe: voortgangsindicatie per order
+- Sorteer orders op percentage geboekt (oplopend): 0% bovenaan, 100% onderaan
+- Geen extra categorieën of badges — de bestaande `x/10` voortgangsindicator blijft staan
 
 ### 5. Frontend: Cap-aware QuantityPicker
 
@@ -150,12 +184,14 @@ Controleer of de gevraagde hoeveelheid de cap niet overschrijdt. Zo ja, return 4
 **Wijzigingen:**
 
 - Gebruik `cap_for_customer` uit de API-response als maximum (i.p.v. alleen `remaining`)
-- Toon informatieregel wanneer cap lager is dan besteld:
+- `+` knop is **disabled** wanneer cap bereikt (scanner kan er niet voorbij)
+- Toon informatieregel **onder** de picker wanneer cap lager is dan besteld:
 
   > "Max voor Klant X deze week: 4 van 8 dozen Wijn Y"
 
-- Disable de `+` knop wanneer cap bereikt
-- Bij 409 `allocation_cap_reached`: toon zachte melding (Variant B), **geen** hard blokkeerscherm
+- Beide mechanismen werken samen: de `+` knop stopt bij de cap EN de tekst legt uit waarom
+- Bij 409 `allocation_cap_reached` (safety net als cap ondertussen veranderd is):
+  toon zachte toast/banner melding, **geen** hard blokkeerscherm
 
 ### 6. Frontend: API client aanpassen
 
@@ -201,6 +237,23 @@ De keuze voor "kleinste order eerst compleet maken" is gebaseerd op de bedrijfsl
 - Door kleine orders eerst af te ronden, maximaliseer je het aantal tevreden klanten
 - De "minimaal 1" regel voorkomt dat een grote besteller helemaal niets krijgt
 
+**Extreme schaarste:** Als er minder dozen dan orders zijn (bijv. 2 dozen voor 5 orders),
+wordt eerlijk verdeeld: elke order krijgt maximaal 1 doos (eerste N orders). Niet iedereen
+kan minstens 1 krijgen — dat is wiskundig onmogelijk.
+
+### Dezelfde klant, meerdere orders
+
+Dezelfde klant kan meerdere orders in dezelfde week hebben met dezelfde wijn. Dit gebeurt
+wanneer de leverdag verschilt (= andere cross-docking dag = andere rolcontainer). Elke
+OrderLine wordt **apart** meegenomen in de allocatie, niet samengevoegd per klant.
+
+### Allocatie-timing
+
+De cap wordt berekend bij het **scanresultaat** (1x per scan), niet bij elke boeking.
+De frontend gebruikt de meegestuurde cap om de `+` knop te limiteren. De backend
+herberekent server-side bij confirm/more als safety net (409 bij overschrijding).
+In de praktijk is er meestal 1 scanner actief per organisatie, dus staleness is minimaal.
+
 ### Geen voorraad = order blijft open
 
 Als er te weinig voorraad is om een order (deels) te vullen, wordt het order **niet** gemarkeerd
@@ -219,7 +272,7 @@ als "niet leverbaar". Het blijft gewoon in de lijst staan. Wanneer er later voor
 - `backend/app/routers/receiving.py` — cap-check integratie in book/confirm/more
 - `backend/app/routers/orders.py` — week query parameter
 - `backend/app/schemas.py` — cap-velden in BookingConfirmation
-- `frontend/src/components/receive.tsx` — weekselector, sorting, badges, cap-aware picker
+- `frontend/src/components/receive.tsx` — weekselector, sorting, cap-aware picker
 - `frontend/src/lib/api.ts` — week param op listOrders
 
 ### Ongewijzigd
@@ -237,9 +290,11 @@ als "niet leverbaar". Het blijft gewoon in de lijst staan. Wanneer er later voor
 |-----------|--------|----------|
 | Gebruikersvoorbeeld | stock=10, A=2, B=4, C=8 | A=2, B=4, C=4 |
 | Genoeg voorraad | stock=20, A=2, B=4, C=8 | A=2, B=4, C=8 (allemaal compleet) |
-| Onmogelijk geval | stock=3, 5 orders van 2 | Elk max 1 (behalve evt. rounding) |
+| Extreme schaarste | stock=2, 5 orders van 2 | Eerste 2 orders krijgen elk 1, rest krijgt 0 |
+| Schaarste net genoeg | stock=5, 5 orders van 2 | Elk 1 gereserveerd, kleinste orders aangevuld |
 | Geen actieve orders | stock=10, geen lines | Lege dict |
 | Deels geboekt | stock=5, A besteld 4 / al 2 geboekt | Cap berekend over restant |
+| Zelfde klant, 2 orders | stock=6, klant A: order1=3 + order2=2, klant B=4 | 3 lines apart: A2=2, A1=2, B=2 (sorted asc, greedy) |
 | Week-filtering | Orders in W15 en W16 | Alleen W15 orders meegenomen |
 
 ### Bestaande tests
