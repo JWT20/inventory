@@ -40,9 +40,9 @@ zoveel mogelijk klantorders compleet worden gemaakt wanneer de voorraad beperkt 
 
 **Bestand:** `backend/app/services/allocation.py` (nieuw)
 
-**Functie:** `compute_allocation(db, week, sku_id, organization_id) → dict[order_line_id, max_booked]`
+**Functie:** `compute_allocation(db, week, sku_id, organization_id, delivery_day) → dict[order_line_id, max_booked]`
 
-**Doel:** Bepaal per SKU per week hoeveel dozen elke klant maximaal mag ontvangen, zodat:
+**Doel:** Bepaal per SKU per leverdag hoeveel dozen elke klant maximaal mag ontvangen, zodat:
 
 - Zoveel mogelijk orders **compleet** worden afgerond
 - Geen enkele klant op **0** eindigt (tenzij wiskundig onmogelijk)

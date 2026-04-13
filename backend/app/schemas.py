@@ -391,6 +391,8 @@ class BookingConfirmation(BaseModel):
     reference_image_urls: list[str] = []
     alternatives: list[AlternativeMatch] = []
     remaining_quantity: int = 0
+    cap_for_customer: int | None = None
+    ordered_by_customer: int | None = None
 
 
 class ConfirmBookingRequest(BaseModel):

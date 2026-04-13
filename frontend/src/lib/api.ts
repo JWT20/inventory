@@ -249,7 +249,8 @@ export const api = {
   }) => json("/orders", "POST", data),
   updateOrder: (id: number, data: { remarks: string }) =>
     json(`/orders/${id}`, "PATCH", data),
-  listOrders: () => request("/orders"),
+  listOrders: (week?: string) =>
+    request(`/orders${week ? `?week=${week}` : ""}`),
   getOrder: (id: number) => request(`/orders/${id}`),
   activateOrder: (id: number) =>
     request(`/orders/${id}/activate`, { method: "POST" }),
