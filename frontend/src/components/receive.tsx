@@ -77,6 +77,8 @@ interface ConfirmationData {
   reference_image_urls?: string[];
   alternatives?: AlternativeMatch[];
   remaining_quantity?: number;
+  cap_for_customer?: number | null;
+  ordered_by_customer?: number | null;
 }
 
 interface IdentifyResult {
@@ -89,6 +91,25 @@ interface IdentifyResult {
   alternatives?: AlternativeMatch[];
   scan_image_url?: string;
   reference_image_urls?: string[];
+}
+
+/* ---------- Week helpers (same logic as weekly-summary.tsx) ---------- */
+
+function getISOWeek(date: Date): string {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+}
+
+function shiftWeek(week: string, delta: number): string {
+  const [, y, w] = week.match(/^(\d{4})-W(\d{2})$/) || [];
+  if (!y) return week;
+  const monday = new Date(`${y}-01-04`);
+  const dayOfWeek = monday.getDay() || 7;
+  monday.setDate(monday.getDate() - dayOfWeek + 1 + (Number(w) - 1) * 7 + delta * 7);
+  return getISOWeek(monday);
 }
 
 type Step = "select-order" | "scan" | "result" | "confirm" | "identify-scan" | "identify-result";
@@ -233,12 +254,21 @@ function OrderSelectStep({
   const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const [week, setWeek] = useState(() => getISOWeek(new Date()));
 
   useEffect(() => {
     async function load() {
+      setLoading(true);
       try {
-        const all = await api.listOrders();
-        setOrders(all.filter((o: Order) => o.status === "active"));
+        const all = await api.listOrders(week);
+        const active = all.filter((o: Order) => o.status === "active");
+        // Sort by booked percentage ascending — least progress first
+        active.sort((a: Order, b: Order) => {
+          const pctA = a.total_boxes > 0 ? a.booked_boxes / a.total_boxes : 0;
+          const pctB = b.total_boxes > 0 ? b.booked_boxes / b.total_boxes : 0;
+          return pctA - pctB;
+        });
+        setOrders(active);
       } catch {
         toast.error("Kan orders niet laden");
       } finally {
@@ -246,70 +276,55 @@ function OrderSelectStep({
       }
     }
     load();
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="space-y-3">
-        {Array.from({ length: 3 }).map((_, i) => (
-          <Card key={i} className="p-4">
-            <div className="flex justify-between items-center mb-1">
-              <Skeleton className="h-5 w-32" />
-              <Skeleton className="h-5 w-14 rounded-full" />
-            </div>
-            <Skeleton className="h-4 w-44 mt-2" />
-            <Skeleton className="h-4 w-36 mt-1" />
-          </Card>
-        ))}
-      </div>
-    );
-  }
+  }, [week]);
 
   return (
     <>
+      {/* Week navigation */}
+      <div className="flex items-center justify-center gap-2 mb-4">
+        <Button variant="outline" size="sm" onClick={() => setWeek((w) => shiftWeek(w, -1))}>
+          &larr;
+        </Button>
+        <span className="text-sm font-medium min-w-[7rem] text-center">{week}</span>
+        <Button variant="outline" size="sm" onClick={() => setWeek((w) => shiftWeek(w, 1))}>
+          &rarr;
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setWeek(getISOWeek(new Date()))}
+          className="ml-2"
+        >
+          Vandaag
+        </Button>
+      </div>
+
       <p className="text-sm text-muted-foreground mb-3">
         Kies een actieve order om dozen te scannen
       </p>
-      {orders.length === 0 ? (
+
+      {loading ? (
+        <div className="space-y-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Card key={i} className="p-4">
+              <div className="flex justify-between items-center mb-1">
+                <Skeleton className="h-5 w-32" />
+                <Skeleton className="h-5 w-14 rounded-full" />
+              </div>
+              <Skeleton className="h-4 w-44 mt-2" />
+              <Skeleton className="h-4 w-36 mt-1" />
+            </Card>
+          ))}
+        </div>
+      ) : orders.length === 0 ? (
         <p className="text-center text-muted-foreground py-10">
-          Geen actieve orders
+          Geen actieve orders in {week}
         </p>
       ) : (
-        <div className="space-y-4">
-          {(() => {
-            // Group orders by delivery day
-            const dayOrder = ["wednesday", "thursday", "friday"];
-            const ordersByDay: Record<string, Order[]> = {};
-            for (const o of orders) {
-              const days = new Set(o.lines?.map((l) => l.delivery_day) ?? []);
-              if (days.size === 0) days.add("thursday"); // fallback
-              for (const day of days) {
-                if (!ordersByDay[day]) ordersByDay[day] = [];
-                if (!ordersByDay[day].some((existing) => existing.id === o.id)) {
-                  ordersByDay[day].push(o);
-                }
-              }
-            }
-            const sortedDays = dayOrder.filter((d) => ordersByDay[d]?.length);
-            // If only one day, skip headers
-            if (sortedDays.length <= 1) {
-              return orders.map((o) => (
-                <OrderCard key={o.id} order={o} onSelect={onSelect} />
-              ));
-            }
-            return sortedDays.map((day) => (
-              <div key={day}>
-                <p className="text-sm font-semibold text-muted-foreground mb-2 capitalize">
-                  {DELIVERY_DAY_LABELS[day] || day}
-                </p>
-                <div className="space-y-3">
-                  {ordersByDay[day].map((o) => (
-                    <OrderCard key={o.id} order={o} onSelect={onSelect} />
-                  ))}
-                </div>
-              </div>
-            ));
-          })()}
+        <div className="space-y-3">
+          {orders.map((o) => (
+            <OrderCard key={o.id} order={o} onSelect={onSelect} />
+          ))}
         </div>
       )}
 
@@ -471,7 +486,12 @@ function ResultStep({
       setMoreQuantity(1);
       toast.success(`${actualBooked}× extra geboekt`);
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Boeken mislukt");
+      const msg = err instanceof Error ? err.message : "Boeken mislukt";
+      if (msg.includes("allocation_cap_reached") || msg.includes("Toewijzingslimiet")) {
+        toast.error("Toewijzingslimiet bereikt — niet meer beschikbaar voor deze klant vandaag");
+      } else {
+        toast.error(msg);
+      }
     } finally {
       setBookingMore(false);
     }
@@ -592,7 +612,13 @@ function ConfirmStep({
   const [confirming, setConfirming] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const hasAlternatives = confirmation.alternatives && confirmation.alternatives.length > 0;
-  const maxQuantity = confirmation.remaining_quantity ?? 1;
+  const capRemaining = confirmation.cap_for_customer != null
+    ? confirmation.cap_for_customer
+    : (confirmation.remaining_quantity ?? 1);
+  const maxQuantity = Math.min(confirmation.remaining_quantity ?? 1, capRemaining);
+  const hasCap = confirmation.cap_for_customer != null
+    && confirmation.ordered_by_customer != null
+    && confirmation.cap_for_customer < confirmation.ordered_by_customer;
   const highConfidence = !hasAlternatives && confirmation.confidence >= 0.84;
 
   async function handleConfirm(token?: string) {
@@ -670,6 +696,18 @@ function ConfirmStep({
           <QuantityPicker value={quantity} onChange={setQuantity} max={maxQuantity} />
           <p className="text-xs text-muted-foreground mt-2 text-center">
             {maxQuantity} over in deze order
+          </p>
+          {hasCap && (
+            <p className="text-xs text-orange-400 mt-2 text-center">
+              Max voor {confirmation.klant} vandaag: {confirmation.cap_for_customer} van {confirmation.ordered_by_customer} dozen {confirmation.sku_name}
+            </p>
+          )}
+        </Card>
+      )}
+      {maxQuantity <= 1 && hasCap && (
+        <Card className="p-4 mb-4">
+          <p className="text-xs text-orange-400 text-center">
+            Max voor {confirmation.klant} vandaag: {confirmation.cap_for_customer} van {confirmation.ordered_by_customer} dozen {confirmation.sku_name}
           </p>
         </Card>
       )}

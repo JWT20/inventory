@@ -18,6 +18,7 @@ from app.schemas import AlternativeMatch, BookingConfirmation, BookingResponse, 
 from app.services.storage import storage
 from langfuse import observe, propagate_attributes
 
+from app.services.allocation import compute_allocation
 from app.services.embedding import assess_description_quality, process_image
 from app.services.matching import find_best_matches
 
@@ -406,6 +407,20 @@ async def book_box(
 
         remaining = order_line.quantity - order_line.booked_count
 
+        # Compute allocation cap for this customer/day
+        cap_for_customer: int | None = None
+        ordered_by_customer: int | None = None
+        if order.delivery_week and order_line.delivery_day:
+            caps = compute_allocation(
+                db, order.delivery_week, matched_sku.id,
+                order.organization_id, order_line.delivery_day,
+            )
+            cap_total = caps.get(order_line.id)
+            if cap_total is not None:
+                cap_for_customer = max(0, cap_total - order_line.booked_count)
+                ordered_by_customer = order_line.quantity
+                remaining = min(remaining, cap_for_customer)
+
         t_done = time.perf_counter()
         logger.info(
             "[TIMING] book total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms",
@@ -430,6 +445,8 @@ async def book_box(
             reference_image_urls=_all_reference_image_urls(db, matched_sku.id),
             alternatives=alternatives,
             remaining_quantity=remaining,
+            cap_for_customer=cap_for_customer,
+            ordered_by_customer=ordered_by_customer,
         )
 
 
@@ -475,6 +492,29 @@ def confirm_booking(
 
     available = order_line.quantity - order_line.booked_count
     quantity = min(body.quantity, available)
+
+    # Allocation safety net: recompute cap and reject if exceeded
+    if order.delivery_week and order_line.delivery_day:
+        caps = compute_allocation(
+            db, order.delivery_week, sku.id,
+            order.organization_id, order_line.delivery_day,
+        )
+        cap_total = caps.get(order_line.id)
+        if cap_total is not None:
+            cap_remaining = max(0, cap_total - order_line.booked_count)
+            if quantity > cap_remaining:
+                raise HTTPException(
+                    409,
+                    detail={
+                        "detail": "Toewijzingslimiet bereikt",
+                        "error": "allocation_cap_reached",
+                        "customer": order_line.customer_name,
+                        "sku_name": sku.name,
+                        "cap_for_this_customer": cap_total,
+                        "ordered_by_this_customer": order_line.quantity,
+                    },
+                )
+            quantity = min(quantity, cap_remaining)
 
     last_booking = None
     for _ in range(quantity):
@@ -589,6 +629,29 @@ def book_more(
 
     available = order_line.quantity - order_line.booked_count
     actual_quantity = min(quantity, available)
+
+    # Allocation safety net: recompute cap and reject if exceeded
+    if order.delivery_week and order_line.delivery_day:
+        caps = compute_allocation(
+            db, order.delivery_week, sku.id,
+            order.organization_id, order_line.delivery_day,
+        )
+        cap_total = caps.get(order_line.id)
+        if cap_total is not None:
+            cap_remaining = max(0, cap_total - order_line.booked_count)
+            if actual_quantity > cap_remaining:
+                raise HTTPException(
+                    409,
+                    detail={
+                        "detail": "Toewijzingslimiet bereikt",
+                        "error": "allocation_cap_reached",
+                        "customer": order_line.customer_name,
+                        "sku_name": sku.name,
+                        "cap_for_this_customer": cap_total,
+                        "ordered_by_this_customer": order_line.quantity,
+                    },
+                )
+            actual_quantity = min(actual_quantity, cap_remaining)
 
     last_booking = None
     for _ in range(actual_quantity):

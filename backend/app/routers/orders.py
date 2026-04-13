@@ -274,6 +274,7 @@ def create_order(
 
 @router.get("", response_model=list[OrderResponse])
 def list_orders(
+    week: str | None = None,
     limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -285,6 +286,8 @@ def list_orders(
     - Org owner/member: orders for their organization
     - Customer: only their own orders
     - Courier: all active orders (for delivery)
+
+    Optional ``week`` filter (e.g. "2026-W16") restricts to that delivery week.
     """
     query = db.query(Order)
 
@@ -298,6 +301,9 @@ def list_orders(
         query = query.filter(Order.organization_id == user.organization_id)
     else:
         return []
+
+    if week:
+        query = query.filter(Order.delivery_week == week)
 
     orders = query.order_by(Order.created_at.desc()).offset(offset).limit(limit).all()
     return [_order_to_response(o, db) for o in orders]
