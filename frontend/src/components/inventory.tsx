@@ -7,6 +7,7 @@ import {
   Dialog,
   DialogContent,
   DialogHeader,
+  DialogBody,
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
@@ -257,6 +258,7 @@ function InventoryDetailDialog({
           </DialogTitle>
         </DialogHeader>
 
+        <DialogBody>
         <div className="space-y-4">
           {/* Stock */}
           <div className="flex justify-between items-center">
@@ -295,35 +297,39 @@ function InventoryDetailDialog({
           {/* Default price */}
           <Separator />
           <div className="pt-1">
-            <div className="flex justify-between items-center">
+            <div className="flex flex-wrap justify-between items-center gap-2">
               <span className="text-sm font-medium">Standaardprijs</span>
               {editingDefaultPrice ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm">{"\u20AC"}</span>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={defaultPriceValue}
-                    onChange={(e) => setDefaultPriceValue(e.target.value)}
-                    className="w-24 h-8 text-sm"
-                    autoFocus
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") saveDefaultPrice();
-                      if (e.key === "Escape") setEditingDefaultPrice(false);
-                    }}
-                  />
-                  <button
-                    onClick={saveDefaultPrice}
-                    className="text-sm text-primary hover:underline"
-                  >
-                    Opslaan
-                  </button>
-                  <button
-                    onClick={() => setEditingDefaultPrice(false)}
-                    className="text-sm text-muted-foreground hover:underline"
-                  >
-                    Annuleren
-                  </button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-1">
+                    <span className="text-sm">{"\u20AC"}</span>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={defaultPriceValue}
+                      onChange={(e) => setDefaultPriceValue(e.target.value)}
+                      className="w-24 h-8 text-sm"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveDefaultPrice();
+                        if (e.key === "Escape") setEditingDefaultPrice(false);
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={saveDefaultPrice}
+                      className="text-sm text-primary hover:underline"
+                    >
+                      Opslaan
+                    </button>
+                    <button
+                      onClick={() => setEditingDefaultPrice(false)}
+                      className="text-sm text-muted-foreground hover:underline"
+                    >
+                      Annuleren
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <button
@@ -365,35 +371,39 @@ function InventoryDetailDialog({
                     </div>
 
                     {/* Vaste prijs */}
-                    <div className="flex justify-between items-center text-sm">
+                    <div className="flex flex-wrap justify-between items-center gap-2 text-sm">
                       <span className="text-muted-foreground">Vaste prijs</span>
                       {editingCustomerPriceId === cp.customer_id ? (
-                        <div className="flex items-center gap-2">
-                          <span>{"\u20AC"}</span>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            value={customerPriceValue}
-                            onChange={(e) => setCustomerPriceValue(e.target.value)}
-                            className="w-24 h-8 text-sm"
-                            autoFocus
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") saveCustomerPrice(cp.customer_id);
-                              if (e.key === "Escape") setEditingCustomerPriceId(null);
-                            }}
-                          />
-                          <button
-                            onClick={() => saveCustomerPrice(cp.customer_id)}
-                            className="text-primary hover:underline"
-                          >
-                            Opslaan
-                          </button>
-                          <button
-                            onClick={() => setEditingCustomerPriceId(null)}
-                            className="text-muted-foreground hover:underline"
-                          >
-                            Annuleren
-                          </button>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <div className="flex items-center gap-1">
+                            <span>{"\u20AC"}</span>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={customerPriceValue}
+                              onChange={(e) => setCustomerPriceValue(e.target.value)}
+                              className="w-24 h-8 text-sm"
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") saveCustomerPrice(cp.customer_id);
+                                if (e.key === "Escape") setEditingCustomerPriceId(null);
+                              }}
+                            />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => saveCustomerPrice(cp.customer_id)}
+                              className="text-primary hover:underline"
+                            >
+                              Opslaan
+                            </button>
+                            <button
+                              onClick={() => setEditingCustomerPriceId(null)}
+                              className="text-muted-foreground hover:underline"
+                            >
+                              Annuleren
+                            </button>
+                          </div>
                         </div>
                       ) : (
                         <button
@@ -413,53 +423,57 @@ function InventoryDetailDialog({
                     </div>
 
                     {/* Korting */}
-                    <div className="flex justify-between items-center text-sm">
+                    <div className="flex flex-wrap justify-between items-center gap-2 text-sm">
                       <span className="text-muted-foreground">Korting</span>
                       {editingDiscountId === cp.customer_id ? (
-                        <div className="flex items-center gap-2">
-                          <Select
-                            value={discountType || "none"}
-                            onValueChange={(v) => {
-                              const val = v === "none" ? "" : v;
-                              setDiscountType(val);
-                              if (!val) setDiscountValue("");
-                            }}
-                          >
-                            <SelectTrigger className="h-8 w-24 text-sm">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="none">Geen</SelectItem>
-                              <SelectItem value="percentage">%</SelectItem>
-                              <SelectItem value="fixed">{"\u20AC"}</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          {discountType && (
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={discountValue}
-                              onChange={(e) => setDiscountValue(e.target.value)}
-                              className="w-20 h-8 text-sm"
-                              placeholder={discountType === "percentage" ? "0-100" : "0.00"}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") saveDiscount(cp.customer_id);
-                                if (e.key === "Escape") setEditingDiscountId(null);
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <Select
+                              value={discountType || "none"}
+                              onValueChange={(v) => {
+                                const val = v === "none" ? "" : v;
+                                setDiscountType(val);
+                                if (!val) setDiscountValue("");
                               }}
-                            />
-                          )}
-                          <button
-                            onClick={() => saveDiscount(cp.customer_id)}
-                            className="text-primary hover:underline"
-                          >
-                            Opslaan
-                          </button>
-                          <button
-                            onClick={() => setEditingDiscountId(null)}
-                            className="text-muted-foreground hover:underline"
-                          >
-                            Annuleren
-                          </button>
+                            >
+                              <SelectTrigger className="h-8 w-24 text-sm">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="none">Geen</SelectItem>
+                                <SelectItem value="percentage">%</SelectItem>
+                                <SelectItem value="fixed">{"\u20AC"}</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            {discountType && (
+                              <Input
+                                type="number"
+                                step="0.01"
+                                value={discountValue}
+                                onChange={(e) => setDiscountValue(e.target.value)}
+                                className="w-20 h-8 text-sm"
+                                placeholder={discountType === "percentage" ? "0-100" : "0.00"}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") saveDiscount(cp.customer_id);
+                                  if (e.key === "Escape") setEditingDiscountId(null);
+                                }}
+                              />
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => saveDiscount(cp.customer_id)}
+                              className="text-primary hover:underline"
+                            >
+                              Opslaan
+                            </button>
+                            <button
+                              onClick={() => setEditingDiscountId(null)}
+                              className="text-muted-foreground hover:underline"
+                            >
+                              Annuleren
+                            </button>
+                          </div>
                         </div>
                       ) : (
                         <button
@@ -486,6 +500,7 @@ function InventoryDetailDialog({
             )}
           </div>
         </div>
+        </DialogBody>
       </DialogContent>
     </Dialog>
   );
