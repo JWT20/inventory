@@ -29,13 +29,13 @@ const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed left-1/2 bottom-0 sm:bottom-auto sm:top-1/2 z-50 w-full max-w-lg -translate-x-1/2 sm:-translate-y-1/2 rounded-t-lg sm:rounded-lg border border-border bg-card p-6 shadow-lg max-h-[90vh] overflow-y-auto",
+        "fixed left-1/2 bottom-0 sm:bottom-auto sm:top-1/2 z-50 w-full max-w-lg -translate-x-1/2 sm:-translate-y-1/2 rounded-t-lg sm:rounded-lg border border-border bg-card p-4 sm:p-6 shadow-lg max-h-[85vh] flex flex-col",
         className
       )}
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 text-muted-foreground">
+      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 text-muted-foreground z-10">
         <X className="h-5 w-5" />
       </DialogPrimitive.Close>
     </DialogPrimitive.Content>
@@ -44,7 +44,18 @@ const DialogContent = React.forwardRef<
 DialogContent.displayName = "DialogContent";
 
 const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("flex flex-col space-y-1.5 mb-4", className)} {...props} />
+  <div className={cn("flex flex-col space-y-1.5 mb-4 flex-shrink-0", className)} {...props} />
+);
+
+const DialogBody = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+  <div
+    className={cn(
+      "flex-1 overflow-y-auto -mx-4 px-4 sm:-mx-6 sm:px-6 overscroll-contain",
+      className
+    )}
+    style={{ WebkitOverflowScrolling: "touch" }}
+    {...props}
+  />
 );
 
 const DialogTitle = React.forwardRef<
@@ -55,4 +66,4 @@ const DialogTitle = React.forwardRef<
 ));
 DialogTitle.displayName = "DialogTitle";
 
-export { Dialog, DialogTrigger, DialogClose, DialogContent, DialogHeader, DialogTitle };
+export { Dialog, DialogTrigger, DialogClose, DialogContent, DialogHeader, DialogBody, DialogTitle };
