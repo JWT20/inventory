@@ -452,6 +452,8 @@ class ShipmentExtractedLine(BaseModel):
     supplier_code: str = ""
     description: str = ""
     quantity_boxes: int = Field(0, ge=0)
+    quantity: int = Field(0, ge=0)
+    quantity_unit: Literal["boxes", "pieces", "unknown"] = "unknown"
     confidence: float = Field(0.0, ge=0, le=1)
     bbox: ExtractionBBox | None = None
     matched_sku_id: int | None = None
