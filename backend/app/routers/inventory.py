@@ -67,11 +67,42 @@ def _normalize_supplier_code(value: str | None) -> str:
 
 LLM_ARTICLE_MATCH_MIN_CONFIDENCE = 0.80
 
+BOTTLES_PER_BOX = 6
+
+_BOX_UNIT_ALIASES = {"boxes", "box", "doos", "dozen", "colli", "kisten", "ds", "ct"}
+_PIECE_UNIT_ALIASES = {"pieces", "piece", "bottles", "bottle", "flessen", "fles", "fl", "btls", "stuks", "stuk", "pcs"}
+
+
 def _to_int(value: object, default: int = 0) -> int:
     try:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _resolve_inbound_quantity(row: dict) -> tuple[int, int, str]:
+    """Normalize LLM quantity output to (booked_boxes, raw_quantity, unit).
+
+    Rules:
+    - unit=boxes → use as-is.
+    - unit=pieces → convert to boxes using BOTTLES_PER_BOX; partial box (<6) → 0.
+    - unit unknown/missing → fall back to legacy quantity_boxes field if present,
+      else 0 with unit='unknown' so the operator must confirm.
+    """
+    unit_raw = str(row.get("quantity_unit") or "").strip().lower()
+    qty_raw = _to_int(row.get("quantity"), 0)
+    legacy_boxes = _to_int(row.get("quantity_boxes"), 0)
+
+    if unit_raw in _BOX_UNIT_ALIASES:
+        return (max(0, qty_raw), max(0, qty_raw), "boxes")
+    if unit_raw in _PIECE_UNIT_ALIASES:
+        qty_raw = max(0, qty_raw)
+        return (qty_raw // BOTTLES_PER_BOX, qty_raw, "pieces")
+    if legacy_boxes > 0:
+        return (legacy_boxes, legacy_boxes, "boxes")
+    if qty_raw > 0:
+        return (0, qty_raw, "unknown")
+    return (0, 0, "unknown")
 
 
 # ---------------------------------------------------------------------------
@@ -296,14 +327,18 @@ async def extract_shipment_preview(
 
         for row in extracted.get("lines", []):
             code = str(row.get("supplier_code", "")).strip()
-            qty = _to_int((row if isinstance(row, dict) else {}).get("quantity_boxes"), 0)
+            row_dict = row if isinstance(row, dict) else {}
+            qty, qty_raw, qty_unit = _resolve_inbound_quantity(row_dict)
             confidence = float(row.get("confidence", 0.0) or 0.0)
             bbox = row.get("bbox") if isinstance(row.get("bbox"), dict) else None
 
             matched_id = None
             matched_code = None
             matched_name = None
-            needs_confirmation = not code  # flag any no-code line for human review
+            # Flag any no-code line for human review. Also flag when the LLM
+            # could not determine the unit (pieces vs. boxes), so the operator
+            # verifies the quantity before booking.
+            needs_confirmation = (not code) or qty_unit == "unknown"
             match_source = "unresolved"
             candidate_matches: list[ShipmentMatchCandidate] = []
             if code:
@@ -343,6 +378,8 @@ async def extract_shipment_preview(
                 supplier_code=code,
                 description=str(row.get("description", "")).strip(),
                 quantity_boxes=max(0, qty),
+                quantity=max(0, qty_raw),
+                quantity_unit=qty_unit,
                 confidence=max(0.0, min(confidence, 1.0)),
                 bbox=bbox,
                 matched_sku_id=matched_id,

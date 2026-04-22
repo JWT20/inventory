@@ -225,10 +225,10 @@ def test_extract_preview_llm_low_confidence_does_not_autolink(
     assert body["lines"][0]["needs_confirmation"] is True
 
 
-def test_extract_preview_keeps_llm_quantity_boxes_passthrough(
+def test_extract_preview_pieces_are_floored_to_whole_boxes(
     client, db, admin_token, tmp_path
 ):
-    """The backend should not normalize bottle units; it should pass through quantity_boxes."""
+    """102 bottles with pack-size 6 should become 17 boxes, regardless of LLM hints."""
     mocked = {
         "supplier_name": "Anfors",
         "reference": "PKB-781",
@@ -236,15 +236,16 @@ def test_extract_preview_keeps_llm_quantity_boxes_passthrough(
         "raw_text": "sample",
         "lines": [
             {
-                "supplier_code": "AFO161025",
-                "description": "PMC Burgenland Chardonnay23 3 ct6 18 fl",
-                "quantity_boxes": 18,
+                "supplier_code": "AFI810125",
+                "description": "Trent, VdD Pinot Grigio25",
+                "quantity": 102,
+                "quantity_unit": "pieces",
                 "evidence": {
-                    "line_text": "AFO161025 PMC Burgenland Chardonnay23 3 ct6 18 fl",
-                    "quantity_text": "18 fl",
-                    "packaging_text": "ct6",
+                    "line_text": "AFI810125 - Trent, VdD Pinot Grigio25 1 102 132,60 76,50",
+                    "quantity_text": "102",
+                    "unit_hint": "Flessen",
                 },
-                "confidence": 0.88,
+                "confidence": 0.9,
             }
         ],
     }
@@ -260,7 +261,116 @@ def test_extract_preview_keeps_llm_quantity_boxes_passthrough(
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["lines"][0]["quantity_boxes"] == 18
+    assert body["lines"][0]["quantity_boxes"] == 17
+    assert body["lines"][0]["quantity"] == 102
+    assert body["lines"][0]["quantity_unit"] == "pieces"
+
+
+def test_extract_preview_partial_box_is_ignored(
+    client, db, admin_token, tmp_path
+):
+    """Fewer than 6 bottles means < 1 box — quantity_boxes must be 0."""
+    mocked = {
+        "supplier_name": "Anfors",
+        "reference": "PKB-782",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [
+            {
+                "supplier_code": "AFO161025",
+                "description": "Odd partial case",
+                "quantity": 5,
+                "quantity_unit": "pieces",
+                "confidence": 0.9,
+            }
+        ],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(admin_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={"document_type": "pakbon"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["lines"][0]["quantity_boxes"] == 0
+    assert body["lines"][0]["quantity"] == 5
+
+
+def test_extract_preview_boxes_unit_passes_through(
+    client, db, admin_token, tmp_path
+):
+    """When the LLM labels the quantity as boxes, use it directly."""
+    mocked = {
+        "supplier_name": "Anfors",
+        "reference": "PKB-783",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [
+            {
+                "supplier_code": "AFO161025",
+                "description": "Direct boxes",
+                "quantity": 3,
+                "quantity_unit": "boxes",
+                "confidence": 0.95,
+            }
+        ],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(admin_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={"document_type": "pakbon"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["lines"][0]["quantity_boxes"] == 3
+    assert body["lines"][0]["quantity_unit"] == "boxes"
+
+
+def test_extract_preview_unknown_unit_flags_for_confirmation(
+    client, db, admin_token, tmp_path
+):
+    """Unknown unit → quantity_boxes stays 0 and the line needs operator review."""
+    mocked = {
+        "supplier_name": "Anfors",
+        "reference": "PKB-784",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [
+            {
+                "supplier_code": "AFO161025",
+                "description": "Ambiguous",
+                "quantity": 12,
+                "quantity_unit": "unknown",
+                "confidence": 0.4,
+            }
+        ],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(admin_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={"document_type": "pakbon"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["lines"][0]["quantity_boxes"] == 0
+    assert body["lines"][0]["quantity"] == 12
+    assert body["lines"][0]["quantity_unit"] == "unknown"
+    assert body["lines"][0]["needs_confirmation"] is True
 
 
 def test_supplier_mapping_crud_and_confirm_flow(client, db, owner_token, owner_user):

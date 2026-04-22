@@ -25,11 +25,32 @@ interface ExtractedLine {
   supplier_code: string;
   description: string;
   quantity_boxes: number;
+  quantity: number;
+  quantity_unit: "boxes" | "pieces" | "unknown";
   confidence: number;
   bbox: BBox | null;
   matched_sku_id: number | null;
   matched_sku_code: string | null;
   matched_sku_name: string | null;
+}
+
+const BOTTLES_PER_BOX = 6;
+
+function quantityHint(line: ExtractedLine): string | null {
+  if (line.quantity_unit === "pieces") {
+    if (line.quantity > 0 && line.quantity < BOTTLES_PER_BOX) {
+      return `${line.quantity} flessen → 0 dozen (partieel, genegeerd)`;
+    }
+    if (line.quantity > 0) {
+      const remainder = line.quantity % BOTTLES_PER_BOX;
+      const suffix = remainder > 0 ? ` (rest ${remainder} fl genegeerd)` : "";
+      return `${line.quantity} flessen → ${line.quantity_boxes} dozen${suffix}`;
+    }
+  }
+  if (line.quantity_unit === "unknown" && line.quantity > 0) {
+    return `${line.quantity} (eenheid onbekend — controleer)`;
+  }
+  return null;
 }
 
 interface SKUOption {
@@ -415,6 +436,17 @@ export function InboundPage() {
                       </div>
                       <span>· Confidence: {(line.confidence * 100).toFixed(0)}%</span>
                     </div>
+                    {quantityHint(line) && (
+                      <p
+                        className={`text-xs mt-1 ${
+                          line.quantity_unit === "unknown"
+                            ? "text-amber-600"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        {quantityHint(line)}
+                      </p>
+                    )}
                     <p className="text-xs mt-1">
                       {line.matched_sku_code
                         ? `Match: ${line.matched_sku_code} - ${line.matched_sku_name}`
