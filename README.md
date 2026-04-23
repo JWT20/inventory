@@ -8,8 +8,8 @@ Eliminates person-dependency in the wine picking process by identifying boxes vi
                                     ┌───────────────┐
                                     │  PostgreSQL   │
 ┌──────────┐     ┌──────────┐     ┌─┤  + pgvector   │
-│  Phone   │────▶│  Nginx   │────▶│ └───────────────┘
-│  (Camera)│◀────│  :80     │◀────│
+│  Phone   │────▶│  Caddy   │────▶│ └───────────────┘
+│  (Camera)│◀────│ :443/:80 │◀────│
 └──────────┘     └──────────┘     │  FastAPI
                                   │
                                   ├─▶ Gemini Vision
@@ -31,7 +31,7 @@ Eliminates person-dependency in the wine picking process by identifying boxes vi
 | **Database** | PostgreSQL 16 + pgvector for cosine similarity search |
 | **Event logging** | Kafka (KRaft mode) → Apache Pinot (real-time analytics) |
 | **LLM observability** | Langfuse (prompt management + tracing, optional) |
-| **Reverse proxy** | Nginx |
+| **Reverse proxy** | Caddy (production) |
 | **Hosting** | Docker Compose, designed for Oracle Cloud Always Free (1 OCPU ARM, 6GB RAM) |
 
 ## How It Works
@@ -54,7 +54,8 @@ cp .env.example .env
 docker compose up -d
 
 # 3. Open in browser
-# http://localhost:8080
+# http://localhost:3000 (frontend)
+# API health: http://localhost:8000/api/health
 
 # 4. Login with username "admin" and the ADMIN_PASSWORD from .env
 ```
@@ -89,11 +90,13 @@ docker compose up -d
 
 ## User Roles
 
-| Role | Permissions |
-|----------|----------------------------------------------|
-| admin | Full access: manage SKUs, orders, users, delete anything |
-| merchant | Manage own SKUs, orders, and reference images |
-| courier | Scan boxes and book received items only |
+| Role / Flag | Permissions |
+|-------------|-------------|
+| `owner` | Organization owner: manage products, orders, customers, suppliers, inventory |
+| `member` | Organization member: similar warehouse/business access (no org ownership actions) |
+| `courier` | Scan/receiving focused flow |
+| `customer` | Customer-linked user role for customer-centric ordering views |
+| `is_platform_admin=true` | Cross-organization platform beheerder (separate flag, not a role value) |
 
 ## Workflow
 
@@ -103,9 +106,8 @@ docker compose up -d
 3. Upload one or more reference photos — each photo is processed through Gemini Vision → embedding pipeline
 
 ### 2. Create an order (Orders tab)
-1. **CSV upload**: Upload a semicolon-delimited CSV with columns: `klant;producent;wijnaam;type;volume;aantal`
-2. **Manual form**: Create an order with inline wine details per line
-3. The system auto-matches or creates SKUs and sets the order status:
+1. **Manual form**: Create an order with inline product details per line
+2. The system auto-matches or creates SKUs and sets the order status:
    - `draft` — all SKUs already have reference images
    - `pending_images` — one or more SKUs still need reference photos
 
@@ -155,11 +157,16 @@ docker compose up -d
 ### Orders
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/orders/upload-csv` | Merchant/Admin | Create order from CSV file |
 | POST | `/api/orders` | Merchant/Admin | Create order manually |
 | GET | `/api/orders` | Any | List orders (merchants see own, admins see all) |
+| GET | `/api/orders/deadline` | Any | Current order deadline context |
+| GET | `/api/orders/weekly-summary` | Any | Weekly summary |
 | GET | `/api/orders/{id}` | Any | Get order with lines |
 | POST | `/api/orders/{id}/activate` | Merchant/Admin | Activate order (requires all SKUs to have images) |
+| PATCH | `/api/orders/{id}` | Merchant/Admin | Update order metadata |
+| POST | `/api/orders/{id}/lines` | Merchant/Admin | Add line |
+| PATCH | `/api/orders/{id}/lines/{line_id}` | Merchant/Admin | Update line |
+| DELETE | `/api/orders/{id}/lines/{line_id}` | Merchant/Admin | Remove line |
 | DELETE | `/api/orders/{id}` | Admin | Delete order and all its bookings |
 | GET | `/api/orders/{id}/bookings` | Any | List bookings for an order |
 
@@ -167,8 +174,13 @@ docker compose up -d
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/api/customers` | Merchant/Admin | List customers |
+| GET | `/api/customers/{id}` | Merchant/Admin | Get customer |
 | POST | `/api/customers` | Merchant/Admin | Create a customer |
+| PATCH | `/api/customers/{id}` | Merchant/Admin | Update customer |
 | DELETE | `/api/customers/{id}` | Merchant/Admin | Delete a customer |
+| GET | `/api/customers/{id}/skus` | Merchant/Admin | List customer SKU links |
+| POST | `/api/customers/{id}/skus` | Merchant/Admin | Link SKU to customer |
+| DELETE | `/api/customers/{id}/skus/{sku_id}` | Merchant/Admin | Remove customer SKU link |
 
 ### Receiving
 | Method | Path | Auth | Description |
@@ -176,24 +188,36 @@ docker compose up -d
 | POST | `/api/receiving/identify` | Any | Scan a box and identify it (returns top matches or null) |
 | POST | `/api/receiving/book` | Any | Scan, identify, and book a box to an order line |
 | POST | `/api/receiving/book/confirm` | Any | Confirm a low-confidence match (human approval gate) |
+| POST | `/api/receiving/book/more` | Any | Book additional quantity for same SKU context |
 | POST | `/api/receiving/new-product` | Any | Quick-create a SKU with a reference image inline |
+| POST | `/api/receiving/concept-product` | Any | Create concept product from supplier code + description |
 
 ### Vision
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/api/vision/identify` | Any | Ad-hoc box identification (no order context) |
 
-## CSV Format
+### Inventory (Inbound + stock)
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/inventory/shipments/extract-preview` | Warehouse/Admin | Extract/preview shipment lines from document |
+| POST | `/api/inventory/shipments` | Warehouse/Admin | Create inbound shipment |
+| GET | `/api/inventory/shipments` | Warehouse/Admin | List shipments |
+| GET | `/api/inventory/shipments/{id}` | Warehouse/Admin | Get shipment |
+| POST | `/api/inventory/shipments/{id}/book` | Warehouse/Admin | Book shipment lines into inventory |
+| DELETE | `/api/inventory/shipments/{id}` | Warehouse/Admin | Delete shipment |
+| GET | `/api/inventory/inventory` | Warehouse/Admin | Inventory balances |
+| GET | `/api/inventory/inventory/overview` | Warehouse/Admin | Inventory overview incl. pricing |
+| POST | `/api/inventory/inventory/adjust` | Warehouse/Admin | Manual stock adjustment |
+| POST | `/api/inventory/inventory/count` | Warehouse/Admin | Cycle count reconciliation |
 
-Semicolon-delimited, UTF-8 (BOM supported). Example:
-
-```csv
-klant;producent;wijnaam;type;volume;aantal
-Bakker;Château Margaux;Grand Vin;Rood;750;6
-De Vries;Domaine Leflaive;Puligny-Montrachet;Wit;750;12
-```
-
-Rows with the same SKU code and customer are deduplicated and quantities are summed.
+### Suppliers
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/suppliers` | Owner/Member/Admin | List suppliers |
+| POST | `/api/suppliers` | Owner/Member/Admin | Create supplier |
+| PATCH | `/api/suppliers/{id}` | Owner/Member/Admin | Update supplier |
+| DELETE | `/api/suppliers/{id}` | Owner/Member/Admin | Delete supplier |
 
 ## Event Logging
 
@@ -253,9 +277,12 @@ backend/                FastAPI application
     routers/
       auth.py           Login, user CRUD
       skus.py           SKU CRUD, reference image upload
-      orders.py         CSV upload, manual orders, activation, bookings
+      orders.py         Order CRUD, weekly/deadline views, order lines, bookings
       receiving.py      Box identification, booking, inline product creation
       vision.py         Ad-hoc vision identification
+      inventory.py      Inbound shipments + stock movement/valuation endpoints
+      suppliers.py      Supplier CRUD
+      product_attributes.py  Dynamic product attribute definitions/values
     services/
       embedding.py      Gemini Vision + embedding generation
       matching.py       pgvector cosine similarity search
@@ -277,7 +304,7 @@ frontend/               React + Vite + Tailwind + Shadcn/ui
     components/
       login.tsx         Login form
       receive.tsx       Scanner UI (order select → scan → booking result)
-      orders.tsx        Order management (CSV upload, manual create, activate)
+      orders.tsx        Order management (create, update, activate, line edits)
       skus.tsx          Product management (CRUD, reference image upload)
       customers.tsx     Customer management
       accounts.tsx      User management (admin only)
@@ -294,7 +321,6 @@ pinot/                  Apache Pinot configuration
   init.sh               One-shot schema/table creation
 scripts/
   init-db.sql           PostgreSQL pgvector extension init
-nginx/                  Reverse proxy configuration
 docs/
   event-logging.md      Event logging docs with Pinot query examples
 ```
@@ -322,7 +348,7 @@ Designed for Oracle Cloud Always Free tier (1 OCPU ARM, 6GB RAM).
 | Kafka (KRaft) | 512 MB |
 | Apache Pinot | 1536 MB |
 | Backend (FastAPI) | 512 MB |
-| Frontend (Nginx) | 128 MB |
+| Frontend (Nginx static) | 128 MB |
 
 ```bash
 cd deploy
@@ -331,9 +357,9 @@ cd deploy
 # 2. Provision VM
 ./provision.sh
 # 3. Deploy application
-./setup.sh
+./setup.sh <vm-ip-adres>
 # 4. Redeploy after changes
-./redeploy.sh
+./redeploy.sh <vm-ip-adres>
 ```
 
 ## Testing
