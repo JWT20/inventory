@@ -8,7 +8,7 @@ import base64
 from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
-from PIL import Image
+from PIL import Image, ImageOps
 import io
 
 from langfuse import observe, get_client as get_langfuse_client
@@ -179,6 +179,7 @@ def optimize_for_vision(image_bytes: bytes, max_dimension: int | None = None) ->
     """
     limit = max_dimension or MAX_VISION_DIMENSION
     image = Image.open(io.BytesIO(image_bytes))
+    image = ImageOps.exif_transpose(image)
     w, h = image.size
     if max(w, h) > limit:
         scale = limit / max(w, h)
