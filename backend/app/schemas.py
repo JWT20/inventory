@@ -440,14 +440,6 @@ class ShipmentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class ExtractionBBox(BaseModel):
-    x: float = Field(..., ge=0, le=1)
-    y: float = Field(..., ge=0, le=1)
-    width: float = Field(..., ge=0, le=1)
-    height: float = Field(..., ge=0, le=1)
-    page: int = Field(1, ge=1)
-
-
 class ShipmentExtractedLine(BaseModel):
     supplier_code: str = ""
     description: str = ""
@@ -455,7 +447,6 @@ class ShipmentExtractedLine(BaseModel):
     quantity: int = Field(0, ge=0)
     quantity_unit: Literal["boxes", "pieces", "unknown"] = "unknown"
     confidence: float = Field(0.0, ge=0, le=1)
-    bbox: ExtractionBBox | None = None
     matched_sku_id: int | None = None
     matched_sku_code: str | None = None
     matched_sku_name: str | None = None

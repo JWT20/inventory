@@ -13,14 +13,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-interface BBox {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  page: number;
-}
-
 interface ExtractedLine {
   supplier_code: string;
   description: string;
@@ -28,7 +20,6 @@ interface ExtractedLine {
   quantity: number;
   quantity_unit: "boxes" | "pieces" | "unknown";
   confidence: number;
-  bbox: BBox | null;
   matched_sku_id: number | null;
   matched_sku_code: string | null;
   matched_sku_name: string | null;
@@ -295,11 +286,6 @@ export function InboundPage() {
     });
   }
 
-  const selectedBox =
-    selectedLineIndex != null && preview?.lines[selectedLineIndex]?.bbox
-      ? preview.lines[selectedLineIndex].bbox
-      : null;
-
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-bold">Inbound pakbon/factuur</h2>
@@ -378,19 +364,8 @@ export function InboundPage() {
               Auto-mapping: eerst op leverancier + supplier code (opgeslagen mappings), daarna op exacte SKU-code match.
             </p>
 
-            <div className="relative mt-3 border border-border rounded overflow-hidden">
+            <div className="mt-3 border border-border rounded overflow-hidden">
               <img src={preview.image_url} alt="Pakbon/factuur" className="w-full" />
-              {selectedBox && (
-                <div
-                  className="absolute border-2 border-red-500 bg-red-500/10 pointer-events-none"
-                  style={{
-                    left: "0%",
-                    right: "0%",
-                    top: `${Math.max(0, (selectedBox.y - 0.01) * 100)}%`,
-                    height: `${Math.min(1, selectedBox.height + 0.02) * 100}%`,
-                  }}
-                />
-              )}
             </div>
             <div className="mt-3">
               <Button onClick={confirmInbound} disabled={confirmingInbound} className="w-full">

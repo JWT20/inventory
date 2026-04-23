@@ -274,7 +274,7 @@ async def extract_shipment_preview(
     db: Session = Depends(get_db),
     user: User = Depends(require_warehouse),
 ):
-    """Camera-first extraction preview for pakbon/factuur with bbox hints."""
+    """Camera-first extraction preview for pakbon/factuur."""
     with propagate_attributes(
         user_id=str(user.id),
         metadata={"endpoint": "/api/shipments/extract-preview", "username": user.username},
@@ -330,7 +330,6 @@ async def extract_shipment_preview(
             row_dict = row if isinstance(row, dict) else {}
             qty, qty_raw, qty_unit = _resolve_inbound_quantity(row_dict)
             confidence = float(row.get("confidence", 0.0) or 0.0)
-            bbox = row.get("bbox") if isinstance(row.get("bbox"), dict) else None
 
             matched_id = None
             matched_code = None
@@ -381,7 +380,6 @@ async def extract_shipment_preview(
                 quantity=max(0, qty_raw),
                 quantity_unit=qty_unit,
                 confidence=max(0.0, min(confidence, 1.0)),
-                bbox=bbox,
                 matched_sku_id=matched_id,
                 matched_sku_code=matched_code,
                 matched_sku_name=matched_name,

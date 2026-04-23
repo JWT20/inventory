@@ -30,7 +30,6 @@ def test_extract_preview_does_not_fallback_to_direct_sku_code(client, db, admin_
                 "description": "Test wine line",
                 "quantity_boxes": 6,
                 "confidence": 0.93,
-                "bbox": {"x": 0.1, "y": 0.2, "width": 0.4, "height": 0.05, "page": 1},
             }
         ],
     }
@@ -92,7 +91,6 @@ def test_extract_preview_maps_using_supplier_mapping(
                 "description": "Mapped first",
                 "quantity_boxes": 2,
                 "confidence": 0.88,
-                "bbox": {"x": 0.1, "y": 0.2, "width": 0.4, "height": 0.05, "page": 1},
             }
         ],
     }
@@ -133,7 +131,6 @@ def test_extract_preview_uses_case_insensitive_supplier_mapping(
                 "description": "lowercase should still match",
                 "quantity_boxes": 1,
                 "confidence": 0.9,
-                "bbox": {"x": 0.1, "y": 0.2, "width": 0.4, "height": 0.05, "page": 1},
             }
         ],
     }
@@ -166,7 +163,6 @@ def test_extract_preview_llm_matches_when_supplier_code_missing(
                 "description": "Sample product name",
                 "quantity_boxes": 3,
                 "confidence": 0.2,
-                "bbox": {"x": 0.1, "y": 0.2, "width": 0.4, "height": 0.05, "page": 1},
             }
         ],
     }
@@ -204,7 +200,6 @@ def test_extract_preview_llm_low_confidence_does_not_autolink(
                 "description": "Another product name",
                 "quantity_boxes": 3,
                 "confidence": 0.2,
-                "bbox": {"x": 0.1, "y": 0.2, "width": 0.4, "height": 0.05, "page": 1},
             }
         ],
     }
