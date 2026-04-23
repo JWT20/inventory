@@ -16,6 +16,9 @@ venv/
 uploads/reference_images/*
 !uploads/reference_images/.gitkeep
 
+# Scratch / spike artifacts (never commit customer images)
+tmp/
+
 # Docker
 docker-compose.override.yml
 
