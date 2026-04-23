@@ -36,19 +36,27 @@ interface ExtractedLine {
 
 const BOTTLES_PER_BOX = 6;
 
-function quantityHint(line: ExtractedLine): string | null {
-  if (line.quantity_unit === "pieces") {
-    if (line.quantity > 0 && line.quantity < BOTTLES_PER_BOX) {
-      return `${line.quantity} flessen → 0 dozen (partieel, genegeerd)`;
-    }
-    if (line.quantity > 0) {
-      const remainder = line.quantity % BOTTLES_PER_BOX;
-      const suffix = remainder > 0 ? ` (rest ${remainder} fl genegeerd)` : "";
-      return `${line.quantity} flessen → ${line.quantity_boxes} dozen${suffix}`;
-    }
-  }
+function extractedLabel(line: ExtractedLine): string {
+  if (line.quantity <= 0) return "—";
+  if (line.quantity_unit === "pieces") return `${line.quantity} flessen`;
+  if (line.quantity_unit === "boxes") return `${line.quantity} dozen`;
+  return `${line.quantity} (eenheid onbekend)`;
+}
+
+function mismatchReason(line: ExtractedLine): string | null {
   if (line.quantity_unit === "unknown" && line.quantity > 0) {
-    return `${line.quantity} (eenheid onbekend — controleer)`;
+    return "eenheid onbekend — controleer";
+  }
+  if (line.quantity_unit === "pieces" && line.quantity > 0) {
+    if (line.quantity < BOTTLES_PER_BOX) return "partieel, genegeerd";
+    const remainder = line.quantity % BOTTLES_PER_BOX;
+    const autoBoxes = Math.floor(line.quantity / BOTTLES_PER_BOX);
+    if (line.quantity_boxes !== autoBoxes) return "handmatig aangepast";
+    if (remainder > 0) return `rest ${remainder} fl genegeerd`;
+    return null;
+  }
+  if (line.quantity_unit === "boxes" && line.quantity > 0 && line.quantity !== line.quantity_boxes) {
+    return "handmatig aangepast";
   }
   return null;
 }
@@ -397,56 +405,74 @@ export function InboundPage() {
               <p className="text-sm text-muted-foreground">Geen productregels gevonden.</p>
             ) : (
               <div className="space-y-2 max-h-[520px] overflow-auto">
-                {preview.lines.map((line, idx) => (
+                {preview.lines.map((line, idx) => {
+                  const reason = mismatchReason(line);
+                  const unknownUnit = line.quantity_unit === "unknown";
+                  const borderClass = selectedLineIndex === idx
+                    ? "border-primary"
+                    : reason
+                      ? "border-border border-l-2 border-l-amber-500"
+                      : "border-border";
+                  return (
                   <button
                     key={`${line.supplier_code}-${idx}`}
-                    className={`w-full text-left border rounded p-2 ${selectedLineIndex === idx ? "border-primary" : "border-border"}`}
+                    className={`w-full text-left border rounded p-2 ${borderClass}`}
                     onClick={() => setSelectedLineIndex(idx)}
                   >
                     <p className="text-sm font-medium">{line.supplier_code || "(geen code)"}</p>
                     <p className="text-sm">{line.description || "-"}</p>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground" onClick={(e) => e.stopPropagation()}>
-                      <span>Boxes:</span>
-                      <div className="inline-flex items-center gap-1">
-                        <button
-                          type="button"
-                          aria-label="Decrease boxes"
-                          className="w-5 h-5 rounded bg-muted text-foreground text-xs font-bold flex items-center justify-center disabled:opacity-30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
-                          disabled={line.quantity_boxes <= 0}
-                          onClick={() => updateLineQuantity(idx, line.quantity_boxes - 1)}
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Uitgelezen</p>
+                        <p
+                          aria-label="Uitgelezen hoeveelheid"
+                          className={`text-sm tabular-nums ${unknownUnit ? "font-semibold text-amber-600" : ""}`}
                         >
-                          &minus;
-                        </button>
-                        <input
-                          type="number"
-                          min={0}
-                          aria-label="Number of boxes"
-                          className="w-12 text-center border border-border rounded px-1 py-0.5 text-xs bg-background tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                          value={line.quantity_boxes}
-                          onChange={(e) => updateLineQuantity(idx, parseInt(e.target.value, 10) || 0)}
-                        />
-                        <button
-                          type="button"
-                          aria-label="Increase boxes"
-                          className="w-5 h-5 rounded bg-muted text-foreground text-xs font-bold flex items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
-                          onClick={() => updateLineQuantity(idx, line.quantity_boxes + 1)}
-                        >
-                          +
-                        </button>
+                          {extractedLabel(line)}
+                        </p>
                       </div>
-                      <span>· Confidence: {(line.confidence * 100).toFixed(0)}%</span>
+                      <div onClick={(e) => e.stopPropagation()}>
+                        <p className="text-xs text-muted-foreground">Berekend</p>
+                        <div className="inline-flex items-center gap-1 mt-0.5">
+                          <button
+                            type="button"
+                            aria-label="Decrease boxes"
+                            className="w-5 h-5 rounded bg-muted text-foreground text-xs font-bold flex items-center justify-center disabled:opacity-30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                            disabled={line.quantity_boxes <= 0}
+                            onClick={() => updateLineQuantity(idx, line.quantity_boxes - 1)}
+                          >
+                            &minus;
+                          </button>
+                          <input
+                            type="number"
+                            min={0}
+                            aria-label="Number of boxes"
+                            className="w-12 text-center border border-border rounded px-1 py-0.5 text-xs bg-background tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            value={line.quantity_boxes}
+                            onChange={(e) => updateLineQuantity(idx, parseInt(e.target.value, 10) || 0)}
+                          />
+                          <button
+                            type="button"
+                            aria-label="Increase boxes"
+                            className="w-5 h-5 rounded bg-muted text-foreground text-xs font-bold flex items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                            onClick={() => updateLineQuantity(idx, line.quantity_boxes + 1)}
+                          >
+                            +
+                          </button>
+                          <span className="text-sm ml-1">dozen</span>
+                        </div>
+                      </div>
                     </div>
-                    {quantityHint(line) && (
-                      <p
-                        className={`text-xs mt-1 ${
-                          line.quantity_unit === "unknown"
-                            ? "text-amber-600"
-                            : "text-muted-foreground"
-                        }`}
-                      >
-                        {quantityHint(line)}
-                      </p>
-                    )}
+                    <div className="flex items-center gap-2 text-xs mt-1">
+                      {reason && (
+                        <span className={unknownUnit ? "text-amber-600" : "text-muted-foreground"}>
+                          ⚠ {reason}
+                        </span>
+                      )}
+                      <span className="text-muted-foreground ml-auto">
+                        Confidence: {(line.confidence * 100).toFixed(0)}%
+                      </span>
+                    </div>
                     <p className="text-xs mt-1">
                       {line.matched_sku_code
                         ? `Match: ${line.matched_sku_code} - ${line.matched_sku_name}`
@@ -495,7 +521,8 @@ export function InboundPage() {
                       </div>
                     )}
                   </button>
-                ))}
+                  );
+                })}
               </div>
             )}
           </Card>
