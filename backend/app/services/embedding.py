@@ -453,8 +453,7 @@ EXTRACT_SHIPMENT_SYSTEM_DEFAULT = "\n".join([
     "      },",
     '      "quantity": 102,',
     '      "quantity_unit": "pieces",',
-    '      "confidence": 0.91,',
-    '      "bbox": {"x": 0.1, "y": 0.2, "width": 0.6, "height": 0.04, "page": 1}',
+    '      "confidence": 0.91',
     "    }",
     "  ]",
     "}",
@@ -472,7 +471,6 @@ EXTRACT_SHIPMENT_SYSTEM_DEFAULT = "\n".join([
     "",
     "Evidence rules:",
     "- Keep evidence fields as short verbatim snippets from the document.",
-    "- bbox values are normalized between 0 and 1.",
     "",
     "Filtering rules:",
     "- Include only product lines.",
@@ -494,7 +492,7 @@ EXTRACT_SHIPMENT_USER_PROMPT = "\n".join([
 
 @observe()
 async def extract_shipment_document(image_bytes: bytes) -> dict:
-    """Extract structured shipment data (with bboxes) from a pakbon/factuur photo."""
+    """Extract structured shipment data from a pakbon/factuur photo."""
     image = await asyncio.to_thread(
         optimize_for_vision, image_bytes, settings.gemini_extraction_max_dimension
     )
