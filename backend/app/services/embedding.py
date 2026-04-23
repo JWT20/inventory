@@ -171,19 +171,20 @@ def _get_client() -> genai.Client:
     return _client
 
 
-def optimize_for_vision(image_bytes: bytes) -> Image.Image:
-    """Downscale image so its longest side is at most MAX_VISION_DIMENSION px.
+def optimize_for_vision(image_bytes: bytes, max_dimension: int | None = None) -> Image.Image:
+    """Downscale image so its longest side is at most ``max_dimension`` px.
 
-    Returns a PIL Image ready for the Vision API.  Images already within the
-    limit are returned as-is (no re-encoding quality loss).
+    Defaults to ``MAX_VISION_DIMENSION`` (suitable for box classification).
+    Document extraction passes a higher limit so small table digits stay legible.
     """
+    limit = max_dimension or MAX_VISION_DIMENSION
     image = Image.open(io.BytesIO(image_bytes))
     w, h = image.size
-    if max(w, h) > MAX_VISION_DIMENSION:
-        scale = MAX_VISION_DIMENSION / max(w, h)
+    if max(w, h) > limit:
+        scale = limit / max(w, h)
         new_w, new_h = int(w * scale), int(h * scale)
         image = image.resize((new_w, new_h), Image.LANCZOS)
-        logger.info("Resized image from %dx%d to %dx%d for vision", w, h, new_w, new_h)
+        logger.info("Resized image from %dx%d to %dx%d for vision (limit=%d)", w, h, new_w, new_h, limit)
     return image
 
 
@@ -493,7 +494,9 @@ EXTRACT_SHIPMENT_USER_PROMPT = "\n".join([
 @observe()
 async def extract_shipment_document(image_bytes: bytes) -> dict:
     """Extract structured shipment data (with bboxes) from a pakbon/factuur photo."""
-    image = await asyncio.to_thread(optimize_for_vision, image_bytes)
+    image = await asyncio.to_thread(
+        optimize_for_vision, image_bytes, settings.gemini_extraction_max_dimension
+    )
     system_prompt = get_prompt("extract-shipment-document", fallback=EXTRACT_SHIPMENT_SYSTEM_DEFAULT)
     raw_text = await _call_vision(
         image,
