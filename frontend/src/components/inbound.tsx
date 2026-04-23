@@ -382,12 +382,12 @@ export function InboundPage() {
               <img src={preview.image_url} alt="Pakbon/factuur" className="w-full" />
               {selectedBox && (
                 <div
-                  className="absolute border-2 border-red-500 bg-red-500/10"
+                  className="absolute border-2 border-red-500 bg-red-500/10 pointer-events-none"
                   style={{
-                    left: `${selectedBox.x * 100}%`,
-                    top: `${selectedBox.y * 100}%`,
-                    width: `${selectedBox.width * 100}%`,
-                    height: `${selectedBox.height * 100}%`,
+                    left: "0%",
+                    right: "0%",
+                    top: `${Math.max(0, (selectedBox.y - 0.01) * 100)}%`,
+                    height: `${Math.min(1, selectedBox.height + 0.02) * 100}%`,
                   }}
                 />
               )}
