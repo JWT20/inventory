@@ -143,11 +143,13 @@ class TestClassifyImage:
 
         with patch("app.services.embedding._get_client", return_value=mock_client), \
              patch("app.services.embedding._get_semaphore", return_value=asyncio.Semaphore(5)), \
-             patch("app.services.embedding.Image") as mock_pil:
+             patch("app.services.embedding.Image") as mock_pil, \
+             patch("app.services.embedding.ImageOps") as mock_image_ops:
             mock_img = MagicMock()
             mock_img.size = (800, 600)
             mock_pil.open.return_value = mock_img
             mock_pil.LANCZOS = 1
+            mock_image_ops.exif_transpose.side_effect = lambda img: img
             is_package, summary = asyncio.run(classify_image(b"fake-image-bytes"))
 
         assert is_package is True
@@ -164,11 +166,13 @@ class TestClassifyImage:
 
         with patch("app.services.embedding._get_client", return_value=mock_client), \
              patch("app.services.embedding._get_semaphore", return_value=asyncio.Semaphore(5)), \
-             patch("app.services.embedding.Image") as mock_pil:
+             patch("app.services.embedding.Image") as mock_pil, \
+             patch("app.services.embedding.ImageOps") as mock_image_ops:
             mock_img = MagicMock()
             mock_img.size = (800, 600)
             mock_pil.open.return_value = mock_img
             mock_pil.LANCZOS = 1
+            mock_image_ops.exif_transpose.side_effect = lambda img: img
             is_package, summary = asyncio.run(classify_image(b"fake-image-bytes"))
 
         assert is_package is False
@@ -190,11 +194,13 @@ class TestDescribePackage:
 
         with patch("app.services.embedding._get_client", return_value=mock_client), \
              patch("app.services.embedding._get_semaphore", return_value=asyncio.Semaphore(5)), \
-             patch("app.services.embedding.Image") as mock_pil:
+             patch("app.services.embedding.Image") as mock_pil, \
+             patch("app.services.embedding.ImageOps") as mock_image_ops:
             mock_img = MagicMock()
             mock_img.size = (800, 600)
             mock_pil.open.return_value = mock_img
             mock_pil.LANCZOS = 1
+            mock_image_ops.exif_transpose.side_effect = lambda img: img
             description = asyncio.run(describe_package(b"fake-image-bytes"))
 
         assert "ROBERT WEIL" in description
