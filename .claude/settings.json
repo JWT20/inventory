@@ -9,7 +9,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "gitnexus analyze && git add AGENTS.md CLAUDE.md && git diff --cached --quiet || git commit -m 'Update gitnexus index' && git push",
+            "command": "gitnexus analyze",
             "async": true
           }
         ]
