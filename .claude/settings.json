@@ -1,3 +1,6 @@
 {
-  "enableAllProjectMcpServers": true
+  "enableAllProjectMcpServers": true,
+  "enabledPlugins": {
+    "superpowers@anthropic-tools": true
+  }
 }
