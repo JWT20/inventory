@@ -2,5 +2,18 @@
   "enableAllProjectMcpServers": true,
   "enabledPlugins": {
     "superpowers@anthropic-tools": true
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "gitnexus analyze",
+            "async": true
+          }
+        ]
+      }
+    ]
   }
 }
