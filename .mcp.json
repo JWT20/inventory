@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "gitnexus": {
+      "command": "npx",
+      "args": ["-y", "gitnexus"]
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "superpowers": {
+      "command": "npx",
+      "args": ["-y", "@joshuarileydev/superpowers"]
+    }
+  }
+}
