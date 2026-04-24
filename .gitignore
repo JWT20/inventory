@@ -36,3 +36,4 @@ deploy/terraform.tfvars
 
 # OCI keys (never commit)
 *.pem
+.gitnexus
