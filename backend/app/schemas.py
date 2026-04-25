@@ -22,6 +22,7 @@ class TokenResponse(BaseModel):
     is_platform_admin: bool = False
     organization_id: int | None = None
     organization_name: str | None = None
+    organization_slug: str | None = None
     custom_label: str | None = None
     customer_id: int | None = None
 
@@ -87,6 +88,7 @@ class UserResponse(BaseModel):
     is_platform_admin: bool = False
     organization_id: int | None = None
     organization_name: str | None = None
+    organization_slug: str | None = None
     custom_label: str | None = None
     customer_id: int | None = None
     customer_name: str | None = None
