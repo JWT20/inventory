@@ -16,6 +16,8 @@ export { toast };
 
 type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "customers" | "accounts" | "weekly";
 
+const JURJEN_ORG_SLUG = "jurjen";
+
 function Main() {
   const { user, loading, logout } = useAuth();
   const defaultPage: Page = user?.role === "courier" ? "receive" : "orders";
@@ -81,7 +83,7 @@ function Main() {
     <Tabs defaultValue={defaultPage} className="min-h-screen flex flex-col">
       <header className="sticky top-0 z-50 bg-background border-b border-border px-4 pt-3 pb-0">
         <div className="flex justify-between items-center mb-2">
-          {user.role === "customer" ? (
+          {user.role === "customer" && user.organization_name === JURJEN_ORG_SLUG ? (
             <img src="/jurjen-logo.png" alt="Jurjen Wijn" className="h-8 object-contain" />
           ) : (
             <h1 className="text-lg font-bold">{user.custom_label || "Magazijn"}</h1>
