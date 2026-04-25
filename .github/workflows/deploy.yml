@@ -40,7 +40,7 @@ jobs:
           path: ./
           remote_path: /opt/wijnpick/
           remote_host: ${{ secrets.SERVER_IP }}
-          remote_user: opc
+          remote_user: deploy
           remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Sync Caddyfile to server
@@ -50,14 +50,14 @@ jobs:
           path: deploy/Caddyfile
           remote_path: /opt/wijnpick/deploy/
           remote_host: ${{ secrets.SERVER_IP }}
-          remote_user: opc
+          remote_user: deploy
           remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Update Caddy config and rebuild containers
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SERVER_IP }}
-          username: opc
+          username: deploy
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd /opt/wijnpick
