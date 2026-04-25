@@ -58,17 +58,20 @@ class _LoginCredentials:
 def _user_to_response(user: User, db: Session | None = None) -> UserResponse:
     # Resolve org name + custom_label: use relationship if already loaded, else query via db
     org_name = None
+    org_slug = None
     custom_label = None
     if user.organization_id:
         try:
             if user.organization:
                 org_name = user.organization.name
+                org_slug = user.organization.slug
                 custom_label = user.organization.custom_label
         except Exception:
             if db:
                 org = db.get(Organization, user.organization_id)
                 if org:
                     org_name = org.name
+                    org_slug = org.slug
                     custom_label = org.custom_label
     # Resolve customer name
     customer_name = None
@@ -86,6 +89,7 @@ def _user_to_response(user: User, db: Session | None = None) -> UserResponse:
         is_platform_admin=user.is_platform_admin,
         organization_id=user.organization_id,
         organization_name=org_name,
+        organization_slug=org_slug,
         custom_label=custom_label,
         customer_id=user.customer_id,
         customer_name=customer_name,
@@ -129,11 +133,13 @@ async def login(
 
     # Resolve organization name + custom_label via sync session (async lazy-load not possible)
     org_name = None
+    org_slug = None
     custom_label = None
     if user.organization_id:
         org = db.get(Organization, user.organization_id)
         if org:
             org_name = org.name
+            org_slug = org.slug
             custom_label = org.custom_label
 
     publish_event(
@@ -150,6 +156,7 @@ async def login(
         is_platform_admin=user.is_platform_admin,
         organization_id=user.organization_id,
         organization_name=org_name,
+        organization_slug=org_slug,
         custom_label=custom_label,
         customer_id=user.customer_id,
     )
