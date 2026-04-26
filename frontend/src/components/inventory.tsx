@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import {
@@ -180,6 +181,10 @@ function InventoryDetailDialog({
   onUpdated: (item: InventoryItem) => void;
   onRefresh: () => void;
 }) {
+  const { user } = useAuth();
+  const canAdjustStock =
+    !!user && (user.is_platform_admin || user.role === "owner" || user.role === "member");
+
   const [editingDefaultPrice, setEditingDefaultPrice] = useState(false);
   const [defaultPriceValue, setDefaultPriceValue] = useState("");
   const [editingCustomerPriceId, setEditingCustomerPriceId] = useState<number | null>(null);
@@ -187,16 +192,52 @@ function InventoryDetailDialog({
   const [editingDiscountId, setEditingDiscountId] = useState<number | null>(null);
   const [discountType, setDiscountType] = useState<string>("");
   const [discountValue, setDiscountValue] = useState("");
+  const [editingStock, setEditingStock] = useState(false);
+  const [stockDeltaValue, setStockDeltaValue] = useState("");
+  const [stockNoteValue, setStockNoteValue] = useState("");
+  const [savingStock, setSavingStock] = useState(false);
 
   useEffect(() => {
     if (item) {
       setEditingDefaultPrice(false);
       setEditingCustomerPriceId(null);
       setEditingDiscountId(null);
+      setEditingStock(false);
+      setStockDeltaValue("");
+      setStockNoteValue("");
     }
   }, [item]);
 
   if (!item) return null;
+
+  async function saveStockAdjustment() {
+    if (!item) return;
+    const delta = parseInt(stockDeltaValue, 10);
+    if (!Number.isFinite(delta) || delta === 0) {
+      toast.error("Vul een aantal in (bijv. -3 of 10)");
+      return;
+    }
+    if (delta < 0) {
+      const ok = window.confirm(
+        `Voorraad verlagen met ${Math.abs(delta)}? Dit kan niet ongedaan worden gemaakt.`,
+      );
+      if (!ok) return;
+    }
+    const note = stockNoteValue.trim() || null;
+    setSavingStock(true);
+    try {
+      await api.adjustInventory(item.sku_id, delta, note);
+      onUpdated({ ...item, quantity_on_hand: item.quantity_on_hand + delta });
+      setEditingStock(false);
+      setStockDeltaValue("");
+      setStockNoteValue("");
+      toast.success("Voorraad aangepast");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Fout bij opslaan");
+    } finally {
+      setSavingStock(false);
+    }
+  }
 
   async function saveDefaultPrice() {
     if (!item) return;
@@ -261,15 +302,78 @@ function InventoryDetailDialog({
         <DialogBody>
         <div className="space-y-4">
           {/* Stock */}
-          <div className="flex justify-between items-center">
-            <span className="text-sm text-muted-foreground">Voorraad</span>
-            <span
-              className={`text-lg font-bold ${
-                item.quantity_on_hand < LOW_STOCK_THRESHOLD ? "text-red-600" : ""
-              }`}
-            >
-              {item.quantity_on_hand}
-            </span>
+          <div className="space-y-2">
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-muted-foreground">Voorraad</span>
+              <div className="flex items-center gap-3">
+                <span
+                  className={`text-lg font-bold ${
+                    item.quantity_on_hand < LOW_STOCK_THRESHOLD ? "text-red-600" : ""
+                  }`}
+                >
+                  {item.quantity_on_hand}
+                </span>
+                {canAdjustStock && !editingStock && (
+                  <button
+                    onClick={() => {
+                      setStockDeltaValue("");
+                      setStockNoteValue("");
+                      setEditingStock(true);
+                    }}
+                    className="text-sm text-primary hover:underline"
+                  >
+                    Aanpassen
+                  </button>
+                )}
+              </div>
+            </div>
+            {canAdjustStock && editingStock && (
+              <div className="rounded-md border border-border p-3 space-y-2">
+                <label className="text-xs text-muted-foreground block">
+                  Aantal (gebruik negatief om te verlagen, bv. -3)
+                </label>
+                <Input
+                  type="number"
+                  step="1"
+                  value={stockDeltaValue}
+                  onChange={(e) => setStockDeltaValue(e.target.value)}
+                  className="h-8 text-sm"
+                  placeholder="bv. 12 of -3"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveStockAdjustment();
+                    if (e.key === "Escape") setEditingStock(false);
+                  }}
+                />
+                <Input
+                  type="text"
+                  value={stockNoteValue}
+                  onChange={(e) => setStockNoteValue(e.target.value)}
+                  className="h-8 text-sm"
+                  placeholder="Reden (optioneel)"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveStockAdjustment();
+                    if (e.key === "Escape") setEditingStock(false);
+                  }}
+                />
+                <div className="flex items-center gap-3 pt-1">
+                  <button
+                    onClick={saveStockAdjustment}
+                    disabled={savingStock}
+                    className="text-sm text-primary hover:underline disabled:opacity-50"
+                  >
+                    {savingStock ? "Opslaan..." : "Opslaan"}
+                  </button>
+                  <button
+                    onClick={() => setEditingStock(false)}
+                    disabled={savingStock}
+                    className="text-sm text-muted-foreground hover:underline disabled:opacity-50"
+                  >
+                    Annuleren
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Attributes */}
