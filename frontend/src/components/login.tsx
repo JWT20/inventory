@@ -29,7 +29,7 @@ export function LoginPage() {
     <div className="min-h-screen flex items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Magazijn</CardTitle>
+          <CardTitle className="text-2xl">Dockscan</CardTitle>
           <p className="text-sm text-muted-foreground">Log in om verder te gaan</p>
         </CardHeader>
         <CardContent>
