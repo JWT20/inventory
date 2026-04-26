@@ -77,9 +77,12 @@ async function request(path: string, options: RequestInit = {}) {
   }
 
   if (resp.status === 401) {
+    const body = await resp.json().catch(() => ({}));
     clearToken();
-    window.location.reload();
-    throw new Error("Sessie verlopen");
+    if (path !== "/auth/login") {
+      window.location.reload();
+    }
+    throw new Error(body.detail || "Inloggen mislukt");
   }
   if (resp.status === 204) return null;
   if (!resp.ok) {
