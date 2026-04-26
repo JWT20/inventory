@@ -84,7 +84,7 @@ function Main() {
       <header className="sticky top-0 z-50 bg-background border-b border-border px-4 pt-3 pb-0">
         <div className="flex justify-between items-center mb-2 h-12">
           {user.role === "customer" && user.organization_slug === JURJEN_ORG_SLUG ? (
-            <img src="/jurjen-logo.png" alt="Jurjen Wijn" className="h-16 object-contain" />
+            <img src="/jurjen-logo.png" alt="Jurjen Wijn" className="h-20 object-contain" />
           ) : (
             <h1 className="text-lg font-bold">{user.custom_label || "Magazijn"}</h1>
           )}
