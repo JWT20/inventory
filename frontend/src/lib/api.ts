@@ -315,6 +315,8 @@ export const api = {
     json(`/customers/${customerId}/skus/${skuId}/price`, "PUT", { unit_price: unitPrice }),
   updateCustomerSKUDiscount: (customerId: number, skuId: number, discountType: string | null, discountValue: number | null) =>
     json(`/customers/${customerId}/skus/${skuId}/discount`, "PUT", { discount_type: discountType, discount_value: discountValue }),
+  adjustInventory: (skuId: number, quantity: number, note: string | null) =>
+    json("/inventory/adjust", "POST", { sku_id: skuId, quantity, note }),
 
   // Vision (ad-hoc)
   identify: (blob: Blob) => upload("/vision/identify", blob, "scan.jpg"),

@@ -986,17 +986,26 @@ def adjust_inventory(
     user: User = Depends(require_product_manager),
 ):
     """Manual stock adjustment (positive or negative delta)."""
+    if data.quantity == 0:
+        raise HTTPException(400, "Voorraadaanpassing mag niet 0 zijn")
+
     sku = db.get(SKU, data.sku_id)
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
 
-    if not user.is_platform_admin and not user.organization_id:
-        raise HTTPException(400, "User has no organization")
+    if user.is_platform_admin:
+        organization_id = sku.organization_id
+    else:
+        if not user.organization_id:
+            raise HTTPException(400, "User has no organization")
+        if sku.organization_id != user.organization_id:
+            raise HTTPException(403, "Geen toegang tot deze SKU")
+        organization_id = user.organization_id
 
     movement = apply_stock_movement(
         db,
         sku_id=data.sku_id,
-        organization_id=user.organization_id,
+        organization_id=organization_id,
         quantity=data.quantity,
         movement_type="adjust",
         reference_type="manual",
