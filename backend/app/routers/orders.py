@@ -171,6 +171,16 @@ def _upsert_customer_skus(db: Session, pairs: set[tuple[int, int]]):
             db.add(CustomerSKU(customer_id=customer_id, sku_id=sku_id))
 
 
+def _customer_assigned_sku_ids(db: Session, customer_id: int) -> set[int]:
+    """Return the set of sku_ids assigned to the given customer."""
+    rows = (
+        db.query(CustomerSKU.sku_id)
+        .filter(CustomerSKU.customer_id == customer_id)
+        .all()
+    )
+    return {r[0] for r in rows}
+
+
 def _resolve_organization_id(user: User, body_org_id: int | None, db: Session) -> int:
     """Determine the organization_id for an order based on user context."""
     if user.is_platform_admin:
@@ -191,13 +201,20 @@ def create_order(
     """Create an order by picking existing customers and SKUs."""
     org_id = _resolve_organization_id(user, body.organization_id, db)
 
-    # Customer-role users can only order for their linked customer
+    # Customer-role users can only order for their linked customer,
+    # and may only pick SKUs already assigned to that customer.
     if user.role == "customer" and user.customer_id:
+        assigned_skus = _customer_assigned_sku_ids(db, user.customer_id)
         for line in body.lines:
             if line.customer_id != user.customer_id:
                 raise HTTPException(
                     403,
                     "Klantgebruikers kunnen alleen orders plaatsen voor hun eigen klant",
+                )
+            if line.sku_id not in assigned_skus:
+                raise HTTPException(
+                    403,
+                    "Klantgebruikers kunnen geen nieuwe wijnen toevoegen aan een order",
                 )
 
     ref = f"ORD-{uuid.uuid4().hex[:8].upper()}"
@@ -728,10 +745,17 @@ def add_order_line(
             409, f"Kan geen regels toevoegen aan een order met status '{order.status}'"
         )
 
-    # Customer-role users can only add for their linked customer
+    # Customer-role users can only add for their linked customer,
+    # and only SKUs already assigned to that customer.
     if user.role == "customer" and user.customer_id:
         if body.customer_id != user.customer_id:
             raise HTTPException(403, "Klantgebruikers kunnen alleen voor hun eigen klant bestellen")
+        assigned_skus = _customer_assigned_sku_ids(db, user.customer_id)
+        if body.sku_id not in assigned_skus:
+            raise HTTPException(
+                403,
+                "Klantgebruikers kunnen geen nieuwe wijnen toevoegen aan een order",
+            )
 
     customer = db.get(Customer, body.customer_id)
     if not customer:

@@ -102,6 +102,138 @@ class TestCreateOrder:
         assert data["hidden_lines_count"] == 1
 
 
+class TestCustomerSkuRestrictions:
+    """Customers may only order SKUs already assigned to their linked customer."""
+
+    def _link_customer(self, db, customer_user, sample_org, assigned_sku=None):
+        customer = Customer(name="gekoppelde klant", organization_id=sample_org.id)
+        db.add(customer)
+        db.commit()
+        db.refresh(customer)
+        customer_user.customer_id = customer.id
+        if assigned_sku is not None:
+            db.add(CustomerSKU(customer_id=customer.id, sku_id=assigned_sku.id))
+        db.commit()
+        return customer
+
+    def test_customer_create_order_with_assigned_sku_succeeds(
+        self, client, db, customer_user, customer_token, sample_org
+    ):
+        sku = SKU(sku_code="WINE-CR-OK", name="Toegewezen wijn")
+        db.add(sku)
+        db.commit()
+        customer = self._link_customer(db, customer_user, sample_org, assigned_sku=sku)
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "lines": [{"customer_id": customer.id, "sku_id": sku.id, "quantity": 2}],
+            },
+            headers=auth_header(customer_token),
+        )
+        assert resp.status_code == 200
+
+    def test_customer_create_order_with_unassigned_sku_forbidden(
+        self, client, db, customer_user, customer_token, sample_org
+    ):
+        unassigned = SKU(sku_code="WINE-CR-NO", name="Niet toegewezen")
+        db.add(unassigned)
+        db.commit()
+        customer = self._link_customer(db, customer_user, sample_org)
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "lines": [
+                    {"customer_id": customer.id, "sku_id": unassigned.id, "quantity": 1}
+                ],
+            },
+            headers=auth_header(customer_token),
+        )
+        assert resp.status_code == 403
+        assert "nieuwe wijnen" in resp.json()["detail"].lower()
+
+    def test_customer_add_line_with_assigned_sku_succeeds(
+        self, client, db, customer_user, customer_token, sample_org
+    ):
+        sku = SKU(sku_code="WINE-AL-OK", name="Toegewezen wijn 2")
+        db.add(sku)
+        db.commit()
+        customer = self._link_customer(db, customer_user, sample_org, assigned_sku=sku)
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "lines": [{"customer_id": customer.id, "sku_id": sku.id, "quantity": 1}],
+            },
+            headers=auth_header(customer_token),
+        )
+        assert resp.status_code == 200
+        order_id = resp.json()["id"]
+
+        resp = client.post(
+            f"/api/orders/{order_id}/lines",
+            json={"customer_id": customer.id, "sku_id": sku.id, "quantity": 3},
+            headers=auth_header(customer_token),
+        )
+        assert resp.status_code == 200
+
+    def test_customer_add_line_with_unassigned_sku_forbidden(
+        self, client, db, customer_user, customer_token, sample_org
+    ):
+        assigned = SKU(sku_code="WINE-AL-A", name="Toegewezen")
+        unassigned = SKU(sku_code="WINE-AL-X", name="Niet toegewezen")
+        db.add_all([assigned, unassigned])
+        db.commit()
+        customer = self._link_customer(
+            db, customer_user, sample_org, assigned_sku=assigned
+        )
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "lines": [{"customer_id": customer.id, "sku_id": assigned.id, "quantity": 1}],
+            },
+            headers=auth_header(customer_token),
+        )
+        order_id = resp.json()["id"]
+
+        resp = client.post(
+            f"/api/orders/{order_id}/lines",
+            json={"customer_id": customer.id, "sku_id": unassigned.id, "quantity": 1},
+            headers=auth_header(customer_token),
+        )
+        assert resp.status_code == 403
+        assert "nieuwe wijnen" in resp.json()["detail"].lower()
+
+    def test_owner_can_still_add_any_sku(
+        self, client, db, owner_user, owner_token, sample_org
+    ):
+        customer = Customer(name="willekeurige klant", organization_id=sample_org.id)
+        sku_a = SKU(sku_code="WINE-OW-A", name="Wijn A")
+        sku_b = SKU(sku_code="WINE-OW-B", name="Wijn B")
+        db.add_all([customer, sku_a, sku_b])
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [{"customer_id": customer.id, "sku_id": sku_a.id, "quantity": 1}],
+            },
+            headers=auth_header(owner_token),
+        )
+        order_id = resp.json()["id"]
+
+        # Owner adds an unassigned SKU — should succeed.
+        resp = client.post(
+            f"/api/orders/{order_id}/lines",
+            json={"customer_id": customer.id, "sku_id": sku_b.id, "quantity": 2},
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+
+
 class TestListOrders:
     def test_list_orders_unauthenticated(self, client):
         resp = client.get("/api/orders")
