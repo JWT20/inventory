@@ -710,30 +710,32 @@ function ManualOrderDialog({
                       );
                     })
                   )}
-                  {/* Add other SKU */}
-                  <div className="pt-2">
-                    <Select
-                      value=""
-                      onValueChange={(v) => {
-                        if (v) addExtraSku(customerId, Number(v));
-                      }}
-                    >
-                      <SelectTrigger className="h-9 text-sm">
-                        <SelectValue placeholder="+ Ander product toevoegen..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {allSkus
-                          .filter(
-                            (s) => !lines.some((l) => l.sku_id === s.id),
-                          )
-                          .map((s) => (
-                            <SelectItem key={s.id} value={String(s.id)}>
-                              {s.name} ({s.sku_code})
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  {/* Add other SKU — only available to non-customer roles */}
+                  {user?.role !== "customer" && (
+                    <div className="pt-2">
+                      <Select
+                        value=""
+                        onValueChange={(v) => {
+                          if (v) addExtraSku(customerId, Number(v));
+                        }}
+                      >
+                        <SelectTrigger className="h-9 text-sm">
+                          <SelectValue placeholder="+ Ander product toevoegen..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {allSkus
+                            .filter(
+                              (s) => !lines.some((l) => l.sku_id === s.id),
+                            )
+                            .map((s) => (
+                              <SelectItem key={s.id} value={String(s.id)}>
+                                {s.name} ({s.sku_code})
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                 </div>
               </div>
             );
