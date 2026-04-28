@@ -399,7 +399,7 @@ async def book_box(
             .with_for_update()
             .first()
         )
-        if not balance or balance.quantity_on_hand < 1:
+        if not balance or balance.quantity_available < 1:
             raise HTTPException(
                 409,
                 f"Geen voorraad voor {matched_sku.sku_code} — is de pakbon al ingeboekt?",

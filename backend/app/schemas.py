@@ -513,6 +513,8 @@ class InventoryBalanceResponse(BaseModel):
     sku_name: str = ""
     organization_id: int | None = None
     quantity_on_hand: int
+    quantity_reserved: int = 0
+    quantity_available: int = 0
     last_movement_at: datetime | None
 
     model_config = {"from_attributes": True}
@@ -525,6 +527,8 @@ class InventoryOverviewItem(BaseModel):
     attributes: dict[str, str] = {}
     default_price: float | None = None
     quantity_on_hand: int = 0
+    quantity_reserved: int = 0
+    quantity_available: int = 0
     last_movement_at: datetime | None = None
     image_url: str | None = None
     customer_prices: list[CustomerPriceResponse] = []

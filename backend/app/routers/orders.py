@@ -203,6 +203,12 @@ def create_order(
 
     # Customer-role users can only order for their linked customer,
     # and may only pick SKUs already assigned to that customer.
+    if user.role == "customer" and not user.customer_id:
+        raise HTTPException(
+            403,
+            "Klantgebruikers moeten aan een klant gekoppeld zijn om orders te plaatsen",
+        )
+
     if user.role == "customer" and user.customer_id:
         assigned_skus = _customer_assigned_sku_ids(db, user.customer_id)
         for line in body.lines:
