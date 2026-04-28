@@ -98,6 +98,20 @@ docker compose up -d
 | `customer` | Customer-linked user role for customer-centric ordering views |
 | `is_platform_admin=true` | Cross-organization platform beheerder (separate flag, not a role value) |
 
+## Organization Settings
+
+Per-organization rules toggleable from the admin UI (Accounts → bewerken):
+
+| Flag | Default | Effect when on |
+|------|---------|----------------|
+| `auto_inactivate_no_images` | `false` | The system manages `SKU.active` automatically: a SKU is `inactive` while it has no reference image with `processing_status` in (`pending`, `processing`, `done`), and `active` once it does. Restaurants can still order inactive SKUs (visibility is governed by `customer_skus`); the rule only drives a clear "needs photo" signal and the warehouse scan flow's inline reference-photo prompt. Other organizations keep manual control over `SKU.active`. |
+
+Backfill an organization's existing SKUs once the flag is flipped on:
+
+```bash
+python -m scripts.backfill_active_from_images
+```
+
 ## Workflow
 
 ### 1. Register products (Producten tab)
@@ -112,7 +126,7 @@ docker compose up -d
    - `pending_images` — one or more SKUs still need reference photos
 
 ### 3. Activate the order
-- Once all SKUs in the order have reference images, activate the order (status → `active`)
+- Activate the order (status → `active`). Reference images are NOT required at this point — procurement is order-driven, so the bottle often hasn't physically arrived yet.
 - Only active orders appear in the scanner workflow
 
 ### 4. Scan & book (Scan & Boek tab)
@@ -120,7 +134,8 @@ docker compose up -d
 2. Camera opens — point at the box and press **Scan**
 3. Result: matched SKU with confidence score, or "not recognized"
 4. On match: a booking is created, the box is assigned to a customer rolcontainer (`KLANT <customer_name>`)
-5. When all lines are fully booked, the order auto-completes
+5. **No reference image yet?** When matching fails because one or more SKUs on the order have no reference image, the koerier picks the right SKU from a list and the scan is registered as that SKU's first reference image — the booking proceeds in the same tap.
+6. When all lines are fully booked, the order auto-completes
 
 ### 5. Ad-hoc identification
 - Use the `/api/vision/identify` endpoint or receiving identify to check a box without order context

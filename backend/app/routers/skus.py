@@ -36,6 +36,7 @@ from app.services.embedding import (
     describe_and_embed,
     generate_embedding,
 )
+from app.services.product_status import recompute_active
 from app.services.storage import storage
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,8 @@ def create_sku(
     )
     sku.set_attributes(data.attributes)
     db.add(sku)
+    db.flush()
+    recompute_active(sku, db)
     db.commit()
     db.refresh(sku)
     publish_event(
@@ -319,6 +322,8 @@ async def upload_reference_image(
         wine_check_overridden=skip_wine_check,
     )
     db.add(ref_image)
+    db.flush()
+    recompute_active(sku, db)
     db.commit()
     db.refresh(ref_image)
 
@@ -368,6 +373,9 @@ def delete_reference_image(
     sku = db.get(SKU, sku_id)
     storage.delete(image.image_path)
     db.delete(image)
+    db.flush()
+    if sku is not None:
+        recompute_active(sku, db)
     db.commit()
     publish_event(
         "reference_image_deleted",

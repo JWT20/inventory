@@ -41,6 +41,7 @@ interface Organization {
   slug: string;
   custom_label: string | null;
   enabled_modules: string[];
+  auto_inactivate_no_images?: boolean;
   created_at: string;
 }
 
@@ -559,12 +560,14 @@ function EditOrgDialog({
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [customLabel, setCustomLabel] = useState("");
+  const [autoInactivate, setAutoInactivate] = useState(false);
 
   useEffect(() => {
     if (org) {
       setName(org.name);
       setSlug(org.slug);
       setCustomLabel(org.custom_label || "");
+      setAutoInactivate(!!org.auto_inactivate_no_images);
     }
   }, [org]);
 
@@ -576,6 +579,7 @@ function EditOrgDialog({
         name,
         slug,
         custom_label: customLabel || null,
+        auto_inactivate_no_images: autoInactivate,
       });
       toast.success(`Organisatie '${name}' bijgewerkt`);
       onClose();
@@ -621,6 +625,26 @@ function EditOrgDialog({
             <p className="text-xs text-muted-foreground">
               Vervangt "Magazijn" in de header voor deze organisatie
             </p>
+          </div>
+          <div className="space-y-2">
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoInactivate}
+                onChange={(e) => setAutoInactivate(e.target.checked)}
+                className="mt-1"
+              />
+              <span>
+                <span className="text-sm font-medium">
+                  SKUs zonder referentiefoto automatisch op inactief zetten
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  Producten zonder bruikbare referentiefoto worden automatisch
+                  inactief gemarkeerd. Bestellen blijft mogelijk; pas bij scannen
+                  in het magazijn moet er een foto zijn om te kunnen matchen.
+                </span>
+              </span>
+            </label>
           </div>
           <Button type="submit" className="w-full">
             Opslaan

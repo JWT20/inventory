@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { toast } from "@/App";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -353,6 +353,12 @@ function ScanStep({
   onBack: () => void;
 }) {
   const [scanning, setScanning] = useState(false);
+  const [needsRef, setNeedsRef] = useState<{
+    register_token: string;
+    scan_image_url: string;
+    candidates: { sku_id: number; sku_code: string; sku_name: string; remaining_quantity: number }[];
+  } | null>(null);
+  const [registering, setRegistering] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -403,10 +409,89 @@ function ScanStep({
       const confirmation: ConfirmationData = await api.bookBox(blob, order.id);
       onBooked(confirmation);
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Scanfout");
+      if (
+        err instanceof ApiError &&
+        err.status === 422 &&
+        typeof err.detail === "object" &&
+        err.detail !== null &&
+        (err.detail as { error?: string }).error === "needs_reference_image"
+      ) {
+        setNeedsRef(err.detail as typeof needsRef);
+      } else {
+        toast.error(err instanceof Error ? err.message : "Scanfout");
+      }
     } finally {
       setScanning(false);
     }
+  }
+
+  async function pickCandidate(skuId: number) {
+    if (!needsRef) return;
+    setRegistering(true);
+    try {
+      const confirmation: ConfirmationData = await api.registerReferenceAndBook(
+        needsRef.register_token,
+        skuId,
+      );
+      setNeedsRef(null);
+      onBooked(confirmation);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Registratiefout");
+    } finally {
+      setRegistering(false);
+    }
+  }
+
+  if (needsRef) {
+    return (
+      <>
+        <Card className="p-3 mb-3">
+          <p className="text-sm font-semibold">{order.reference}</p>
+          <p className="text-xs text-muted-foreground">
+            {order.merchant_name} &middot; {order.booked_boxes}/{order.total_boxes} dozen
+          </p>
+        </Card>
+
+        <Card className="p-3 mb-3 bg-amber-50 border-amber-200">
+          <p className="text-sm font-semibold mb-1">Geen referentiefoto bekend</p>
+          <p className="text-xs text-muted-foreground">
+            Welke SKU staat er op de doos? Je scan wordt dan opgeslagen als
+            referentiefoto en de boeking gaat door.
+          </p>
+        </Card>
+
+        <img
+          src={needsRef.scan_image_url}
+          alt="scan"
+          className="w-full rounded-lg mb-3 border"
+        />
+
+        <div className="space-y-2 mb-3">
+          {needsRef.candidates.map((c) => (
+            <button
+              key={c.sku_id}
+              onClick={() => pickCandidate(c.sku_id)}
+              disabled={registering}
+              className="w-full text-left p-3 rounded-lg border hover:bg-muted disabled:opacity-50"
+            >
+              <p className="font-semibold text-sm">{c.sku_name}</p>
+              <p className="text-xs text-muted-foreground font-mono">
+                {c.sku_code} &middot; nog {c.remaining_quantity} te boeken
+              </p>
+            </button>
+          ))}
+        </div>
+
+        <Button
+          variant="outline"
+          className="w-full"
+          onClick={() => setNeedsRef(null)}
+          disabled={registering}
+        >
+          Annuleer
+        </Button>
+      </>
+    );
   }
 
   return (

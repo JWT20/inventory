@@ -35,6 +35,10 @@ class StorageBackend(abc.ABC):
         """Store bytes at the given key. Returns the key."""
 
     @abc.abstractmethod
+    def read(self, key: str) -> bytes | None:
+        """Return bytes at the given key, or None if it does not exist."""
+
+    @abc.abstractmethod
     def delete(self, key: str) -> None:
         """Delete the file at the given key. No error if missing."""
 
@@ -69,6 +73,13 @@ class LocalStorage(StorageBackend):
         with open(path, "wb") as f:
             f.write(data)
         return key
+
+    def read(self, key: str) -> bytes | None:
+        path = self._full_path(key)
+        if not os.path.isfile(path):
+            return None
+        with open(path, "rb") as f:
+            return f.read()
 
     def delete(self, key: str) -> None:
         path = self._full_path(key)
@@ -143,6 +154,15 @@ class S3Storage(StorageBackend):
             ContentType=content_type,
         )
         return key
+
+    def read(self, key: str) -> bytes | None:
+        try:
+            response = self._client.get_object(Bucket=self._bucket, Key=key)
+            return response["Body"].read()
+        except self._client.exceptions.NoSuchKey:
+            return None
+        except Exception:
+            return None
 
     def delete(self, key: str) -> None:
         self._client.delete_object(Bucket=self._bucket, Key=key)
