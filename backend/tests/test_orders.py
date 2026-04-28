@@ -275,7 +275,7 @@ class TestGetOrder:
 
 
 class TestActivateOrder:
-    def test_activate_order_without_images_fails(self, client, db, owner_user, owner_token, sample_org):
+    def test_activate_order_without_images_succeeds(self, client, db, owner_user, owner_token, sample_org):
         customer = Customer(name="klant", organization_id=sample_org.id)
         sku = SKU(sku_code="WINE-004", name="Test Wine 4")
         db.add_all([customer, sku])
@@ -292,13 +292,12 @@ class TestActivateOrder:
         )
         order_id = resp.json()["id"]
 
-        # Try to activate without images
         resp = client.post(
             f"/api/orders/{order_id}/activate",
             headers=auth_header(owner_token),
         )
-        assert resp.status_code == 400
-        assert "referentiebeelden" in resp.json()["detail"].lower()
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "active"
 
     def test_courier_cannot_activate_order(self, client, db, owner_user, owner_token, courier_token, sample_org):
         customer = Customer(name="klant2", organization_id=sample_org.id)

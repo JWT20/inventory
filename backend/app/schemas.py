@@ -105,6 +105,7 @@ class OrganizationCreate(BaseModel):
     slug: str = Field(..., min_length=1, max_length=100)
     custom_label: str | None = Field(None, max_length=255)
     enabled_modules: list[str] = ["inventory", "orders"]
+    auto_inactivate_no_images: bool = False
 
 
 class OrganizationUpdate(BaseModel):
@@ -112,6 +113,7 @@ class OrganizationUpdate(BaseModel):
     slug: str | None = Field(None, min_length=1, max_length=100)
     custom_label: str | None = None
     enabled_modules: list[str] | None = None
+    auto_inactivate_no_images: bool | None = None
 
 
 class OrganizationResponse(BaseModel):
@@ -120,6 +122,7 @@ class OrganizationResponse(BaseModel):
     slug: str
     custom_label: str | None = None
     enabled_modules: list[str] = []
+    auto_inactivate_no_images: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -400,6 +403,19 @@ class BookingConfirmation(BaseModel):
 class ConfirmBookingRequest(BaseModel):
     confirmation_token: str
     quantity: int = Field(1, ge=1)
+
+
+class MissingReferenceCandidate(BaseModel):
+    """A SKU on the order that has no usable reference image yet."""
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    remaining_quantity: int
+
+
+class RegisterReferenceRequest(BaseModel):
+    register_token: str
+    sku_id: int = Field(..., gt=0)
 
 
 # --- Inbound Shipments ---

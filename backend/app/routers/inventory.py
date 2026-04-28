@@ -825,12 +825,13 @@ def inventory_overview(
 
     # Batch-load customer prices for all SKUs in result
     sku_ids = [sku.id for sku, _ in rows]
+    can_view_prices = user.role != "courier"
     customer_prices_rows = (
         db.query(CustomerSKU, Customer.name)
         .join(Customer, CustomerSKU.customer_id == Customer.id)
         .filter(CustomerSKU.sku_id.in_(sku_ids))
         .all()
-    ) if sku_ids and user.role != "courier" else []
+    ) if sku_ids and can_view_prices else []
 
     # Build a lookup of default_price per sku for effective price calculation
     sku_default_prices: dict[int, float | None] = {}
@@ -869,7 +870,11 @@ def inventory_overview(
                 sku_code=sku.sku_code,
                 sku_name=sku.name,
                 attributes=sku.attributes_dict,
-                default_price=float(sku.default_price) if sku.default_price is not None else None,
+                default_price=(
+                    float(sku.default_price)
+                    if can_view_prices and sku.default_price is not None
+                    else None
+                ),
                 quantity_on_hand=balance.quantity_on_hand if balance else 0,
                 quantity_reserved=balance.quantity_reserved if balance else 0,
                 quantity_available=balance.quantity_available if balance else 0,

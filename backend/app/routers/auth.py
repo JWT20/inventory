@@ -370,6 +370,7 @@ def list_organizations(
             slug=o.slug,
             custom_label=o.custom_label,
             enabled_modules=o.modules,
+            auto_inactivate_no_images=o.auto_inactivate_no_images,
             created_at=o.created_at,
         )
         for o in orgs
@@ -389,6 +390,7 @@ def create_organization(
         slug=data.slug,
         custom_label=data.custom_label,
         enabled_modules=json.dumps(data.enabled_modules),
+        auto_inactivate_no_images=data.auto_inactivate_no_images,
     )
     db.add(org)
     db.commit()
@@ -399,6 +401,7 @@ def create_organization(
         slug=org.slug,
         custom_label=org.custom_label,
         enabled_modules=org.modules,
+        auto_inactivate_no_images=org.auto_inactivate_no_images,
         created_at=org.created_at,
     )
 
@@ -433,6 +436,9 @@ def update_organization(
     if data.enabled_modules is not None:
         org.modules = data.enabled_modules
 
+    if data.auto_inactivate_no_images is not None:
+        org.auto_inactivate_no_images = data.auto_inactivate_no_images
+
     db.commit()
     db.refresh(org)
     return OrganizationResponse(
@@ -441,6 +447,7 @@ def update_organization(
         slug=org.slug,
         custom_label=org.custom_label,
         enabled_modules=org.modules,
+        auto_inactivate_no_images=org.auto_inactivate_no_images,
         created_at=org.created_at,
     )
 

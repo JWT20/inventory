@@ -1,5 +1,15 @@
 const BASE = "/api";
 
+export class ApiError extends Error {
+  status: number;
+  detail: unknown;
+  constructor(status: number, detail: unknown, message: string) {
+    super(message);
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 function getToken(): string | null {
   return localStorage.getItem("token");
 }
@@ -87,7 +97,12 @@ async function request(path: string, options: RequestInit = {}) {
   if (resp.status === 204) return null;
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}));
-    throw new Error(body.detail || `Request failed: ${resp.status}`);
+    const detail = body?.detail;
+    const message =
+      typeof detail === "string"
+        ? detail
+        : detail?.message || `Request failed: ${resp.status}`;
+    throw new ApiError(resp.status, detail, message);
   }
   const text = await resp.text();
   return text ? JSON.parse(text) : null;
@@ -157,9 +172,9 @@ export const api = {
 
   // Organizations
   listOrganizations: () => request("/auth/organizations"),
-  createOrganization: (data: { name: string; slug: string; custom_label?: string; enabled_modules?: string[] }) =>
+  createOrganization: (data: { name: string; slug: string; custom_label?: string; enabled_modules?: string[]; auto_inactivate_no_images?: boolean }) =>
     json("/auth/organizations", "POST", data),
-  updateOrganization: (id: number, data: { name?: string; slug?: string; custom_label?: string | null; enabled_modules?: string[] }) =>
+  updateOrganization: (id: number, data: { name?: string; slug?: string; custom_label?: string | null; enabled_modules?: string[]; auto_inactivate_no_images?: boolean }) =>
     json(`/auth/organizations/${id}`, "PATCH", data),
   deleteOrganization: (id: number) => request(`/auth/organizations/${id}`, { method: "DELETE" }),
 
@@ -287,6 +302,13 @@ export const api = {
     if (scanImagePath) form.append("scan_image_path", scanImagePath);
     return request("/receiving/book/more", { method: "POST", body: form });
   },
+
+  registerReferenceAndBook: (registerToken: string, skuId: number) =>
+    request("/receiving/register-reference", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ register_token: registerToken, sku_id: skuId }),
+    }),
 
   // Inventory
   listInventoryOverview: (qs = "") => request(`/inventory/overview${qs}`),

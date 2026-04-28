@@ -42,6 +42,9 @@ class Organization(Base):
     enabled_modules: Mapped[str] = mapped_column(
         Text, default='["inventory","orders"]'
     )
+    auto_inactivate_no_images: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

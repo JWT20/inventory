@@ -14,13 +14,23 @@ from app.events import publish_event
 from app.models import SKU, Booking, InventoryBalance, Order, OrderLine, ReferenceImage, User
 from app.routers.inventory import apply_stock_movement
 from app.routers.skus import _check_duplicate_embedding, _sku_to_response
-from app.schemas import AlternativeMatch, BookingConfirmation, BookingResponse, ConfirmBookingRequest, MatchResult, SKUResponse
+from app.schemas import (
+    AlternativeMatch,
+    BookingConfirmation,
+    BookingResponse,
+    ConfirmBookingRequest,
+    MatchResult,
+    MissingReferenceCandidate,
+    RegisterReferenceRequest,
+    SKUResponse,
+)
 from app.services.storage import storage
 from langfuse import observe, propagate_attributes
 
 from app.services.allocation import compute_allocation
 from app.services.embedding import assess_description_quality, process_image
 from app.services.matching import find_best_matches
+from app.services.product_status import recompute_active
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +38,29 @@ MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 CONFIRMATION_TOKEN_MAX_AGE = 120  # seconds
 
 _signer = URLSafeTimedSerializer(settings.secret_key, salt="booking-confirm")
+_register_signer = URLSafeTimedSerializer(settings.secret_key, salt="register-reference")
+REGISTER_TOKEN_MAX_AGE = 300  # seconds
+
+
+# Image processing states that count as "the SKU has a usable reference image".
+_USABLE_REF_STATUSES = ("pending", "processing", "done")
+
+
+def _missing_reference_candidates(order: "Order") -> list[MissingReferenceCandidate]:
+    """SKUs on this order that have no usable reference image and still need bookings."""
+    out: list[MissingReferenceCandidate] = []
+    for line in order.lines:
+        if line.booked_count >= line.quantity:
+            continue
+        sku = line.sku
+        if not any(img.processing_status in _USABLE_REF_STATUSES for img in sku.reference_images):
+            out.append(MissingReferenceCandidate(
+                sku_id=sku.id,
+                sku_code=sku.sku_code,
+                sku_name=sku.name,
+                remaining_quantity=line.quantity - line.booked_count,
+            ))
+    return out
 
 
 def _image_url(key: str | None) -> str:
@@ -293,6 +326,33 @@ async def book_box(
                     f"Deze doos lijkt op SKU {wrong_sku.sku_code} ({wrong_sku.name}), "
                     f"maar die zit niet in deze order",
                 )
+
+            # Surface SKUs on this order that have no reference image yet —
+            # matching cannot succeed against them. The koerier is holding the
+            # bottle right now, so they can pick which SKU this box is for and
+            # the scan becomes the first reference image.
+            missing_refs = _missing_reference_candidates(order)
+            if missing_refs:
+                register_token = _register_signer.dumps({
+                    "order_id": order_id,
+                    "scan_image_key": scan_key,
+                    "user_id": user.id,
+                })
+                raise HTTPException(
+                    422,
+                    detail={
+                        "error": "needs_reference_image",
+                        "message": (
+                            "Doos niet herkend. Eén of meer SKUs in deze order "
+                            "hebben nog geen referentiefoto. Kies de juiste SKU "
+                            "om deze scan als referentiefoto te registreren."
+                        ),
+                        "register_token": register_token,
+                        "scan_image_url": _image_url(scan_key),
+                        "candidates": [c.model_dump() for c in missing_refs],
+                    },
+                )
+
             raise HTTPException(
                 404,
                 "Doos niet herkend — geen match gevonden met SKUs in deze order",
@@ -588,6 +648,128 @@ def confirm_booking(
     )
 
 
+@router.post("/register-reference", response_model=BookingConfirmation)
+@observe()
+async def register_reference_and_book(
+    body: RegisterReferenceRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_warehouse),
+):
+    """Register the most recent scan as a reference image for the picked SKU.
+
+    Used by the warehouse UI when /book returned 'needs_reference_image': the
+    koerier holds a box that doesn't match anything because the SKU has no
+    reference image yet. They pick which order line this box belongs to, and
+    the scan they just took becomes the SKU's first reference image. Returns
+    a BookingConfirmation token so the UI can immediately call /book/confirm
+    to register the booking — one tap on the koerier's side.
+    """
+    try:
+        data = _register_signer.loads(body.register_token, max_age=REGISTER_TOKEN_MAX_AGE)
+    except SignatureExpired:
+        raise HTTPException(410, "Registratietoken verlopen — scan opnieuw")
+    except BadSignature:
+        raise HTTPException(400, "Ongeldig registratietoken")
+
+    order_id = data["order_id"]
+    scan_image_key = data["scan_image_key"]
+
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+    if order.status != "active":
+        raise HTTPException(400, f"Order is niet actief (status: {order.status})")
+
+    sku = db.get(SKU, body.sku_id)
+    if not sku:
+        raise HTTPException(404, "SKU niet gevonden")
+
+    order_line = (
+        db.query(OrderLine)
+        .filter(
+            OrderLine.order_id == order_id,
+            OrderLine.sku_id == body.sku_id,
+            OrderLine.booked_count < OrderLine.quantity,
+        )
+        .first()
+    )
+    if not order_line:
+        raise HTTPException(
+            400,
+            f"SKU {sku.sku_code} zit niet (meer) in deze order",
+        )
+
+    # Refuse to overwrite an existing reference — the koerier should only land
+    # here when the SKU genuinely has no usable image.
+    if any(img.processing_status in _USABLE_REF_STATUSES for img in sku.reference_images):
+        raise HTTPException(
+            409,
+            f"SKU {sku.sku_code} heeft al een referentiefoto — scan opnieuw",
+        )
+
+    image_bytes = storage.read(scan_image_key)
+    if not image_bytes:
+        raise HTTPException(410, "Scanafbeelding niet meer beschikbaar — scan opnieuw")
+
+    try:
+        description, embedding, _is_package = await process_image(image_bytes)
+    except Exception:
+        logger.exception("Vision processing failed during reference registration")
+        raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
+
+    image_key = f"reference_images/{sku.id}/{uuid.uuid4().hex}.jpg"
+    storage.save(image_key, image_bytes)
+
+    ref_image = ReferenceImage(
+        sku_id=sku.id,
+        image_path=image_key,
+        vision_description=description,
+        embedding=embedding,
+        description_quality=assess_description_quality(description),
+        processing_status="done",
+    )
+    db.add(ref_image)
+    db.flush()
+    recompute_active(sku, db)
+    db.commit()
+    db.refresh(sku)
+
+    publish_event(
+        "reference_image_registered_at_scan",
+        details={"sku_code": sku.sku_code, "order_reference": order.reference},
+        user=user,
+        resource_type="sku",
+        resource_id=sku.id,
+    )
+
+    # Hand back a booking-confirm token so the UI can finalize the booking
+    # without forcing the koerier to scan again.
+    confirm_token = _signer.dumps({
+        "order_id": order_id,
+        "sku_id": sku.id,
+        "confidence": 1.0,
+        "scan_image_key": scan_image_key,
+        "user_id": user.id,
+    })
+
+    remaining = order_line.quantity - order_line.booked_count
+    rolcontainer = f"KLANT {order_line.customer_name.upper()}"
+
+    return BookingConfirmation(
+        confirmation_token=confirm_token,
+        sku_code=sku.sku_code,
+        sku_name=sku.name,
+        confidence=1.0,
+        klant=order_line.customer_name,
+        rolcontainer=rolcontainer,
+        scan_image_url=_image_url(scan_image_key),
+        reference_image_url=_image_url(image_key),
+        reference_image_urls=_all_reference_image_urls(db, sku.id),
+        alternatives=[],
+        remaining_quantity=remaining,
+    )
+
+
 @router.post("/book/more", response_model=BookingResponse)
 @observe()
 def book_more(
@@ -783,6 +965,8 @@ async def create_product_inline(
         description_quality=quality,
     )
     db.add(ref_image)
+    db.flush()
+    recompute_active(sku, db)
     db.commit()
     db.refresh(sku)
 

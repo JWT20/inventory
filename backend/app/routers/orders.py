@@ -612,7 +612,14 @@ def activate_order(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Activate order — only possible when all SKUs have reference images."""
+    """Activate an order.
+
+    Reference images are no longer required at activation time. Wines that
+    arrive at the warehouse without a reference photo are surfaced at scan
+    time, where the worker can capture the photo on the spot (the bottle is
+    in their hands). This keeps procurement-driven order flow unblocked
+    while still gating the matching step on having something to match.
+    """
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, "Order niet gevonden")
@@ -625,18 +632,6 @@ def activate_order(
 
     if order.status not in ("draft", "pending_images"):
         raise HTTPException(400, f"Order kan niet geactiveerd worden (status: {order.status})")
-
-    # Check all SKUs have images
-    skus_without_images = []
-    for line in order.lines:
-        if len(line.sku.reference_images) == 0:
-            skus_without_images.append(line.sku.sku_code)
-
-    if skus_without_images:
-        raise HTTPException(
-            400,
-            f"Niet alle SKU's hebben referentiebeelden: {', '.join(skus_without_images)}",
-        )
 
     order.status = "active"
     db.commit()
