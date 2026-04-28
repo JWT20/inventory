@@ -1,18 +1,8 @@
-# Oracle Cloud Infrastructure - pas deze waarden aan
-tenancy_ocid     = "ocid1.tenancy.oc1..your-tenancy-ocid"
-user_ocid        = "ocid1.user.oc1..your-user-ocid"
-fingerprint      = "your:api:key:fingerprint"
-private_key_path = "/Users/Gebruiker/.oci/oci_api_key.pem"
-region           = "eu-amsterdam-1"
+# Copy to terraform.tfvars (gitignored) and fill in real values.
+# Get these from the Contabo Customer Control Panel -> Account -> API.
+# NEVER commit terraform.tfvars or paste these values in chat / issues / PRs.
 
-# Compartment (gebruik tenancy OCID voor root compartment)
-compartment_ocid = "ocid1.tenancy.oc1..your-tenancy-ocid"
-
-# SSH key voor VM toegang
-ssh_public_key_path = "/Users/Gebruiker/.ssh/id_rsa.pub"
-
-# Domain
-domain = "dockscan.nl"
-
-# Gemini
-gemini_api_key = "your-gemini-api-key"
+contabo_oauth2_client_id     = "INT-xxxxxxxx"
+contabo_oauth2_client_secret = "your-client-secret-here"
+contabo_oauth2_user          = "your-api-email@example.com"
+contabo_oauth2_pass          = "your-api-password"

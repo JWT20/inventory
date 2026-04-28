@@ -1,200 +1,63 @@
+# OpenTofu config for Contabo (skeleton).
+#
+# The wijnpick VPS that is currently running was bootstrapped manually via
+# the Contabo control panel and deploy/bootstrap.sh. It is NOT managed by
+# this file. To provision a NEW VPS via OpenTofu (e.g. staging or a future
+# replacement), uncomment the contabo_instance block below and run:
+#
+#   cp terraform.tfvars.example terraform.tfvars   # then fill in creds
+#   tofu init
+#   tofu plan
+#   tofu apply
+#
+# After provisioning, scp deploy/bootstrap.sh to the new VPS and run it
+# once as root to install Docker, Caddy, the deploy user, and UFW.
+
 terraform {
+  required_version = ">= 1.6"
+
   required_providers {
-    oci = {
-      source  = "oracle/oci"
-      version = "~> 5.0"
+    contabo = {
+      source  = "contabo/contabo"
+      version = "~> 0.1"
     }
   }
 }
 
-# --- Variables ---
-variable "tenancy_ocid" {}
-variable "user_ocid" {}
-variable "fingerprint" {}
-variable "private_key_path" {}
-variable "region" { default = "eu-amsterdam-1" }
-variable "compartment_ocid" {}
-variable "ssh_public_key_path" {}
-variable "domain" { default = "dockscan.nl" }
-variable "gemini_api_key" {}
-variable "ssh_allowed_cidr" {
-  description = "CIDR block allowed to SSH (e.g. your IP: 1.2.3.4/32). Find yours with: curl ifconfig.me"
-  default     = "0.0.0.0/0"
+variable "contabo_oauth2_client_id" {
+  type      = string
+  sensitive = true
 }
 
-# --- Provider ---
-provider "oci" {
-  tenancy_ocid     = var.tenancy_ocid
-  user_ocid        = var.user_ocid
-  fingerprint      = var.fingerprint
-  private_key_path = var.private_key_path
-  region           = var.region
+variable "contabo_oauth2_client_secret" {
+  type      = string
+  sensitive = true
 }
 
-# --- Data Sources ---
-data "oci_identity_availability_domains" "ads" {
-  compartment_id = var.tenancy_ocid
+variable "contabo_oauth2_user" {
+  type      = string
+  sensitive = true
 }
 
-# Get the latest Oracle Linux 9 aarch64 image (for Ampere A1)
-data "oci_core_images" "ol9_aarch64" {
-  compartment_id           = var.compartment_ocid
-  operating_system         = "Oracle Linux"
-  operating_system_version = "9"
-  shape                    = "VM.Standard.A1.Flex"
-  sort_by                  = "TIMECREATED"
-  sort_order               = "DESC"
+variable "contabo_oauth2_pass" {
+  type      = string
+  sensitive = true
 }
 
-# --- Networking ---
-resource "oci_core_vcn" "wijnpick_vcn" {
-  compartment_id = var.compartment_ocid
-  display_name   = "wijnpick-vcn"
-  cidr_blocks    = ["10.0.0.0/16"]
-  dns_label      = "wijnpick"
+provider "contabo" {
+  oauth2_client_id     = var.contabo_oauth2_client_id
+  oauth2_client_secret = var.contabo_oauth2_client_secret
+  oauth2_user          = var.contabo_oauth2_user
+  oauth2_pass          = var.contabo_oauth2_pass
 }
 
-resource "oci_core_internet_gateway" "igw" {
-  compartment_id = var.compartment_ocid
-  vcn_id         = oci_core_vcn.wijnpick_vcn.id
-  display_name   = "wijnpick-igw"
-  enabled        = true
-}
-
-resource "oci_core_route_table" "public_rt" {
-  compartment_id = var.compartment_ocid
-  vcn_id         = oci_core_vcn.wijnpick_vcn.id
-  display_name   = "wijnpick-public-rt"
-
-  route_rules {
-    destination       = "0.0.0.0/0"
-    network_entity_id = oci_core_internet_gateway.igw.id
-  }
-}
-
-resource "oci_core_security_list" "public_sl" {
-  compartment_id = var.compartment_ocid
-  vcn_id         = oci_core_vcn.wijnpick_vcn.id
-  display_name   = "wijnpick-public-sl"
-
-  # Allow all egress
-  egress_security_rules {
-    protocol    = "all"
-    destination = "0.0.0.0/0"
-  }
-
-  # SSH
-  ingress_security_rules {
-    protocol = "6" # TCP
-    source   = var.ssh_allowed_cidr
-    tcp_options {
-      min = 22
-      max = 22
-    }
-  }
-
-  # HTTP
-  ingress_security_rules {
-    protocol = "6"
-    source   = "0.0.0.0/0"
-    tcp_options {
-      min = 80
-      max = 80
-    }
-  }
-
-  # HTTPS
-  ingress_security_rules {
-    protocol = "6"
-    source   = "0.0.0.0/0"
-    tcp_options {
-      min = 443
-      max = 443
-    }
-  }
-}
-
-resource "oci_core_subnet" "public_subnet" {
-  compartment_id    = var.compartment_ocid
-  vcn_id            = oci_core_vcn.wijnpick_vcn.id
-  display_name      = "wijnpick-public-subnet"
-  cidr_block        = "10.0.1.0/24"
-  route_table_id    = oci_core_route_table.public_rt.id
-  security_list_ids = [oci_core_security_list.public_sl.id]
-  dns_label         = "public"
-}
-
-# --- Object Storage (Always Free 20 GB for backups) ---
-data "oci_objectstorage_namespace" "ns" {
-  compartment_id = var.compartment_ocid
-}
-
-# Dynamic group + policy so the VM can write to Object Storage (instance principal)
-resource "oci_identity_dynamic_group" "wijnpick_vm" {
-  compartment_id = var.tenancy_ocid
-  name           = "wijnpick-vm-group"
-  description    = "Wijnpick VM instance for backup access"
-  matching_rule  = "instance.id = '${oci_core_instance.wijnpick_vm.id}'"
-}
-
-resource "oci_identity_policy" "backup_policy" {
-  compartment_id = var.tenancy_ocid
-  name           = "wijnpick-backup-policy"
-  description    = "Allow wijnpick VM to manage backup bucket"
-  statements = [
-    "Allow dynamic-group wijnpick-vm-group to manage objects in compartment id ${var.compartment_ocid} where target.bucket.name='wijnpick-backups'",
-  ]
-}
-
-resource "oci_objectstorage_bucket" "backups" {
-  compartment_id = var.compartment_ocid
-  namespace      = data.oci_objectstorage_namespace.ns.namespace
-  name           = "wijnpick-backups"
-  access_type    = "NoPublicAccess"
-  storage_tier   = "Standard"
-}
-
-# --- Compute (Always Free Ampere A1) ---
-resource "oci_core_instance" "wijnpick_vm" {
-  compartment_id      = var.compartment_ocid
-  availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
-  display_name        = "wijnpick-server"
-  shape               = "VM.Standard.A1.Flex"
-
-  shape_config {
-    ocpus         = 1
-    memory_in_gbs = 6
-  }
-
-  source_details {
-    source_type = "image"
-    source_id   = data.oci_core_images.ol9_aarch64.images[0].id
-    boot_volume_size_in_gbs = 50
-  }
-
-  create_vnic_details {
-    subnet_id        = oci_core_subnet.public_subnet.id
-    assign_public_ip = true
-  }
-
-  metadata = {
-    ssh_authorized_keys = file(var.ssh_public_key_path)
-    user_data = base64encode(templatefile("${path.module}/cloud-init.yaml", {
-      domain         = var.domain
-      gemini_api_key = var.gemini_api_key
-    }))
-  }
-}
-
-# --- Outputs ---
-output "vm_public_ip" {
-  value = oci_core_instance.wijnpick_vm.public_ip
-}
-
-output "app_url" {
-  value = "https://${var.domain}"
-}
-
-output "ssh_command" {
-  value = "ssh opc@${oci_core_instance.wijnpick_vm.public_ip}"
-}
+# resource "contabo_instance" "wijnpick" {
+#   display_name = "wijnpick"
+#   product_id   = "V46"   # Cloud VPS 20 SSD; verify in Contabo panel before use
+#   region       = "EU"
+#   period       = 12
+# }
+#
+# output "vps_ipv4" {
+#   value = contabo_instance.wijnpick.ip_config[0].v4[0].ip
+# }
