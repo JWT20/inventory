@@ -67,7 +67,7 @@ class TestInventoryScope:
         assert data[0]["quantity_available"] == 5
         assert len(data[0]["customer_prices"]) == 1
 
-    def test_courier_inventory_overview_hides_customer_prices(
+    def test_courier_inventory_overview_hides_prices(
         self, client, db, courier_token, sample_org
     ):
         _make_stock(db, sample_org, on_hand=8, reserved=3)
@@ -78,7 +78,9 @@ class TestInventoryScope:
         )
 
         assert resp.status_code == 200
-        assert resp.json()[0]["customer_prices"] == []
+        row = resp.json()[0]
+        assert row["default_price"] is None
+        assert row["customer_prices"] == []
 
 
 class TestReservedInventory:

@@ -162,7 +162,7 @@ class TestOrderActivationWithoutImages:
             order_id=order.id,
             sku_id=sku.id,
             customer_id=customer.id,
-            customer_name=customer.name,
+            klant=customer.name,
             quantity=3,
             booked_count=0,
         )
