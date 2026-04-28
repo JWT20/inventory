@@ -468,12 +468,17 @@ class InventoryBalance(Base):
         ForeignKey("organizations.id"), nullable=True
     )
     quantity_on_hand: Mapped[int] = mapped_column(Integer, default=0)
+    quantity_reserved: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     last_movement_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime, nullable=True
     )
 
     sku: Mapped["SKU"] = relationship()
     organization: Mapped["Organization | None"] = relationship()
+
+    @property
+    def quantity_available(self) -> int:
+        return max(self.quantity_on_hand - self.quantity_reserved, 0)
 
 
 class StockMovement(Base):

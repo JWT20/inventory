@@ -69,7 +69,7 @@ def compute_allocation(
         )
         .first()
     )
-    available = balance.quantity_on_hand if balance else 0
+    available = balance.quantity_available if balance else 0
 
     if available <= 0:
         return {line_id: line.booked_count for line_id, (line, _rem) in remaining_map.items()}

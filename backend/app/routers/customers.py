@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/customers", tags=["customers"])
 
 
-def _require_org_user(user: User = Depends(get_current_user)) -> User:
-    """Allow any user with an organization (owner, member, customer) or platform admin."""
+def _require_customer_reader(user: User = Depends(get_current_user)) -> User:
+    """Allow merchant users to read customers and customer users to read only themselves."""
     if user.is_platform_admin:
         return user
     if user.organization_id and user.role in ("owner", "member", "customer"):
@@ -76,6 +76,9 @@ def _get_customer_or_404(
     customer = db.get(Customer, customer_id)
     if not customer:
         raise HTTPException(404, "Klant niet gevonden")
+    if user.role == "customer" and not user.is_platform_admin:
+        if not user.customer_id or customer.id != user.customer_id:
+            raise HTTPException(403, "Geen toegang")
     if not user.is_platform_admin and customer.organization_id != user.organization_id:
         raise HTTPException(403, "Geen toegang")
     return customer
@@ -87,8 +90,14 @@ def _get_customer_or_404(
 @router.get("", response_model=list[CustomerResponse])
 def list_customers(
     db: Session = Depends(get_db),
-    user: User = Depends(_require_org_user),
+    user: User = Depends(_require_customer_reader),
 ):
+    if user.role == "customer" and not user.is_platform_admin:
+        if not user.customer_id:
+            return []
+        customer = _get_customer_or_404(user.customer_id, user, db)
+        return [_customer_to_response(customer)]
+
     query = db.query(Customer).order_by(Customer.name)
     if not user.is_platform_admin:
         query = query.filter(Customer.organization_id == user.organization_id)
@@ -99,7 +108,7 @@ def list_customers(
 def get_customer(
     customer_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(_require_org_user),
+    user: User = Depends(_require_customer_reader),
 ):
     customer = _get_customer_or_404(customer_id, user, db)
     return _customer_to_response(customer)
@@ -109,7 +118,7 @@ def get_customer(
 def create_customer(
     body: CustomerCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(_require_org_user),
+    user: User = Depends(require_product_manager),
 ):
     name = body.name.strip().lower()
     if not name:
@@ -220,7 +229,7 @@ def delete_customer(
 def list_customer_skus(
     customer_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(_require_org_user),
+    user: User = Depends(_require_customer_reader),
 ):
     customer = _get_customer_or_404(customer_id, user, db)
     customer_discount = (

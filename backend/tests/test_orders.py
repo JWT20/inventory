@@ -31,6 +31,9 @@ class TestCreateOrder:
         sku = SKU(sku_code="WINE-003", name="Test Wine 3")
         db.add_all([customer, sku])
         db.commit()
+        customer_user.customer_id = customer.id
+        db.add(CustomerSKU(customer_id=customer.id, sku_id=sku.id))
+        db.commit()
 
         resp = client.post(
             "/api/orders",
@@ -152,6 +155,26 @@ class TestCustomerSkuRestrictions:
         )
         assert resp.status_code == 403
         assert "nieuwe wijnen" in resp.json()["detail"].lower()
+
+    def test_customer_without_linked_customer_cannot_create_order(
+        self, client, db, customer_token
+    ):
+        sku = SKU(sku_code="WINE-CR-NOLINK", name="Geen klantkoppeling")
+        db.add(sku)
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "lines": [
+                    {"customer_id": 999, "sku_id": sku.id, "quantity": 1}
+                ],
+            },
+            headers=auth_header(customer_token),
+        )
+
+        assert resp.status_code == 403
+        assert "gekoppeld" in resp.json()["detail"].lower()
 
     def test_customer_add_line_with_assigned_sku_succeeds(
         self, client, db, customer_user, customer_token, sample_org

@@ -37,9 +37,16 @@ interface InventoryItem {
   attributes: Record<string, string>;
   default_price: number | null;
   quantity_on_hand: number;
+  quantity_reserved: number;
+  quantity_available: number;
   last_movement_at: string | null;
   image_url: string | null;
   customer_prices: CustomerPrice[];
+}
+
+interface Organization {
+  id: number;
+  name: string;
 }
 
 const LOW_STOCK_THRESHOLD = 3;
@@ -64,15 +71,29 @@ function InventoryCardSkeleton() {
 }
 
 export function InventoryPage() {
+  const { user } = useAuth();
   const [items, setItems] = useState<InventoryItem[]>([]);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<InventoryItem | null>(null);
+  const needsOrganizationSelection = !!user && (user.is_platform_admin || user.role === "courier");
+  const canViewPrices = !!user && user.role !== "courier";
 
   const load = useCallback(async () => {
+    if (needsOrganizationSelection && !selectedOrganizationId) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
     try {
+      setLoading(true);
       const params = new URLSearchParams();
       if (search) params.set("search", search);
+      if (selectedOrganizationId) {
+        params.set("organization_id", selectedOrganizationId);
+      }
       const qs = params.toString();
       setItems(await api.listInventoryOverview(qs ? `?${qs}` : ""));
     } catch {
@@ -80,11 +101,18 @@ export function InventoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [search]);
+  }, [needsOrganizationSelection, search, selectedOrganizationId]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!needsOrganizationSelection) return;
+    api.listOrganizations()
+      .then((orgs: Organization[]) => setOrganizations(orgs))
+      .catch(() => toast.error("Kan handelaren niet laden"));
+  }, [needsOrganizationSelection]);
 
   return (
     <>
@@ -92,15 +120,37 @@ export function InventoryPage() {
         <h2 className="text-xl font-bold">Voorraad</h2>
       </div>
 
+      {needsOrganizationSelection && (
+        <div className="mb-4">
+          <Select value={selectedOrganizationId} onValueChange={setSelectedOrganizationId}>
+            <SelectTrigger>
+              <SelectValue placeholder="Kies handelaar" />
+            </SelectTrigger>
+            <SelectContent>
+              {organizations.map((org) => (
+                <SelectItem key={org.id} value={String(org.id)}>
+                  {org.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
       <Input
         placeholder="Zoek op naam, producent..."
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         className="mb-4"
+        disabled={needsOrganizationSelection && !selectedOrganizationId}
       />
 
       <div className="space-y-3">
-        {loading ? (
+        {needsOrganizationSelection && !selectedOrganizationId ? (
+          <p className="text-center text-muted-foreground py-10">
+            Kies een handelaar om voorraad te bekijken
+          </p>
+        ) : loading ? (
           Array.from({ length: 4 }).map((_, i) => <InventoryCardSkeleton key={i} />)
         ) : items.length === 0 ? (
           <p className="text-center text-muted-foreground py-10">
@@ -134,14 +184,17 @@ export function InventoryPage() {
                     <div className="text-right flex-shrink-0 ml-2">
                       <p
                         className={`text-lg font-bold ${
-                          item.quantity_on_hand < LOW_STOCK_THRESHOLD
+                          item.quantity_available < LOW_STOCK_THRESHOLD
                             ? "text-red-600"
                             : ""
                         }`}
                       >
-                        {item.quantity_on_hand}
+                        {item.quantity_available}
                       </p>
-                      {item.default_price != null && (
+                      <p className="text-xs text-muted-foreground">
+                        {item.quantity_on_hand} totaal
+                      </p>
+                      {canViewPrices && item.default_price != null && (
                         <p className="text-sm text-muted-foreground">
                           {"\u20AC"}{item.default_price.toFixed(2)}
                         </p>
@@ -157,6 +210,7 @@ export function InventoryPage() {
 
       <InventoryDetailDialog
         item={selected}
+        canViewPrices={canViewPrices}
         onClose={() => setSelected(null)}
         onUpdated={(updated) => {
           setItems((prev) =>
@@ -172,11 +226,13 @@ export function InventoryPage() {
 
 function InventoryDetailDialog({
   item,
+  canViewPrices,
   onClose,
   onUpdated,
   onRefresh,
 }: {
   item: InventoryItem | null;
+  canViewPrices: boolean;
   onClose: () => void;
   onUpdated: (item: InventoryItem) => void;
   onRefresh: () => void;
@@ -184,6 +240,7 @@ function InventoryDetailDialog({
   const { user } = useAuth();
   const canAdjustStock =
     !!user && (user.is_platform_admin || user.role === "owner" || user.role === "member");
+  const canManagePrices = canViewPrices && canAdjustStock;
 
   const [editingDefaultPrice, setEditingDefaultPrice] = useState(false);
   const [defaultPriceValue, setDefaultPriceValue] = useState("");
@@ -227,7 +284,12 @@ function InventoryDetailDialog({
     setSavingStock(true);
     try {
       await api.adjustInventory(item.sku_id, delta, note);
-      onUpdated({ ...item, quantity_on_hand: item.quantity_on_hand + delta });
+      const quantityOnHand = item.quantity_on_hand + delta;
+      onUpdated({
+        ...item,
+        quantity_on_hand: quantityOnHand,
+        quantity_available: Math.max(quantityOnHand - item.quantity_reserved, 0),
+      });
       setEditingStock(false);
       setStockDeltaValue("");
       setStockNoteValue("");
@@ -303,16 +365,9 @@ function InventoryDetailDialog({
         <div className="space-y-4">
           {/* Stock */}
           <div className="space-y-2">
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-start">
               <span className="text-sm text-muted-foreground">Voorraad</span>
               <div className="flex items-center gap-3">
-                <span
-                  className={`text-lg font-bold ${
-                    item.quantity_on_hand < LOW_STOCK_THRESHOLD ? "text-red-600" : ""
-                  }`}
-                >
-                  {item.quantity_on_hand}
-                </span>
                 {canAdjustStock && !editingStock && (
                   <button
                     onClick={() => {
@@ -325,6 +380,26 @@ function InventoryDetailDialog({
                     Aanpassen
                   </button>
                 )}
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-sm">
+              <div className="rounded-md border border-border p-2">
+                <p className="text-xs text-muted-foreground">Op voorraad</p>
+                <p className="font-semibold">{item.quantity_on_hand}</p>
+              </div>
+              <div className="rounded-md border border-border p-2">
+                <p className="text-xs text-muted-foreground">Gereserveerd</p>
+                <p className="font-semibold">{item.quantity_reserved}</p>
+              </div>
+              <div className="rounded-md border border-border p-2">
+                <p className="text-xs text-muted-foreground">Beschikbaar</p>
+                <p
+                  className={`font-semibold ${
+                    item.quantity_available < LOW_STOCK_THRESHOLD ? "text-red-600" : ""
+                  }`}
+                >
+                  {item.quantity_available}
+                </p>
               </div>
             </div>
             {canAdjustStock && editingStock && (
@@ -399,6 +474,8 @@ function InventoryDetailDialog({
           </div>
 
           {/* Default price */}
+          {canViewPrices && (
+          <>
           <Separator />
           <div className="pt-1">
             <div className="flex flex-wrap justify-between items-center gap-2">
@@ -436,24 +513,36 @@ function InventoryDetailDialog({
                   </div>
                 </div>
               ) : (
-                <button
-                  onClick={() => {
-                    setDefaultPriceValue(
-                      item.default_price != null ? item.default_price.toFixed(2) : ""
-                    );
-                    setEditingDefaultPrice(true);
-                  }}
-                  className="text-sm hover:underline"
-                >
-                  {item.default_price != null
-                    ? `\u20AC${item.default_price.toFixed(2)}`
-                    : "Niet ingesteld"}
-                </button>
+                canManagePrices ? (
+                  <button
+                    onClick={() => {
+                      setDefaultPriceValue(
+                        item.default_price != null ? item.default_price.toFixed(2) : ""
+                      );
+                      setEditingDefaultPrice(true);
+                    }}
+                    className="text-sm hover:underline"
+                  >
+                    {item.default_price != null
+                      ? `\u20AC${item.default_price.toFixed(2)}`
+                      : "Niet ingesteld"}
+                  </button>
+                ) : (
+                  <span className="text-sm">
+                    {item.default_price != null
+                      ? `\u20AC${item.default_price.toFixed(2)}`
+                      : "Niet ingesteld"}
+                  </span>
+                )
               )}
             </div>
           </div>
+          </>
+          )}
 
           {/* Customer prices */}
+          {canViewPrices && (
+          <>
           <Separator />
           <div className="pt-1">
             <p className="text-sm font-medium mb-2">Klantprijzen</p>
@@ -603,6 +692,8 @@ function InventoryDetailDialog({
               </div>
             )}
           </div>
+          </>
+          )}
         </div>
         </DialogBody>
       </DialogContent>

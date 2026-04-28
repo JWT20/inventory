@@ -345,11 +345,24 @@ def logout(
     )
 
 
-# --- Organization management (platform admin only) ---
+# --- Organization management ---
 
 @router.get("/organizations", response_model=list[OrganizationResponse])
-def list_organizations(db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    orgs = db.query(Organization).order_by(Organization.name).all()
+def list_organizations(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if user.is_platform_admin or user.role == "courier":
+        orgs = db.query(Organization).order_by(Organization.name).all()
+    elif user.organization_id and user.role in ("owner", "member"):
+        orgs = (
+            db.query(Organization)
+            .filter(Organization.id == user.organization_id)
+            .order_by(Organization.name)
+            .all()
+        )
+    else:
+        raise HTTPException(403, "Organization access required")
     return [
         OrganizationResponse(
             id=o.id,

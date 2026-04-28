@@ -53,8 +53,13 @@ def _make_order_line(db, org, sku, customer, quantity, booked_count=0,
     return line
 
 
-def _set_stock(db, sku, org, qty):
-    bal = InventoryBalance(sku_id=sku.id, organization_id=org.id, quantity_on_hand=qty)
+def _set_stock(db, sku, org, qty, reserved=0):
+    bal = InventoryBalance(
+        sku_id=sku.id,
+        organization_id=org.id,
+        quantity_on_hand=qty,
+        quantity_reserved=reserved,
+    )
     db.add(bal)
     db.flush()
 
@@ -141,6 +146,16 @@ class TestComputeAllocation:
         # A remaining=2, B remaining=3, total needed=5, stock=5 → enough
         assert caps[lA.id] == 4  # 2 booked + 2 remaining = full
         assert caps[lB.id] == 3  # full
+
+    def test_reserved_stock_reduces_available_allocation(self, db, org, sku):
+        """Stock=10 with 6 reserved behaves like 4 available."""
+        customer = _make_customer(db, org, "A")
+        line = _make_order_line(db, org, sku, customer, 10)
+        _set_stock(db, sku, org, 10, reserved=6)
+
+        caps = compute_allocation(db, "2026-W16", sku.id, org.id, "wednesday")
+
+        assert caps[line.id] == 4
 
     def test_same_customer_two_orders(self, db, org, sku):
         """Same customer, different orders → lines treated separately."""
