@@ -20,6 +20,7 @@ from app.models import (
     InboundShipmentLine,
     InventoryBalance,
     ReferenceImage,
+    Organization,
     SupplierSKUMapping,
     StockMovement,
     User,
@@ -145,13 +146,18 @@ def apply_stock_movement(
         db.flush()
 
     new_qty = balance.quantity_on_hand + quantity
-    if new_qty < 0:
+    if quantity < 0 and abs(quantity) > balance.quantity_available:
         sku = db.get(SKU, sku_id)
         sku_code = sku.sku_code if sku else str(sku_id)
         raise HTTPException(
             409,
             f"Onvoldoende voorraad voor {sku_code}: "
-            f"{balance.quantity_on_hand} op voorraad, {abs(quantity)} nodig",
+            f"{balance.quantity_available} beschikbaar, {abs(quantity)} nodig",
+        )
+    if new_qty < balance.quantity_reserved:
+        raise HTTPException(
+            409,
+            "Voorraad kan niet onder het gereserveerde aantal komen",
         )
 
     balance.quantity_on_hand = new_qty
@@ -218,6 +224,31 @@ def _resolve_org_id_for_user(user: User, requested_org_id: int | None = None) ->
     if user.is_platform_admin:
         return requested_org_id
     return user.organization_id
+
+
+def _resolve_inventory_org_id(
+    db: Session,
+    user: User,
+    requested_org_id: int | None = None,
+) -> int:
+    """Resolve the merchant scope for inventory reads.
+
+    Platform admins and couriers operate across merchants and must pick one
+    explicitly. Owner/member users are scoped to their own merchant.
+    """
+    if user.is_platform_admin or user.role == "courier":
+        if not requested_org_id:
+            raise HTTPException(400, "organization_id is verplicht voor deze voorraadweergave")
+        if not db.get(Organization, requested_org_id):
+            raise HTTPException(404, "Organisatie niet gevonden")
+        return requested_org_id
+
+    if user.role in ("owner", "member") and user.organization_id:
+        if requested_org_id and requested_org_id != user.organization_id:
+            raise HTTPException(403, "Geen toegang tot deze organisatie")
+        return user.organization_id
+
+    raise HTTPException(403, "Geen toegang tot voorraad")
 
 
 def _upsert_supplier_mapping(
@@ -693,18 +724,12 @@ def list_inventory(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    org_id = _resolve_inventory_org_id(db, user, organization_id)
     query = (
         db.query(InventoryBalance)
         .join(SKU, InventoryBalance.sku_id == SKU.id)
+        .filter(InventoryBalance.organization_id == org_id)
     )
-    # Scope by organization
-    if user.is_platform_admin:
-        if organization_id:
-            query = query.filter(InventoryBalance.organization_id == organization_id)
-    elif user.organization_id:
-        query = query.filter(InventoryBalance.organization_id == user.organization_id)
-    else:
-        return []
 
     balances = query.order_by(SKU.name).all()
     return [
@@ -714,6 +739,8 @@ def list_inventory(
             sku_name=b.sku.name,
             organization_id=b.organization_id,
             quantity_on_hand=b.quantity_on_hand,
+            quantity_reserved=b.quantity_reserved,
+            quantity_available=b.quantity_available,
             last_movement_at=b.last_movement_at,
         )
         for b in balances
@@ -739,17 +766,16 @@ def _calc_effective_price(
 
 @router.get("/inventory/overview", response_model=list[InventoryOverviewItem])
 def inventory_overview(
+    organization_id: int | None = None,
     search: str | None = None,
     wijntype: str | None = None,
     producent: str | None = None,
     in_stock_only: bool = False,
     db: Session = Depends(get_db),
-    user: User = Depends(require_product_manager),
+    user: User = Depends(get_current_user),
 ):
     """Full inventory overview for merchants: stock, attributes, prices per customer."""
-    if not user.is_platform_admin and not user.organization_id:
-        return []
-    org_id = user.organization_id
+    org_id = _resolve_inventory_org_id(db, user, organization_id)
 
     # Start from SKU with LEFT JOIN to InventoryBalance so all products show up
     query = (
@@ -764,13 +790,13 @@ def inventory_overview(
             joinedload(SKU.reference_images),
         )
         .filter(SKU.active.is_(True))
+        .filter(SKU.organization_id == org_id)
     )
 
-    if not user.is_platform_admin:
-        query = query.filter(SKU.organization_id == org_id)
-
     if in_stock_only:
-        query = query.filter(InventoryBalance.quantity_on_hand > 0)
+        query = query.filter(
+            (InventoryBalance.quantity_on_hand - InventoryBalance.quantity_reserved) > 0
+        )
 
     if search:
         query = query.filter(SKU.name.ilike(f"%{search}%"))
@@ -804,7 +830,7 @@ def inventory_overview(
         .join(Customer, CustomerSKU.customer_id == Customer.id)
         .filter(CustomerSKU.sku_id.in_(sku_ids))
         .all()
-    ) if sku_ids else []
+    ) if sku_ids and user.role != "courier" else []
 
     # Build a lookup of default_price per sku for effective price calculation
     sku_default_prices: dict[int, float | None] = {}
@@ -845,6 +871,8 @@ def inventory_overview(
                 attributes=sku.attributes_dict,
                 default_price=float(sku.default_price) if sku.default_price is not None else None,
                 quantity_on_hand=balance.quantity_on_hand if balance else 0,
+                quantity_reserved=balance.quantity_reserved if balance else 0,
+                quantity_available=balance.quantity_available if balance else 0,
                 last_movement_at=balance.last_movement_at if balance else None,
                 image_url=image_url,
                 customer_prices=prices_by_sku.get(sku.id, []),
@@ -888,6 +916,8 @@ def update_default_price(
         attributes=sku.attributes_dict,
         default_price=float(sku.default_price) if sku.default_price is not None else None,
         quantity_on_hand=balance.quantity_on_hand if balance else 0,
+        quantity_reserved=balance.quantity_reserved if balance else 0,
+        quantity_available=balance.quantity_available if balance else 0,
         last_movement_at=balance.last_movement_at if balance else None,
     )
 
@@ -1041,14 +1071,20 @@ def count_inventory(
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
 
-    if not user.is_platform_admin and not user.organization_id:
-        raise HTTPException(400, "User has no organization")
+    if user.is_platform_admin:
+        organization_id = sku.organization_id
+    else:
+        if not user.organization_id:
+            raise HTTPException(400, "User has no organization")
+        if sku.organization_id != user.organization_id:
+            raise HTTPException(403, "Geen toegang tot deze SKU")
+        organization_id = user.organization_id
 
     balance = (
         db.query(InventoryBalance)
         .filter(
             InventoryBalance.sku_id == data.sku_id,
-            InventoryBalance.organization_id == user.organization_id,
+            InventoryBalance.organization_id == organization_id,
         )
         .first()
     )
@@ -1061,7 +1097,7 @@ def count_inventory(
     movement = apply_stock_movement(
         db,
         sku_id=data.sku_id,
-        organization_id=user.organization_id,
+        organization_id=organization_id,
         quantity=delta,
         movement_type="count",
         reference_type="manual",

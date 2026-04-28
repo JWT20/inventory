@@ -58,7 +58,7 @@ function Main() {
     {
       id: "inventory",
       label: "Voorraad",
-      show: isAdmin || user.role === "owner" || user.role === "member",
+      show: isAdmin || user.role === "owner" || user.role === "member" || user.role === "courier",
     },
     {
       id: "weekly",
