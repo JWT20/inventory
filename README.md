@@ -32,7 +32,7 @@ Eliminates person-dependency in the wine picking process by identifying boxes vi
 | **Event logging** | Kafka (KRaft mode) → Apache Pinot (real-time analytics) |
 | **LLM observability** | Langfuse (prompt management + tracing, optional) |
 | **Reverse proxy** | Caddy (production) |
-| **Hosting** | Docker Compose, designed for Oracle Cloud Always Free (1 OCPU ARM, 6GB RAM) |
+| **Hosting** | Docker Compose on a Contabo Cloud VPS (Ubuntu 24.04) |
 
 ## How It Works
 
@@ -309,12 +309,11 @@ frontend/               React + Vite + Tailwind + Shadcn/ui
       customers.tsx     Customer management
       accounts.tsx      User management (admin only)
       ui/               Shadcn/ui components (button, card, dialog, etc.)
-deploy/                 Terraform + shell scripts for Oracle Cloud
-  main.tf               VM provisioning
-  provision.sh          VM setup
-  setup.sh              Application deployment
-  redeploy.sh           Redeployment after code changes
-  backup-db.sh          Database backup
+deploy/                 Server config and IaC skeleton for Contabo
+  Caddyfile             Caddy reverse-proxy config (synced to server by CI)
+  bootstrap.sh          One-shot setup for a fresh Contabo VPS
+  main.tf               OpenTofu skeleton (does not manage running VPS yet)
+  terraform.tfvars.example  Template for Contabo API credentials
 pinot/                  Apache Pinot configuration
   schema.json           Event schema definition
   table.json            REALTIME table config (Kafka consumer)
@@ -339,7 +338,8 @@ User ──< Order ──< OrderLine >── SKU ──< ReferenceImage
 
 ## Deployment
 
-Designed for Oracle Cloud Always Free tier (1 OCPU ARM, 6GB RAM).
+Production runs on a Contabo Cloud VPS (Ubuntu 24.04). Backups are handled
+by Contabo Auto Backup at the VM level.
 
 **Memory budget:**
 | Service | Limit |
@@ -350,17 +350,42 @@ Designed for Oracle Cloud Always Free tier (1 OCPU ARM, 6GB RAM).
 | Backend (FastAPI) | 512 MB |
 | Frontend (Nginx static) | 128 MB |
 
+### Continuous deployment
+
+`.github/workflows/deploy.yml` runs on every push to `main`:
+1. Run backend tests
+2. `rsync` the repo to `/opt/wijnpick/` on the server (excludes `.git`,
+   `.env`, `deploy/`, `__pycache__`)
+3. `rsync` `deploy/Caddyfile` separately to `/opt/wijnpick/deploy/`
+4. SSH in, regenerate `/etc/caddy/Caddyfile` from env, reload Caddy,
+   `docker compose build && docker compose up -d`
+
+Required GitHub Actions secrets:
+- `SERVER_IP` — public IP of the Contabo VPS
+- `SSH_PRIVATE_KEY` — private key authorized for the `deploy` user
+
+### Provisioning a new VPS
+
+For a fresh Contabo VPS (e.g. staging, replacement):
+
 ```bash
-cd deploy
-# 1. Generate terraform.tfvars
-./generate-tfvars.sh
-# 2. Provision VM
-./provision.sh
-# 3. Deploy application
-./setup.sh <vm-ip-adres>
-# 4. Redeploy after changes
-./redeploy.sh <vm-ip-adres>
+# 1. Order a Cloud VPS in the Contabo control panel (Ubuntu 24.04).
+# 2. Copy bootstrap.sh to the new server and run it as root.
+scp deploy/bootstrap.sh root@<new-ip>:/root/
+ssh root@<new-ip> "DEPLOY_PUBKEY='ssh-ed25519 AAAA... me' bash /root/bootstrap.sh"
+
+# 3. Create /opt/wijnpick/.env on the server (copy from .env.example,
+#    set GEMINI_API_KEY, POSTGRES_PASSWORD, SECRET_KEY, ADMIN_PASSWORD,
+#    DOMAIN).
+# 4. Point DNS at the new IP in Cloudflare.
+# 5. Update GitHub Actions secrets SERVER_IP / SSH_PRIVATE_KEY.
+# 6. Push to main; the workflow deploys the app and Caddy obtains a TLS
+#    cert on first request.
 ```
+
+`deploy/main.tf` contains an OpenTofu skeleton for managing future Contabo
+resources (the running VPS is currently bootstrapped manually). See the
+comments in that file to enable `tofu apply`-based provisioning.
 
 ## Testing
 
