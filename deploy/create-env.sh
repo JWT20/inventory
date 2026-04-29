@@ -22,6 +22,26 @@ require_url_safe() {
   fi
 }
 
+# Looser check for values that go straight into the .env file as-is.
+# Rejects characters that would break Docker Compose env_file parsing or
+# trigger ${...} interpolation: newlines, '$', and non-printable bytes.
+require_envfile_safe() {
+  local name="$1"
+  local value="$2"
+  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+    echo "${name} must not contain newlines." >&2
+    exit 1
+  fi
+  if [[ "$value" == *'$'* ]]; then
+    echo "${name} must not contain '\$' (Docker Compose would interpolate it)." >&2
+    exit 1
+  fi
+  if [[ "$value" =~ [^[:print:]] ]]; then
+    echo "${name} must contain only printable ASCII characters." >&2
+    exit 1
+  fi
+}
+
 if [[ -f "$ENV_FILE" && "${FORCE:-0}" != "1" ]]; then
   echo "${ENV_FILE} already exists. Set FORCE=1 to replace it." >&2
   exit 1
@@ -37,6 +57,10 @@ SECRET_KEY="${SECRET_KEY:-$(openssl rand -hex 32)}"
 DOMAIN="${DOMAIN:-dockscan.nl}"
 
 require_url_safe POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+require_envfile_safe SECRET_KEY     "$SECRET_KEY"
+require_envfile_safe ADMIN_PASSWORD "$ADMIN_PASSWORD"
+require_envfile_safe GEMINI_API_KEY "$GEMINI_API_KEY"
+require_envfile_safe DOMAIN         "$DOMAIN"
 
 tmp_file="$(mktemp)"
 trap 'rm -f "$tmp_file"' EXIT
