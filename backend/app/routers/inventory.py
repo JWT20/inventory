@@ -862,7 +862,7 @@ def inventory_overview(
             (img for img in sku.reference_images if img.processing_status == "done"),
             None,
         )
-        image_url = f"/api/files/{first_image.image_path}" if first_image else None
+        image_url = f"/api/thumbnails/112/{first_image.image_path}" if first_image else None
 
         result.append(
             InventoryOverviewItem(

@@ -51,6 +51,11 @@ interface Organization {
 
 const LOW_STOCK_THRESHOLD = 3;
 
+function thumbnailSrcSet(url: string) {
+  const largeUrl = url.replace("/api/thumbnails/112/", "/api/thumbnails/224/");
+  return `${url} 1x, ${largeUrl} 2x`;
+}
+
 function InventoryCardSkeleton() {
   return (
     <Card className="p-4">
@@ -167,7 +172,13 @@ export function InventoryPage() {
                 {item.image_url && (
                   <img
                     src={item.image_url}
+                    srcSet={thumbnailSrcSet(item.image_url)}
+                    sizes="56px"
                     alt={item.sku_name}
+                    width={56}
+                    height={56}
+                    loading="lazy"
+                    decoding="async"
                     className="w-14 h-14 object-cover rounded border border-border flex-shrink-0"
                   />
                 )}
