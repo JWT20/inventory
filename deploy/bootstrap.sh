@@ -82,7 +82,9 @@ cat <<'NEXT'
 
 Next steps:
   1. Set DNS in Cloudflare: A record for your domain -> this server IP
-  2. Create /opt/wijnpick/.env on the server (use .env.example as template)
+  2. Copy deploy/create-env.sh to the server and run it as deploy:
+       scp deploy/create-env.sh deploy@<new-vps-ip>:/opt/wijnpick/deploy/
+       ssh deploy@<new-vps-ip> "GEMINI_API_KEY='...' ADMIN_PASSWORD='...' DOMAIN='dockscan.nl' bash /opt/wijnpick/deploy/create-env.sh"
   3. In GitHub repo, set Actions secrets:
        SERVER_IP        = this server's public IP
        SSH_PRIVATE_KEY  = private key matching DEPLOY_PUBKEY
