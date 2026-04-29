@@ -327,6 +327,7 @@ frontend/               React + Vite + Tailwind + Shadcn/ui
 deploy/                 Server config and IaC skeleton for Contabo
   Caddyfile             Caddy reverse-proxy config (synced to server by CI)
   bootstrap.sh          One-shot setup for a fresh Contabo VPS
+  create-env.sh         Generates a production .env with random local secrets
   main.tf               OpenTofu skeleton (does not manage running VPS yet)
   terraform.tfvars.example  Template for Contabo API credentials
 pinot/                  Apache Pinot configuration
@@ -389,9 +390,11 @@ For a fresh Contabo VPS (e.g. staging, replacement):
 scp deploy/bootstrap.sh root@<new-ip>:/root/
 ssh root@<new-ip> "DEPLOY_PUBKEY='ssh-ed25519 AAAA... me' bash /root/bootstrap.sh"
 
-# 3. Create /opt/wijnpick/.env on the server (copy from .env.example,
-#    set GEMINI_API_KEY, POSTGRES_PASSWORD, SECRET_KEY, ADMIN_PASSWORD,
-#    DOMAIN).
+# 3. Generate /opt/wijnpick/.env on the server. The script creates
+#    POSTGRES_PASSWORD and SECRET_KEY with openssl when they are not supplied.
+scp deploy/create-env.sh deploy@<new-ip>:/opt/wijnpick/deploy/
+ssh deploy@<new-ip> "GEMINI_API_KEY='...' ADMIN_PASSWORD='...' DOMAIN='dockscan.nl' bash /opt/wijnpick/deploy/create-env.sh"
+
 # 4. Point DNS at the new IP in Cloudflare.
 # 5. Update GitHub Actions secrets SERVER_IP / SSH_PRIVATE_KEY.
 # 6. Push to main; the workflow deploys the app and Caddy obtains a TLS
