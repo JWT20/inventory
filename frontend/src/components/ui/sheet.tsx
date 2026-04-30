@@ -48,12 +48,17 @@ interface SheetContentProps
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(({ side = "bottom", className, children, ...props }, ref) => (
+>(({ side = "bottom", className, children, style, ...props }, ref) => (
   <SheetPortal>
     <SheetOverlay />
     <DialogPrimitive.Content
       ref={ref}
-      className={cn(sheetVariants({ side }), "max-h-[90vh] overflow-y-auto", className)}
+      className={cn(
+        sheetVariants({ side }),
+        "max-h-[calc(100svh-1rem)] overflow-y-auto overscroll-contain pb-[calc(1.5rem+env(safe-area-inset-bottom))]",
+        className
+      )}
+      style={{ WebkitOverflowScrolling: "touch", ...style }}
       {...props}
     >
       {children}

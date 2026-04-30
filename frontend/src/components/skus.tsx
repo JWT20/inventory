@@ -419,7 +419,7 @@ function SKUDialog({
 
   return (
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
-      <SheetContent side="bottom" className="max-h-[90vh]">
+      <SheetContent side="bottom">
         <SheetHeader>
           <SheetTitle>
             {sku ? "Product bewerken" : "Nieuw product"}
