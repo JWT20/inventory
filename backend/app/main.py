@@ -1,16 +1,18 @@
 import logging
 import os
 import time
+from io import BytesIO
 from contextlib import asynccontextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import sentry_sdk
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import text
 
 from app.auth import hash_password
@@ -24,6 +26,16 @@ from app.routers import auth, customers, inventory, orders, product_attributes, 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+CACHE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
+THUMBNAIL_SIZES = {64, 112, 160, 224, 320}
+
+
+def _validate_storage_key(file_path: str) -> None:
+    from fastapi import HTTPException
+
+    parts = PurePosixPath(file_path).parts
+    if file_path.startswith("/") or ".." in parts:
+        raise HTTPException(403, "Access denied")
 
 if settings.sentry_dsn:
     sentry_sdk.init(
@@ -163,6 +175,8 @@ def serve_file(file_path: str):
     For local storage: streams the file directly.
     For S3 storage: redirects to a presigned URL.
     """
+    _validate_storage_key(file_path)
+
     if isinstance(storage, LocalStorage):
         import os as _os
         from fastapi.responses import FileResponse
@@ -173,8 +187,43 @@ def serve_file(file_path: str):
             raise HTTPException(403, "Access denied")
         if not _os.path.isfile(full_path):
             raise HTTPException(404, "File not found")
-        return FileResponse(full_path)
+        return FileResponse(full_path, headers=CACHE_HEADERS)
 
     # S3: redirect to presigned URL
     url = storage.url(file_path)
-    return RedirectResponse(url=url, status_code=307)
+    return RedirectResponse(url=url, status_code=307, headers=CACHE_HEADERS)
+
+
+@app.get("/api/thumbnails/{size}/{file_path:path}")
+def serve_thumbnail(size: int, file_path: str):
+    """Serve a cached WebP thumbnail for uploaded images."""
+    from fastapi import HTTPException
+
+    if size not in THUMBNAIL_SIZES:
+        raise HTTPException(400, "Unsupported thumbnail size")
+    _validate_storage_key(file_path)
+
+    thumbnail_key = f"thumbnails/{size}/{file_path}.webp"
+    cached = storage.read(thumbnail_key)
+    if cached is not None:
+        return Response(cached, media_type="image/webp", headers=CACHE_HEADERS)
+
+    original = storage.read(file_path)
+    if original is None:
+        raise HTTPException(404, "File not found")
+
+    try:
+        with Image.open(BytesIO(original)) as image:
+            image = ImageOps.exif_transpose(image)
+            image.thumbnail((size, size), Image.Resampling.LANCZOS)
+            if image.mode not in ("RGB", "RGBA"):
+                image = image.convert("RGB")
+
+            output = BytesIO()
+            image.save(output, format="WEBP", quality=78, method=6)
+    except UnidentifiedImageError:
+        raise HTTPException(415, "File is not a supported image") from None
+
+    data = output.getvalue()
+    storage.save(thumbnail_key, data)
+    return Response(data, media_type="image/webp", headers=CACHE_HEADERS)
