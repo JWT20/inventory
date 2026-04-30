@@ -3,6 +3,10 @@ services:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     mem_limit: 2g
+    logging:
+      driver: journald
+      options:
+        tag: "wijnpick-{{.Name}}"
     command:
       - postgres
       - -c
@@ -30,6 +34,10 @@ services:
     image: apache/kafka:3.7.0
     restart: unless-stopped
     mem_limit: 1g
+    logging:
+      driver: journald
+      options:
+        tag: "wijnpick-{{.Name}}"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -57,6 +65,10 @@ services:
     image: apachepinot/pinot:1.1.0
     restart: unless-stopped
     mem_limit: 3g
+    logging:
+      driver: journald
+      options:
+        tag: "wijnpick-{{.Name}}"
     command: QuickStart -type EMPTY
     environment:
       JAVA_OPTS: -Xms1g -Xmx2g
@@ -86,6 +98,10 @@ services:
     build: ./backend
     restart: unless-stopped
     mem_limit: 1536m
+    logging:
+      driver: journald
+      options:
+        tag: "wijnpick-{{.Name}}"
     ports:
       - "127.0.0.1:8000:8000"
     environment:
@@ -131,6 +147,10 @@ services:
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
     restart: unless-stopped
     mem_limit: 128m
+    logging:
+      driver: journald
+      options:
+        tag: "wijnpick-{{.Name}}"
     ports:
       - "127.0.0.1:3000:80"
     depends_on:

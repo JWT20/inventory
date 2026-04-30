@@ -50,6 +50,9 @@ fi
 apt-get install -y caddy
 systemctl enable caddy
 
+# Caddy access log directory (referenced by Caddyfile)
+install -d -o caddy -g caddy -m 0755 /var/log/caddy
+
 echo "==> deploy user"
 if ! id deploy >/dev/null 2>&1; then
   adduser --disabled-password --gecos "" deploy
