@@ -235,7 +235,29 @@ function SKUDialog({
 
   useEffect(() => {
     if (!open || !currentId || !hasProcessingImages) return;
-    const interval = window.setInterval(() => loadImages(currentId), 2000);
+    const skuId = currentId;
+    const interval = window.setInterval(async () => {
+      try {
+        const statuses: { id: number; processing_status: string }[] =
+          await api.listImageStatuses(skuId);
+        const byId = new Map(statuses.map((s) => [s.id, s.processing_status]));
+        let needsRefetch = false;
+        setImages((prev) => {
+          const next = prev.map((img) => {
+            const newStatus = byId.get(img.id);
+            if (!newStatus || newStatus === img.processing_status) return img;
+            if (newStatus !== "pending" && newStatus !== "processing") {
+              needsRefetch = true;
+            }
+            return { ...img, processing_status: newStatus };
+          });
+          return next;
+        });
+        if (needsRefetch) loadImages(skuId);
+      } catch {
+        /* ignore — next tick will retry */
+      }
+    }, 2500);
     return () => window.clearInterval(interval);
   }, [open, currentId, hasProcessingImages]);
 
@@ -403,9 +425,14 @@ function SKUDialog({
   }
 
   function imageSrc(img: RefImage) {
-    return img.image_path.startsWith("/")
-      ? `/api/uploads/${img.image_path.replace(/^\/app\/uploads\//, "")}`
-      : `/api/files/${img.image_path}`;
+    const path = img.image_path;
+    if (path.startsWith("/app/uploads/")) {
+      return `/api/uploads/${path.slice("/app/uploads/".length)}`;
+    }
+    if (path.startsWith("/")) {
+      return `/api/uploads/${path.replace(/^\/+/, "")}`;
+    }
+    return `/api/files/${path}`;
   }
 
   function failedImageTitle(img: RefImage) {

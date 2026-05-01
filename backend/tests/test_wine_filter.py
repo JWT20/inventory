@@ -296,6 +296,113 @@ class TestReferenceUploadPackageFilter:
         assert ref.processing_status == "done"
 
 
+class TestReferenceImageStaleRecovery:
+    """Stale-recovery + sweep behaviour added to address abandoned tasks."""
+
+    def test_sweep_marks_stale_pending_failed(self, db, sample_sku):
+        from datetime import datetime, timedelta
+        from app.models import ReferenceImage
+        from app.routers.skus import sweep_stale_reference_images
+
+        old = datetime.utcnow() - timedelta(minutes=30)
+        stuck = ReferenceImage(
+            sku_id=sample_sku.id,
+            image_path="reference_images/x.jpg",
+            processing_status="pending",
+            created_at=old,
+        )
+        fresh = ReferenceImage(
+            sku_id=sample_sku.id,
+            image_path="reference_images/y.jpg",
+            processing_status="pending",
+        )
+        db.add_all([stuck, fresh])
+        db.commit()
+
+        updated = sweep_stale_reference_images(db)
+        assert updated == 1
+        db.refresh(stuck)
+        db.refresh(fresh)
+        assert stuck.processing_status == "failed"
+        assert stuck.processing_error_code == "processing_failed"
+        assert fresh.processing_status == "pending"
+
+    def test_retry_blocked_for_fresh_pending(self, client, merchant_token, sample_sku, db, tmp_path):
+        from app.models import ReferenceImage
+
+        img = ReferenceImage(
+            sku_id=sample_sku.id,
+            image_path="reference_images/z.jpg",
+            processing_status="pending",
+        )
+        db.add(img)
+        db.commit()
+
+        resp = client.post(
+            f"/api/skus/{sample_sku.id}/images/{img.id}/retry",
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 409
+
+    def test_retry_allowed_for_stale_pending(self, client, merchant_token, sample_sku, db, tmp_path):
+        from datetime import datetime, timedelta
+        from app.models import ReferenceImage
+
+        old = datetime.utcnow() - timedelta(minutes=30)
+        img = ReferenceImage(
+            sku_id=sample_sku.id,
+            image_path="reference_images/stuck.jpg",
+            processing_status="pending",
+            created_at=old,
+        )
+        db.add(img)
+        db.commit()
+
+        with patch("app.routers.skus.describe_and_embed", side_effect=_mock_describe_and_embed), \
+             patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_no_duplicate), \
+             patch("app.routers.skus.storage", _tmp_storage(tmp_path)):
+            # storage.read needs to return *something* — pre-write the file
+            _tmp_storage(tmp_path).save("reference_images/stuck.jpg", FAKE_IMAGE)
+            resp = client.post(
+                f"/api/skus/{sample_sku.id}/images/{img.id}/retry",
+                data={"skip_wine_check": "true"},
+                headers=auth_header(merchant_token),
+            )
+        assert resp.status_code == 200
+        db.refresh(img)
+        assert img.processing_status == "done"
+
+
+class TestReferenceImageStatusEndpoint:
+    def test_status_endpoint_returns_lightweight_rows(self, client, admin_token, sample_sku, db):
+        from app.models import ReferenceImage
+
+        img = ReferenceImage(
+            sku_id=sample_sku.id,
+            image_path="reference_images/a.jpg",
+            processing_status="failed",
+            processing_error_code="wine_check_failed",
+            processing_error_message="Niet herkend",
+        )
+        db.add(img)
+        db.commit()
+
+        resp = client.get(
+            f"/api/skus/{sample_sku.id}/images/status",
+            headers=auth_header(admin_token),
+        )
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert len(rows) == 1
+        assert rows[0] == {
+            "id": img.id,
+            "processing_status": "failed",
+            "processing_error_code": "wine_check_failed",
+        }
+        # No image_path / vision_description leaked
+        assert "image_path" not in rows[0]
+
+
 # ---------------------------------------------------------------------------
 # POST /api/receiving/identify — scan with package filter
 # ---------------------------------------------------------------------------
