@@ -1,9 +1,10 @@
 import logging
 import uuid
+from collections.abc import Callable
 
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
 from sqlalchemy import text
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from app.auth import get_current_user, require_admin, require_product_manager
 from app.config import settings
@@ -44,6 +45,9 @@ router = APIRouter(prefix="/skus", tags=["skus"])
 
 # Threshold for considering two images as duplicates (cosine similarity)
 DUPLICATE_SIMILARITY_THRESHOLD = 0.90
+WINE_CHECK_FAILED = "wine_check_failed"
+DUPLICATE_CHECK_FAILED = "duplicate_check_failed"
+PROCESSING_FAILED = "processing_failed"
 
 
 def _check_duplicate_embedding(
@@ -69,6 +73,124 @@ def _check_duplicate_embedding(
         sku = db.get(SKU, row[0])
         return sku, float(row[1])
     return None, 0.0
+
+
+def _request_session_factory(db: Session) -> Callable[[], Session]:
+    return sessionmaker(autocommit=False, autoflush=False, bind=db.get_bind())
+
+
+def _clear_processing_error(image: ReferenceImage) -> None:
+    image.processing_error_code = None
+    image.processing_error_message = None
+    image.duplicate_sku_id = None
+
+
+def _set_processing_failure(
+    image: ReferenceImage,
+    *,
+    code: str,
+    message: str,
+    duplicate_sku_id: int | None = None,
+) -> None:
+    image.processing_status = "failed"
+    image.processing_error_code = code
+    image.processing_error_message = message
+    image.duplicate_sku_id = duplicate_sku_id
+
+
+async def _process_reference_image(
+    image_id: int,
+    *,
+    skip_wine_check: bool,
+    skip_duplicate_check: bool,
+    session_factory: Callable[[], Session],
+) -> None:
+    db = session_factory()
+    try:
+        image = db.get(ReferenceImage, image_id)
+        if image is None:
+            return
+
+        sku = db.get(SKU, image.sku_id)
+        if sku is None:
+            _set_processing_failure(
+                image,
+                code=PROCESSING_FAILED,
+                message="Product niet gevonden tijdens beeldanalyse",
+            )
+            db.commit()
+            return
+
+        image.processing_status = "processing"
+        _clear_processing_error(image)
+        db.commit()
+
+        image_bytes = storage.read(image.image_path)
+        if image_bytes is None:
+            raise RuntimeError("Afbeelding kon niet worden gelezen")
+
+        if skip_wine_check:
+            description, embedding, quality = await describe_and_embed(image_bytes)
+        else:
+            is_package, description = await classify_and_describe(image_bytes)
+            if not is_package:
+                _set_processing_failure(
+                    image,
+                    code=WINE_CHECK_FAILED,
+                    message=(
+                        "Dit beeld werd niet herkend als wijndoos "
+                        f"({description})."
+                    ),
+                )
+                recompute_active(sku, db)
+                db.commit()
+                return
+            quality = assess_description_quality(description)
+            embedding = await generate_embedding(description)
+
+        image.vision_description = description
+        image.embedding = embedding
+        image.description_quality = quality
+        image.wine_check_overridden = skip_wine_check
+
+        if not skip_duplicate_check:
+            dup_sku, similarity = _check_duplicate_embedding(
+                db, embedding, exclude_sku_id=image.sku_id
+            )
+            if dup_sku:
+                _set_processing_failure(
+                    image,
+                    code=DUPLICATE_CHECK_FAILED,
+                    message=(
+                        f"Deze foto lijkt te veel op een foto van {dup_sku.sku_code} "
+                        f"(gelijkenis: {similarity:.0%})."
+                    ),
+                    duplicate_sku_id=dup_sku.id,
+                )
+                recompute_active(sku, db)
+                db.commit()
+                return
+
+        image.processing_status = "done"
+        _clear_processing_error(image)
+        recompute_active(sku, db)
+        db.commit()
+    except Exception:
+        logger.exception("Reference image processing failed for image %s", image_id)
+        db.rollback()
+        image = db.get(ReferenceImage, image_id)
+        if image is not None:
+            sku = db.get(SKU, image.sku_id)
+            _set_processing_failure(
+                image,
+                code=PROCESSING_FAILED,
+                message="Beeldanalyse is mislukt. Probeer het opnieuw.",
+            )
+            if sku is not None:
+                recompute_active(sku, db)
+            db.commit()
+    finally:
+        db.close()
 
 
 def _sku_to_response(sku: SKU) -> SKUResponse:
@@ -275,6 +397,7 @@ def delete_sku(
 async def upload_reference_image(
     sku_id: int,
     file: UploadFile,
+    background_tasks: BackgroundTasks,
     skip_wine_check: bool = Form(False),
     skip_duplicate_check: bool = Form(False),
     db: Session = Depends(get_db),
@@ -288,44 +411,28 @@ async def upload_reference_image(
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
 
-    # Classify + describe + embed, then check for duplicates
-    if skip_wine_check:
-        description, embedding, quality = await describe_and_embed(image_bytes)
-    else:
-        is_package, description = await classify_and_describe(image_bytes)
-        if not is_package:
-            raise HTTPException(400, f"Dit is geen doos of verpakking ({description}) — upload alleen foto's van dozen")
-        quality = assess_description_quality(description)
-        embedding = await generate_embedding(description)
-
-    # Duplicate detection via embedding similarity
-    if not skip_duplicate_check:
-        dup_sku, similarity = _check_duplicate_embedding(db, embedding, exclude_sku_id=sku_id)
-        if dup_sku:
-            raise HTTPException(
-                409,
-                f"Deze foto lijkt te veel op een foto van {dup_sku.sku_code} (gelijkenis: {similarity:.0%})",
-            )
-
-    # Save image
     image_key = f"reference_images/{sku_id}/{uuid.uuid4().hex}.jpg"
     storage.save(image_key, image_bytes)
 
-    # Create DB record with description + embedding already filled
     ref_image = ReferenceImage(
         sku_id=sku_id,
         image_path=image_key,
-        vision_description=description,
-        embedding=embedding,
-        description_quality=quality,
-        processing_status="done",
+        processing_status="pending",
         wine_check_overridden=skip_wine_check,
     )
     db.add(ref_image)
     db.flush()
-    recompute_active(sku, db)
+    _clear_processing_error(ref_image)
     db.commit()
     db.refresh(ref_image)
+
+    background_tasks.add_task(
+        _process_reference_image,
+        ref_image.id,
+        skip_wine_check=skip_wine_check,
+        skip_duplicate_check=skip_duplicate_check,
+        session_factory=_request_session_factory(db),
+    )
 
     publish_event(
         "reference_image_uploaded",
@@ -336,6 +443,56 @@ async def upload_reference_image(
     )
 
     return ref_image
+
+
+@router.post("/{sku_id}/images/{image_id}/retry", response_model=ReferenceImageResponse)
+async def retry_reference_image_processing(
+    sku_id: int,
+    image_id: int,
+    background_tasks: BackgroundTasks,
+    skip_wine_check: bool = Form(False),
+    skip_duplicate_check: bool = Form(False),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    image = (
+        db.query(ReferenceImage)
+        .filter(ReferenceImage.id == image_id, ReferenceImage.sku_id == sku_id)
+        .first()
+    )
+    if not image:
+        raise HTTPException(404, "Reference image not found")
+    if image.processing_status in ("pending", "processing"):
+        raise HTTPException(409, "Beeldanalyse loopt al")
+
+    effective_skip_wine_check = skip_wine_check or image.wine_check_overridden
+    image.processing_status = "pending"
+    image.wine_check_overridden = effective_skip_wine_check
+    _clear_processing_error(image)
+    db.commit()
+    db.refresh(image)
+
+    background_tasks.add_task(
+        _process_reference_image,
+        image.id,
+        skip_wine_check=effective_skip_wine_check,
+        skip_duplicate_check=skip_duplicate_check,
+        session_factory=_request_session_factory(db),
+    )
+
+    publish_event(
+        "reference_image_retry_requested",
+        details={
+            "image_id": image.id,
+            "skip_wine_check": effective_skip_wine_check,
+            "skip_duplicate_check": skip_duplicate_check,
+        },
+        user=user,
+        resource_type="sku",
+        resource_id=sku_id,
+    )
+
+    return image
 
 
 @router.get("/{sku_id}/images", response_model=list[ReferenceImageResponse])

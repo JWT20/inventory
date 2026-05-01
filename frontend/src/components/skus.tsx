@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AlertCircle, Loader2 } from "lucide-react";
 
 interface Supplier {
   id: number;
@@ -47,7 +48,13 @@ interface RefImage {
   image_path: string;
   vision_description: string | null;
   processing_status: string;
+  processing_error_code: string | null;
+  processing_error_message: string | null;
+  duplicate_sku_id: number | null;
 }
+
+const WINE_CHECK_FAILED = "wine_check_failed";
+const DUPLICATE_CHECK_FAILED = "duplicate_check_failed";
 
 function SKUCardSkeleton() {
   return (
@@ -191,8 +198,10 @@ function SKUDialog({
   const [deleting, setDeleting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [stagedFiles, setStagedFiles] = useState<{ file: File; preview: string }[]>([]);
-  const [wineRejected, setWineRejected] = useState<{ file: File; preview: string }[]>([]);
-  const [duplicateRejected, setDuplicateRejected] = useState<{ file: File; preview: string; detail: string }[]>([]);
+  const hasProcessingImages = images.some(
+    (img) => img.processing_status === "pending" || img.processing_status === "processing",
+  );
+  const failedImages = images.filter((img) => img.processing_status === "failed");
 
   useEffect(() => {
     if (open) {
@@ -221,16 +230,14 @@ function SKUDialog({
         prev.forEach((s) => URL.revokeObjectURL(s.preview));
         return [];
       });
-      setWineRejected((prev) => {
-        prev.forEach((s) => URL.revokeObjectURL(s.preview));
-        return [];
-      });
-      setDuplicateRejected((prev) => {
-        prev.forEach((s) => URL.revokeObjectURL(s.preview));
-        return [];
-      });
     }
   }, [open, sku]);
+
+  useEffect(() => {
+    if (!open || !currentId || !hasProcessingImages) return;
+    const interval = window.setInterval(() => loadImages(currentId), 2000);
+    return () => window.clearInterval(interval);
+  }, [open, currentId, hasProcessingImages]);
 
   async function loadImages(id: number) {
     try {
@@ -264,8 +271,7 @@ function SKUDialog({
       }
 
       if (stagedFiles.length > 0) {
-        const hasRejections = await uploadImages(skuId, stagedFiles, false);
-        if (hasRejections) return;
+        await uploadImages(skuId, stagedFiles, false);
       }
 
       onSaved();
@@ -276,24 +282,19 @@ function SKUDialog({
     }
   }
 
-  const WINE_REJECTION_MSG = "Dit is geen wijndoos";
-  const DUPLICATE_MSG = "Deze foto lijkt te veel op";
-
   async function uploadImages(
     skuId: number,
     files: { file: File; preview: string }[],
     skipWineCheck: boolean,
     skipDuplicateCheck: boolean = false,
-  ): Promise<boolean> {
+  ) {
     setUploading(true);
-    const infoToast = toast("Beelden uploaden en verwerken...");
+    const infoToast = toast("Beelden opslaan...");
     const results = await Promise.allSettled(
       files.map((staged) => api.uploadImage(skuId, staged.file, skipWineCheck, skipDuplicateCheck)),
     );
     toast.dismiss(infoToast);
 
-    const wineRejects: { file: File; preview: string }[] = [];
-    const dupRejects: { file: File; preview: string; detail: string }[] = [];
     const otherErrors: string[] = [];
     let successCount = 0;
 
@@ -303,58 +304,42 @@ function SKUDialog({
         successCount++;
       } else {
         const msg = r.reason instanceof Error ? r.reason.message : "";
-        if (msg.includes(DUPLICATE_MSG)) {
-          dupRejects.push({ ...files[i], detail: msg });
-        } else if (msg.includes(WINE_REJECTION_MSG)) {
-          wineRejects.push(files[i]);
-        } else {
-          URL.revokeObjectURL(files[i].preview);
-          otherErrors.push(msg || "Upload mislukt");
-        }
+        URL.revokeObjectURL(files[i].preview);
+        otherErrors.push(msg || "Upload mislukt");
       }
     });
 
     if (successCount > 0) {
-      toast.success(`${successCount} referentiebeeld(en) toegevoegd`);
+      toast.success(
+        `${successCount} beeld${successCount !== 1 ? "en" : ""} opgeslagen. Analyse loopt op achtergrond; je kunt doorgaan.`,
+      );
     }
     if (otherErrors.length > 0) {
       toast.error(otherErrors[0]);
-    }
-    if (wineRejects.length > 0) {
-      setWineRejected(wineRejects);
-    }
-    if (dupRejects.length > 0) {
-      setDuplicateRejected(dupRejects);
     }
 
     setStagedFiles([]);
     setUploading(false);
     loadImages(skuId);
-    return wineRejects.length > 0 || dupRejects.length > 0;
   }
 
-  async function forceUploadRejected() {
-    if (!currentId || wineRejected.length === 0) return;
-    const hasMore = await uploadImages(currentId, wineRejected, true);
-    setWineRejected([]);
-    if (!hasMore) onSaved();
-  }
-
-  function dismissRejected() {
-    wineRejected.forEach((s) => URL.revokeObjectURL(s.preview));
-    setWineRejected([]);
-  }
-
-  async function forceUploadDuplicate() {
-    if (!currentId || duplicateRejected.length === 0) return;
-    const hasMore = await uploadImages(currentId, duplicateRejected, false, true);
-    setDuplicateRejected([]);
-    if (!hasMore) onSaved();
-  }
-
-  function dismissDuplicate() {
-    duplicateRejected.forEach((s) => URL.revokeObjectURL(s.preview));
-    setDuplicateRejected([]);
+  async function retryImageProcessing(
+    image: RefImage,
+    skipWineCheck: boolean,
+    skipDuplicateCheck: boolean,
+  ) {
+    if (!currentId) return;
+    setUploading(true);
+    try {
+      await api.retryImageProcessing(currentId, image.id, skipWineCheck, skipDuplicateCheck);
+      toast.success("Analyse opnieuw gestart. Je kunt doorgaan.");
+      loadImages(currentId);
+      onSaved();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Kan analyse niet opnieuw starten");
+    } finally {
+      setUploading(false);
+    }
   }
 
   function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -415,6 +400,18 @@ function SKUDialog({
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Kan beeld niet verwijderen");
     }
+  }
+
+  function imageSrc(img: RefImage) {
+    return img.image_path.startsWith("/")
+      ? `/api/uploads/${img.image_path.replace(/^\/app\/uploads\//, "")}`
+      : `/api/files/${img.image_path}`;
+  }
+
+  function failedImageTitle(img: RefImage) {
+    if (img.processing_error_code === WINE_CHECK_FAILED) return "Niet herkend als wijndoos";
+    if (img.processing_error_code === DUPLICATE_CHECK_FAILED) return "Mogelijk duplicaat gevonden";
+    return "Beeldanalyse mislukt";
   }
 
   return (
@@ -502,6 +499,17 @@ function SKUDialog({
 
         <div className="mt-6">
           <Label className="mb-2 block">Referentiebeelden</Label>
+          {stagedFiles.length > 0 && (
+            <p className="text-xs text-muted-foreground mb-2">
+              Nieuwe beelden worden opgeslagen zodra je op Opslaan drukt.
+            </p>
+          )}
+          {hasProcessingImages && (
+            <div className="mb-3 flex items-center gap-2 rounded-md border border-yellow-600/30 bg-yellow-600/10 px-3 py-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-yellow-700" />
+              <span>Analyse loopt op achtergrond. Je kunt doorgaan.</span>
+            </div>
+          )}
           {images.length === 0 && stagedFiles.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               Nog geen referentiebeelden
@@ -514,13 +522,14 @@ function SKUDialog({
                   className="relative aspect-square rounded-lg overflow-hidden border border-border"
                 >
                   <img
-                    src={img.image_path.startsWith("/") ? `/api/uploads/${img.image_path.replace(/^\/app\/uploads\//, "")}` : `/api/files/${img.image_path}`}
+                    src={imageSrc(img)}
                     alt="ref"
                     className={`w-full h-full object-cover${img.processing_status !== "done" ? " opacity-50" : ""}`}
                   />
                   {img.processing_status === "pending" || img.processing_status === "processing" ? (
-                    <span className="absolute bottom-1 left-1 text-[10px] bg-yellow-600/80 text-white px-1 rounded">
-                      Verwerken...
+                    <span className="absolute bottom-1 left-1 flex items-center gap-1 text-[10px] bg-yellow-600/85 text-white px-1 rounded">
+                      <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                      Analyseren
                     </span>
                   ) : img.processing_status === "failed" ? (
                     <span className="absolute bottom-1 left-1 text-[10px] bg-red-600/80 text-white px-1 rounded">
@@ -547,12 +556,75 @@ function SKUDialog({
                     alt="preview"
                     className="w-full h-full object-cover opacity-80"
                   />
+                  <span className="absolute bottom-1 left-1 text-[10px] bg-primary/80 text-primary-foreground px-1 rounded">
+                    Na opslaan
+                  </span>
                   <button
                     onClick={() => removeStagedFile(i)}
                     className="absolute top-1 right-1 bg-red-600/80 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center"
                   >
                     &times;
                   </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {failedImages.length > 0 && (
+            <div className="space-y-2 mb-3">
+              {failedImages.map((img) => (
+                <div
+                  key={`failed-${img.id}`}
+                  className="flex gap-3 rounded-md border border-red-600/30 bg-red-600/10 p-3"
+                >
+                  <img
+                    src={imageSrc(img)}
+                    alt=""
+                    className="h-14 w-14 flex-none rounded border border-border object-cover opacity-80"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="flex items-center gap-1.5 text-sm font-medium">
+                      <AlertCircle className="h-4 w-4 text-red-700" />
+                      {failedImageTitle(img)}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {img.processing_error_message || "De beeldanalyse is mislukt."}
+                    </p>
+                    {user && user.role !== "courier" && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {img.processing_error_code === WINE_CHECK_FAILED && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            type="button"
+                            disabled={uploading}
+                            onClick={() => retryImageProcessing(img, true, false)}
+                          >
+                            Toch uploaden
+                          </Button>
+                        )}
+                        {img.processing_error_code === DUPLICATE_CHECK_FAILED && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            type="button"
+                            disabled={uploading}
+                            onClick={() => retryImageProcessing(img, false, true)}
+                          >
+                            Toch toevoegen
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          type="button"
+                          disabled={uploading}
+                          onClick={() => deleteImage(img.id)}
+                        >
+                          Verwijderen
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -576,84 +648,6 @@ function SKUDialog({
                 className="hidden"
                 onChange={handleUpload}
               />
-              {wineRejected.length > 0 && (
-                <div className="mt-3 p-3 rounded-lg border-2 border-yellow-600/50 bg-yellow-600/10">
-                  <p className="text-sm font-medium mb-1">
-                    Niet herkend als wijndoos
-                  </p>
-                  <div className="flex gap-2 mb-2">
-                    {wineRejected.map((f, i) => (
-                      <img
-                        key={i}
-                        src={f.preview}
-                        alt="rejected"
-                        className="w-14 h-14 object-cover rounded border border-border"
-                      />
-                    ))}
-                  </div>
-                  <p className="text-xs text-muted-foreground mb-2">
-                    Dit beeld werd niet herkend als een wijndoos. Is het toch een wijndoos?
-                  </p>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      type="button"
-                      disabled={uploading}
-                      onClick={forceUploadRejected}
-                    >
-                      Toch uploaden
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      type="button"
-                      onClick={dismissRejected}
-                    >
-                      Annuleren
-                    </Button>
-                  </div>
-                </div>
-              )}
-              {duplicateRejected.length > 0 && (
-                <div className="mt-3 p-3 rounded-lg border-2 border-orange-600/50 bg-orange-600/10">
-                  <p className="text-sm font-medium mb-1">
-                    Mogelijk duplicaat gevonden
-                  </p>
-                  <div className="flex gap-2 mb-2">
-                    {duplicateRejected.map((f, i) => (
-                      <img
-                        key={i}
-                        src={f.preview}
-                        alt="duplicate"
-                        className="w-14 h-14 object-cover rounded border border-border"
-                      />
-                    ))}
-                  </div>
-                  <p className="text-xs text-muted-foreground mb-2">
-                    {duplicateRejected[0].detail}
-                  </p>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      type="button"
-                      disabled={uploading}
-                      onClick={forceUploadDuplicate}
-                    >
-                      Toch toevoegen
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      type="button"
-                      onClick={dismissDuplicate}
-                    >
-                      Annuleren
-                    </Button>
-                  </div>
-                </div>
-              )}
             </>
           )}
         </div>

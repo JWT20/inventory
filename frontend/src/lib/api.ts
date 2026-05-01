@@ -212,6 +212,16 @@ export const api = {
     }
     return upload(`/skus/${skuId}/images`, file, "image.jpg");
   },
+  retryImageProcessing: (skuId: number, imageId: number, skipWineCheck = false, skipDuplicateCheck = false) => {
+    const fields: Record<string, string> = {};
+    if (skipWineCheck) fields.skip_wine_check = "true";
+    if (skipDuplicateCheck) fields.skip_duplicate_check = "true";
+    const form = new FormData();
+    for (const [k, v] of Object.entries(fields)) {
+      form.append(k, v);
+    }
+    return request(`/skus/${skuId}/images/${imageId}/retry`, { method: "POST", body: form });
+  },
   deleteImage: (skuId: number, imageId: number) =>
     request(`/skus/${skuId}/images/${imageId}`, { method: "DELETE" }),
 

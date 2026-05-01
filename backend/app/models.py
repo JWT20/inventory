@@ -198,6 +198,9 @@ class ReferenceImage(Base):
     processing_status: Mapped[str] = mapped_column(
         String(20), default="done"
     )  # "pending", "processing", "done", "failed"
+    processing_error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    processing_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duplicate_sku_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     description_quality: Mapped[str | None] = mapped_column(String(10), nullable=True)
     wine_check_overridden: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
