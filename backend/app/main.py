@@ -23,6 +23,7 @@ from app.events import init_producer, shutdown_producer
 from app.services.langfuse_client import get_langfuse, shutdown_langfuse
 from app.services.storage import storage, LocalStorage
 from app.routers import auth, customers, inventory, orders, product_attributes, receiving, skus, suppliers, vision
+from app.routers.skus import sweep_stale_reference_images
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -112,6 +113,15 @@ async def lifespan(app: FastAPI):
     init_producer()
     get_langfuse()  # Initialize Langfuse client (no-op if not configured)
     _cleanup_old_scans()
+
+    # Recover from any reference-image processing that was abandoned by a
+    # previous worker (deploy mid-flight, OOM, etc.). Marking these "failed"
+    # surfaces a retry button instead of leaving them spinning forever.
+    sweep_db = SessionLocal()
+    try:
+        sweep_stale_reference_images(sweep_db)
+    finally:
+        sweep_db.close()
 
     # For local storage, also mount StaticFiles as a fallback for legacy
     # /api/uploads/ URLs (existing bookings may reference old paths).

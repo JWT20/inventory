@@ -215,7 +215,20 @@ class ReferenceImageResponse(BaseModel):
     image_path: str
     vision_description: str | None = None
     processing_status: str = "done"
+    processing_error_code: str | None = None
+    processing_error_message: str | None = None
+    duplicate_sku_id: int | None = None
     created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ReferenceImageStatusResponse(BaseModel):
+    """Lightweight projection used for polling — no image_path or description."""
+
+    id: int
+    processing_status: str
+    processing_error_code: str | None = None
 
     model_config = {"from_attributes": True}
 

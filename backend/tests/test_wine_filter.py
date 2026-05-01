@@ -142,8 +142,10 @@ def _mock_no_duplicate(db, embedding, exclude_sku_id):
 # ---------------------------------------------------------------------------
 
 class TestReferenceUploadPackageFilter:
-    def test_package_image_accepted(self, client, merchant_token, sample_sku, tmp_path):
+    def test_package_image_accepted(self, client, merchant_token, sample_sku, db, tmp_path):
         """A box image should be accepted and saved."""
+        from app.models import ReferenceImage
+
         with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_package), \
              patch("app.routers.skus.generate_embedding", side_effect=_mock_generate_embedding), \
              patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_no_duplicate), \
@@ -157,22 +159,34 @@ class TestReferenceUploadPackageFilter:
 
         assert resp.status_code == 201
         data = resp.json()
-        assert data["processing_status"] == "done"
+        assert data["processing_status"] == "pending"
+        ref = db.get(ReferenceImage, data["id"])
+        assert ref.processing_status == "done"
 
-    def test_non_package_image_rejected(self, client, merchant_token, sample_sku):
-        """A non-package image (clock, candles) should be rejected with 400."""
-        with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_not_package):
+    def test_non_package_image_rejected(self, client, merchant_token, sample_sku, db, tmp_path):
+        """A non-package image is saved, then marked failed by background processing."""
+        from app.models import ReferenceImage
+
+        with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_not_package), \
+             patch("app.routers.skus.storage", _tmp_storage(tmp_path)):
             resp = client.post(
                 f"/api/skus/{sample_sku.id}/images",
                 files={"file": ("clock.jpg", io.BytesIO(FAKE_IMAGE), "image/jpeg")},
                 headers=auth_header(merchant_token),
             )
 
-        assert resp.status_code == 400
-        assert "doos" in resp.json()["detail"].lower()
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["processing_status"] == "pending"
+        ref = db.get(ReferenceImage, data["id"])
+        assert ref.processing_status == "failed"
+        assert ref.processing_error_code == "wine_check_failed"
+        assert "wijndoos" in ref.processing_error_message.lower()
 
-    def test_non_package_override_accepted(self, client, merchant_token, sample_sku, tmp_path):
+    def test_non_package_override_accepted(self, client, merchant_token, sample_sku, db, tmp_path):
         """User overrides rejection with skip_wine_check=true — should be accepted."""
+        from app.models import ReferenceImage
+
         with patch("app.routers.skus.describe_and_embed", side_effect=_mock_describe_and_embed), \
              patch("app.routers.skus.classify_and_describe") as mock_classify, \
              patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_no_duplicate), \
@@ -188,36 +202,52 @@ class TestReferenceUploadPackageFilter:
         assert resp.status_code == 201
         # classify_and_describe should NOT have been called (wine check skipped)
         mock_classify.assert_not_called()
+        ref = db.get(ReferenceImage, resp.json()["id"])
+        assert ref.processing_status == "done"
+        assert ref.wine_check_overridden is True
 
-    def test_rejection_then_override_flow(self, client, merchant_token, sample_sku, tmp_path):
-        """Full flow: upload rejected → user clicks 'Toch uploaden' → accepted."""
-        # Step 1: First upload gets rejected
-        with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_not_package):
+    def test_rejection_then_override_flow(self, client, merchant_token, sample_sku, db, tmp_path):
+        """Full flow: background rejection → user clicks 'Toch uploaden' → accepted."""
+        from app.models import ReferenceImage
+
+        storage = _tmp_storage(tmp_path)
+
+        # Step 1: First upload is saved and then fails in background.
+        with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_not_package), \
+             patch("app.routers.skus.storage", storage):
             resp1 = client.post(
                 f"/api/skus/{sample_sku.id}/images",
                 files={"file": ("box.jpg", io.BytesIO(FAKE_IMAGE), "image/jpeg")},
                 headers=auth_header(merchant_token),
             )
-        assert resp1.status_code == 400
-        assert "doos" in resp1.json()["detail"].lower()
+        assert resp1.status_code == 201
+        image_id = resp1.json()["id"]
+        ref = db.get(ReferenceImage, image_id)
+        assert ref.processing_status == "failed"
+        assert ref.processing_error_code == "wine_check_failed"
 
-        # Step 2: Same image re-uploaded with override
+        # Step 2: Failed image is retried with override.
         with patch("app.routers.skus.describe_and_embed", side_effect=_mock_describe_and_embed), \
              patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_no_duplicate), \
-             patch("app.routers.skus.storage", _tmp_storage(tmp_path)):
+             patch("app.routers.skus.storage", storage):
 
             resp2 = client.post(
-                f"/api/skus/{sample_sku.id}/images",
-                files={"file": ("box.jpg", io.BytesIO(FAKE_IMAGE), "image/jpeg")},
+                f"/api/skus/{sample_sku.id}/images/{image_id}/retry",
                 data={"skip_wine_check": "true"},
                 headers=auth_header(merchant_token),
-            )
-        assert resp2.status_code == 201
+        )
+        assert resp2.status_code == 200
+        ref = db.get(ReferenceImage, image_id)
+        db.refresh(ref)
+        assert ref.processing_status == "done"
+        assert ref.wine_check_overridden is True
 
-    def test_duplicate_image_rejected(self, client, merchant_token, sample_sku):
-        """Uploading an image that matches another SKU should be rejected with 409."""
+    def test_duplicate_image_rejected(self, client, merchant_token, sample_sku, db, tmp_path):
+        """Duplicate matches are saved, then marked failed by background processing."""
+        from app.models import ReferenceImage
         from app.models import SKU
         fake_sku = MagicMock(spec=SKU)
+        fake_sku.id = 999
         fake_sku.sku_code = "OTHER-SKU-001"
 
         def _mock_duplicate(db, embedding, exclude_sku_id):
@@ -225,20 +255,26 @@ class TestReferenceUploadPackageFilter:
 
         with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_package), \
              patch("app.routers.skus.generate_embedding", side_effect=_mock_generate_embedding), \
-             patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_duplicate):
+             patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_duplicate), \
+             patch("app.routers.skus.storage", _tmp_storage(tmp_path)):
             resp = client.post(
                 f"/api/skus/{sample_sku.id}/images",
                 files={"file": ("wine.jpg", io.BytesIO(FAKE_IMAGE), "image/jpeg")},
                 headers=auth_header(merchant_token),
             )
 
-        assert resp.status_code == 409
-        assert "OTHER-SKU-001" in resp.json()["detail"]
+        assert resp.status_code == 201
+        ref = db.get(ReferenceImage, resp.json()["id"])
+        assert ref.processing_status == "failed"
+        assert ref.processing_error_code == "duplicate_check_failed"
+        assert "OTHER-SKU-001" in ref.processing_error_message
 
-    def test_duplicate_override_accepted(self, client, merchant_token, sample_sku, tmp_path):
+    def test_duplicate_override_accepted(self, client, merchant_token, sample_sku, db, tmp_path):
         """User can override duplicate check with skip_duplicate_check=true."""
+        from app.models import ReferenceImage
         from app.models import SKU
         fake_sku = MagicMock(spec=SKU)
+        fake_sku.id = 999
         fake_sku.sku_code = "OTHER-SKU-001"
 
         with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_package), \
@@ -256,6 +292,115 @@ class TestReferenceUploadPackageFilter:
         assert resp.status_code == 201
         # _check_duplicate_embedding should NOT have been called
         mock_dup.assert_not_called()
+        ref = db.get(ReferenceImage, resp.json()["id"])
+        assert ref.processing_status == "done"
+
+
+class TestReferenceImageStaleRecovery:
+    """Stale-recovery + sweep behaviour added to address abandoned tasks."""
+
+    def test_sweep_marks_stale_pending_failed(self, db, sample_sku):
+        from datetime import datetime, timedelta
+        from app.models import ReferenceImage
+        from app.routers.skus import sweep_stale_reference_images
+
+        old = datetime.utcnow() - timedelta(minutes=30)
+        stuck = ReferenceImage(
+            sku_id=sample_sku.id,
+            image_path="reference_images/x.jpg",
+            processing_status="pending",
+            created_at=old,
+        )
+        fresh = ReferenceImage(
+            sku_id=sample_sku.id,
+            image_path="reference_images/y.jpg",
+            processing_status="pending",
+        )
+        db.add_all([stuck, fresh])
+        db.commit()
+
+        updated = sweep_stale_reference_images(db)
+        assert updated == 1
+        db.refresh(stuck)
+        db.refresh(fresh)
+        assert stuck.processing_status == "failed"
+        assert stuck.processing_error_code == "processing_failed"
+        assert fresh.processing_status == "pending"
+
+    def test_retry_blocked_for_fresh_pending(self, client, merchant_token, sample_sku, db, tmp_path):
+        from app.models import ReferenceImage
+
+        img = ReferenceImage(
+            sku_id=sample_sku.id,
+            image_path="reference_images/z.jpg",
+            processing_status="pending",
+        )
+        db.add(img)
+        db.commit()
+
+        resp = client.post(
+            f"/api/skus/{sample_sku.id}/images/{img.id}/retry",
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 409
+
+    def test_retry_allowed_for_stale_pending(self, client, merchant_token, sample_sku, db, tmp_path):
+        from datetime import datetime, timedelta
+        from app.models import ReferenceImage
+
+        old = datetime.utcnow() - timedelta(minutes=30)
+        img = ReferenceImage(
+            sku_id=sample_sku.id,
+            image_path="reference_images/stuck.jpg",
+            processing_status="pending",
+            created_at=old,
+        )
+        db.add(img)
+        db.commit()
+
+        with patch("app.routers.skus.describe_and_embed", side_effect=_mock_describe_and_embed), \
+             patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_no_duplicate), \
+             patch("app.routers.skus.storage", _tmp_storage(tmp_path)):
+            # storage.read needs to return *something* — pre-write the file
+            _tmp_storage(tmp_path).save("reference_images/stuck.jpg", FAKE_IMAGE)
+            resp = client.post(
+                f"/api/skus/{sample_sku.id}/images/{img.id}/retry",
+                data={"skip_wine_check": "true"},
+                headers=auth_header(merchant_token),
+            )
+        assert resp.status_code == 200
+        db.refresh(img)
+        assert img.processing_status == "done"
+
+
+class TestReferenceImageStatusEndpoint:
+    def test_status_endpoint_returns_lightweight_rows(self, client, admin_token, sample_sku, db):
+        from app.models import ReferenceImage
+
+        img = ReferenceImage(
+            sku_id=sample_sku.id,
+            image_path="reference_images/a.jpg",
+            processing_status="failed",
+            processing_error_code="wine_check_failed",
+            processing_error_message="Niet herkend",
+        )
+        db.add(img)
+        db.commit()
+
+        resp = client.get(
+            f"/api/skus/{sample_sku.id}/images/status",
+            headers=auth_header(admin_token),
+        )
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert len(rows) == 1
+        assert rows[0] == {
+            "id": img.id,
+            "processing_status": "failed",
+            "processing_error_code": "wine_check_failed",
+        }
+        # No image_path / vision_description leaked
+        assert "image_path" not in rows[0]
 
 
 # ---------------------------------------------------------------------------
