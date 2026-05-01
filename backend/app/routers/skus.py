@@ -1,10 +1,11 @@
+import datetime
 import logging
 import uuid
-from collections.abc import Callable
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
 from sqlalchemy import text
-from sqlalchemy.orm import Session, selectinload, sessionmaker
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, selectinload
 
 from app.auth import get_current_user, require_admin, require_product_manager
 from app.config import settings
@@ -23,6 +24,7 @@ from app.models import (
 from app.schemas import (
     WINE_ATTRIBUTE_KEYS,
     ReferenceImageResponse,
+    ReferenceImageStatusResponse,
     SKUCreate,
     SKUResponse,
     SKUUpdate,
@@ -48,6 +50,28 @@ DUPLICATE_SIMILARITY_THRESHOLD = 0.90
 WINE_CHECK_FAILED = "wine_check_failed"
 DUPLICATE_CHECK_FAILED = "duplicate_check_failed"
 PROCESSING_FAILED = "processing_failed"
+
+# Postgres advisory-lock key serializing the duplicate-detection window across
+# concurrent background tasks. Arbitrary 32-bit constant ('WINE' = 0x57494E45).
+DUPLICATE_LOCK_KEY = 0x57494E45
+
+# A reference image stuck in pending/processing for longer than this is
+# considered abandoned (worker died, deploy mid-flight, etc.) and may be
+# retried or swept to "failed" on startup.
+STALE_PROCESSING_TIMEOUT = datetime.timedelta(minutes=5)
+
+
+def _utcnow() -> datetime.datetime:
+    return datetime.datetime.utcnow()
+
+
+def _is_stale(image: ReferenceImage) -> bool:
+    if image.processing_status not in ("pending", "processing"):
+        return False
+    started = image.processing_started_at or image.created_at
+    if started is None:
+        return True
+    return _utcnow() - started > STALE_PROCESSING_TIMEOUT
 
 
 def _check_duplicate_embedding(
@@ -75,10 +99,6 @@ def _check_duplicate_embedding(
     return None, 0.0
 
 
-def _request_session_factory(db: Session) -> Callable[[], Session]:
-    return sessionmaker(autocommit=False, autoflush=False, bind=db.get_bind())
-
-
 def _clear_processing_error(image: ReferenceImage) -> None:
     image.processing_error_code = None
     image.processing_error_message = None
@@ -98,14 +118,27 @@ def _set_processing_failure(
     image.duplicate_sku_id = duplicate_sku_id
 
 
+def _acquire_duplicate_lock(db: Session) -> None:
+    """Serialize the duplicate-check + embedding-write window across workers.
+
+    Postgres-only; on other dialects (SQLite in tests) this is a no-op.
+    The lock is transaction-scoped and released by the next commit/rollback.
+    """
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(:k)"),
+            {"k": DUPLICATE_LOCK_KEY},
+        )
+
+
 async def _process_reference_image(
     image_id: int,
     *,
     skip_wine_check: bool,
     skip_duplicate_check: bool,
-    session_factory: Callable[[], Session],
+    bind: Engine,
 ) -> None:
-    db = session_factory()
+    db = Session(bind=bind, autocommit=False, autoflush=False)
     try:
         image = db.get(ReferenceImage, image_id)
         if image is None:
@@ -122,6 +155,7 @@ async def _process_reference_image(
             return
 
         image.processing_status = "processing"
+        image.processing_started_at = _utcnow()
         _clear_processing_error(image)
         db.commit()
 
@@ -148,12 +182,10 @@ async def _process_reference_image(
             quality = assess_description_quality(description)
             embedding = await generate_embedding(description)
 
-        image.vision_description = description
-        image.embedding = embedding
-        image.description_quality = quality
-        image.wine_check_overridden = skip_wine_check
-
+        # Serialize duplicate detection so two near-simultaneous uploads can't
+        # both pass the check before either commits its embedding.
         if not skip_duplicate_check:
+            _acquire_duplicate_lock(db)
             dup_sku, similarity = _check_duplicate_embedding(
                 db, embedding, exclude_sku_id=image.sku_id
             )
@@ -171,6 +203,10 @@ async def _process_reference_image(
                 db.commit()
                 return
 
+        image.vision_description = description
+        image.embedding = embedding
+        image.description_quality = quality
+        image.wine_check_overridden = skip_wine_check
         image.processing_status = "done"
         _clear_processing_error(image)
         recompute_active(sku, db)
@@ -191,6 +227,36 @@ async def _process_reference_image(
             db.commit()
     finally:
         db.close()
+
+
+def sweep_stale_reference_images(db: Session) -> int:
+    """Mark abandoned pending/processing rows as failed so users can retry.
+
+    Called on application startup. Returns the number of rows updated.
+    """
+    cutoff = _utcnow() - STALE_PROCESSING_TIMEOUT
+    stale = (
+        db.query(ReferenceImage)
+        .filter(
+            ReferenceImage.processing_status.in_(("pending", "processing")),
+            ReferenceImage.created_at < cutoff,
+        )
+        .all()
+    )
+    count = 0
+    for image in stale:
+        if not _is_stale(image):
+            continue
+        _set_processing_failure(
+            image,
+            code=PROCESSING_FAILED,
+            message="Beeldanalyse onderbroken — probeer opnieuw.",
+        )
+        count += 1
+    if count:
+        db.commit()
+        logger.info("Reference image sweep: marked %d stale rows as failed", count)
+    return count
 
 
 def _sku_to_response(sku: SKU) -> SKUResponse:
@@ -421,8 +487,6 @@ async def upload_reference_image(
         wine_check_overridden=skip_wine_check,
     )
     db.add(ref_image)
-    db.flush()
-    _clear_processing_error(ref_image)
     db.commit()
     db.refresh(ref_image)
 
@@ -431,7 +495,7 @@ async def upload_reference_image(
         ref_image.id,
         skip_wine_check=skip_wine_check,
         skip_duplicate_check=skip_duplicate_check,
-        session_factory=_request_session_factory(db),
+        bind=db.get_bind(),
     )
 
     publish_event(
@@ -462,11 +526,12 @@ async def retry_reference_image_processing(
     )
     if not image:
         raise HTTPException(404, "Reference image not found")
-    if image.processing_status in ("pending", "processing"):
+    if image.processing_status in ("pending", "processing") and not _is_stale(image):
         raise HTTPException(409, "Beeldanalyse loopt al")
 
     effective_skip_wine_check = skip_wine_check or image.wine_check_overridden
     image.processing_status = "pending"
+    image.processing_started_at = None
     image.wine_check_overridden = effective_skip_wine_check
     _clear_processing_error(image)
     db.commit()
@@ -477,7 +542,7 @@ async def retry_reference_image_processing(
         image.id,
         skip_wine_check=effective_skip_wine_check,
         skip_duplicate_check=skip_duplicate_check,
-        session_factory=_request_session_factory(db),
+        bind=db.get_bind(),
     )
 
     publish_event(
@@ -511,6 +576,39 @@ def list_reference_images(
         elif sku.organization_id is not None:
             raise HTTPException(404, "SKU not found")
     return sku.reference_images
+
+
+@router.get(
+    "/{sku_id}/images/status",
+    response_model=list[ReferenceImageStatusResponse],
+)
+def list_reference_image_statuses(
+    sku_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Lightweight polling endpoint — returns just status fields.
+
+    Used by the SKU dialog to detect transitions out of pending/processing
+    without re-fetching full image rows every few seconds.
+    """
+    sku = db.get(SKU, sku_id)
+    if not sku:
+        raise HTTPException(404, "SKU not found")
+    if not user.is_platform_admin:
+        if user.organization_id:
+            if sku.organization_id != user.organization_id:
+                raise HTTPException(404, "SKU not found")
+        elif sku.organization_id is not None:
+            raise HTTPException(404, "SKU not found")
+    return [
+        ReferenceImageStatusResponse(
+            id=img.id,
+            processing_status=img.processing_status,
+            processing_error_code=img.processing_error_code,
+        )
+        for img in sku.reference_images
+    ]
 
 
 @router.delete("/{sku_id}/images/{image_id}", status_code=204)

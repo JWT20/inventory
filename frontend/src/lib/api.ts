@@ -203,6 +203,7 @@ export const api = {
 
   // Reference images
   listImages: (skuId: number) => request(`/skus/${skuId}/images`),
+  listImageStatuses: (skuId: number) => request(`/skus/${skuId}/images/status`),
   uploadImage: (skuId: number, file: Blob, skipWineCheck = false, skipDuplicateCheck = false) => {
     const fields: Record<string, string> = {};
     if (skipWineCheck) fields.skip_wine_check = "true";
