@@ -1,6 +1,6 @@
 # WijnPick - Vision-based Wine Box Identification
 
-Eliminates person-dependency in the wine picking process by identifying boxes via camera, without stickers or barcodes. A scanned wine box is matched against reference images using AI vision descriptions and vector similarity search.
+Eliminates person-dependency in the wine picking process by identifying boxes via camera using AI vision descriptions and vector similarity search. A scanned wine box is matched against reference images.
 
 ## Architecture
 

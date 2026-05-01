@@ -13,7 +13,6 @@ pydantic-settings>=2.7.0
 fastapi-users[sqlalchemy]>=13.0.0
 aiofiles>=24.1.0
 httpx>=0.28.1
-python-barcode[images]>=0.15.1
 confluent-kafka>=2.6.1
 langfuse>=3.0.0
 sentry-sdk[fastapi]>=2.0
