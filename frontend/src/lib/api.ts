@@ -332,11 +332,13 @@ export const api = {
     blob: Blob,
     supplierName = "",
     documentType: "pakbon" | "invoice" | "unknown" = "unknown",
+    organizationId?: number | null,
   ) => {
     const form = new FormData();
     form.append("file", blob, "shipment.jpg");
     if (supplierName) form.append("supplier_name", supplierName);
     form.append("document_type", documentType);
+    if (organizationId) form.append("organization_id", String(organizationId));
     return request("/shipments/extract-preview", { method: "POST", body: form });
   },
   createShipment: (data: {

@@ -145,9 +145,19 @@ export function InboundPage() {
   }, [needsOrgSelector]);
 
   async function extractFromBlob(blob: Blob) {
+    if (needsOrgSelector && !selectedOrgId) {
+      toast.error("Selecteer eerst een handelaar.");
+      return;
+    }
+
     setLoading(true);
     try {
-      const data = await api.extractShipmentPreview(blob, supplierName, documentType);
+      const data = await api.extractShipmentPreview(
+        blob,
+        supplierName,
+        documentType,
+        needsOrgSelector ? selectedOrgId : null,
+      );
       setPreview(data);
       setSelectedLineIndex(null);
       setSelectedSkuByLine({});
@@ -237,31 +247,27 @@ export function InboundPage() {
     const line = preview.lines[lineIndex];
     const supplierNameForMapping = (preview.supplier_name || "").trim();
     const supplierCodeForMapping = (line.supplier_code || "").trim();
+    let mappingPersisted = false;
+    let persistenceSkippedReason: string | null = null;
 
-    if (!supplierNameForMapping) {
-      toast.error("Vul eerst een leverancier in op de pakbon zodat de koppeling onthouden kan worden.");
-      return;
-    }
-    if (!supplierCodeForMapping) {
-      toast.error("Deze regel heeft geen supplier code; koppeling kan niet onthouden worden.");
-      return;
-    }
-    if (needsOrgSelector && !selectedOrgId) {
-      toast.error("Selecteer eerst een handelaar.");
-      return;
-    }
-
-    try {
-      await api.confirmLineMatch({
-        supplier_name: supplierNameForMapping,
-        supplier_code: supplierCodeForMapping,
-        chosen_sku_id: sku.id,
-        persist_mapping: true,
-        organization_id: needsOrgSelector ? selectedOrgId : null,
-      });
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Koppeling opslaan mislukt");
-      return;
+    if (!supplierNameForMapping || !supplierCodeForMapping) {
+      persistenceSkippedReason = "leverancier of supplier code ontbreekt";
+    } else if (needsOrgSelector && !selectedOrgId) {
+      persistenceSkippedReason = "geen handelaar geselecteerd";
+    } else {
+      try {
+        await api.confirmLineMatch({
+          supplier_name: supplierNameForMapping,
+          supplier_code: supplierCodeForMapping,
+          chosen_sku_id: sku.id,
+          persist_mapping: true,
+          organization_id: needsOrgSelector ? selectedOrgId : null,
+        });
+        mappingPersisted = true;
+      } catch (err: unknown) {
+        persistenceSkippedReason =
+          err instanceof Error ? err.message : "koppeling opslaan mislukt";
+      }
     }
 
     setPreview((prev) => {
@@ -275,7 +281,11 @@ export function InboundPage() {
       };
       return { ...prev, lines: nextLines };
     });
-    toast.success(`Gekoppeld aan ${sku.sku_code} (onthouden voor volgende pakbonnen)`);
+    if (mappingPersisted) {
+      toast.success(`Gekoppeld aan ${sku.sku_code} (onthouden voor volgende pakbonnen)`);
+    } else {
+      toast.success(`Gekoppeld aan ${sku.sku_code} (niet onthouden: ${persistenceSkippedReason})`);
+    }
   }
 
   async function createConceptForLine(lineIndex: number) {
