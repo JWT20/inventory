@@ -8,7 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from app.auth import get_current_user, require_product_manager, require_warehouse
+from app.auth import get_current_user, require_inbound_booker, require_product_manager, require_warehouse
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
@@ -221,7 +221,7 @@ def _mapping_to_response(mapping: SupplierSKUMapping) -> SupplierMappingResponse
 
 
 def _resolve_org_id_for_user(user: User, requested_org_id: int | None = None) -> int | None:
-    if user.is_platform_admin:
+    if user.is_platform_admin or user.role == "courier":
         return requested_org_id
     return user.organization_id
 
@@ -433,7 +433,7 @@ async def extract_shipment_preview(
 def create_shipment(
     data: ShipmentCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_product_manager),
+    user: User = Depends(require_inbound_booker),
 ):
     """Create a new inbound shipment (pakbon) with lines."""
     sku_ids = [line.sku_id for line in data.lines]
@@ -443,9 +443,11 @@ def create_shipment(
     if missing:
         raise HTTPException(400, f"SKU's niet gevonden: {missing}")
 
-    if user.is_platform_admin:
+    if user.is_platform_admin or user.role == "courier":
         if not data.organization_id:
-            raise HTTPException(400, "Platform admin must specify organization_id")
+            raise HTTPException(400, "organization_id is verplicht voor deze rol")
+        if not db.get(Organization, data.organization_id):
+            raise HTTPException(404, "Organisatie niet gevonden")
         org_id = data.organization_id
     elif user.organization_id:
         org_id = user.organization_id
@@ -542,13 +544,20 @@ def confirm_line_match(
     body: ConfirmLineMatchRequest,
     organization_id: int | None = None,
     db: Session = Depends(get_db),
-    user: User = Depends(require_product_manager),
+    user: User = Depends(require_inbound_booker),
 ):
     org_id = _resolve_org_id_for_user(user, organization_id)
+    if (user.is_platform_admin or user.role == "courier") and not org_id:
+        raise HTTPException(400, "organization_id is verplicht voor deze rol")
     sku = db.get(SKU, body.chosen_sku_id)
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
-    if not user.is_platform_admin and sku.organization_id != user.organization_id:
+    if user.is_platform_admin:
+        pass
+    elif user.role == "courier":
+        if sku.organization_id != org_id:
+            raise HTTPException(403, "Geen toegang tot deze SKU")
+    elif sku.organization_id != user.organization_id:
         raise HTTPException(403, "Geen toegang tot deze SKU")
 
     normalized_supplier_name = _normalize_supplier_name(body.supplier_name)
@@ -637,7 +646,7 @@ def get_shipment(
 def book_shipment(
     shipment_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_product_manager),
+    user: User = Depends(require_inbound_booker),
 ):
     """Book a shipment: create stock movements for all lines and update balances."""
     shipment = (
@@ -689,13 +698,17 @@ def book_shipment(
 def delete_shipment(
     shipment_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_product_manager),
+    user: User = Depends(require_inbound_booker),
 ):
     """Delete a draft shipment. Booked shipments cannot be deleted."""
     shipment = db.query(InboundShipment).filter(InboundShipment.id == shipment_id).first()
     if not shipment:
         raise HTTPException(404, "Pakbon niet gevonden")
-    if not user.is_platform_admin and shipment.organization_id != user.organization_id:
+    if (
+        not user.is_platform_admin
+        and user.role != "courier"
+        and shipment.organization_id != user.organization_id
+    ):
         raise HTTPException(404, "Pakbon niet gevonden")
     if shipment.status != "draft":
         raise HTTPException(

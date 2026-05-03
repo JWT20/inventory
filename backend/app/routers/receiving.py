@@ -11,7 +11,7 @@ from app.auth import require_warehouse
 from app.config import settings
 from app.database import get_db
 from app.events import publish_event
-from app.models import SKU, Booking, InventoryBalance, Order, OrderLine, ReferenceImage, User
+from app.models import SKU, Booking, InventoryBalance, Order, OrderLine, Organization, ReferenceImage, User
 from app.routers.inventory import apply_stock_movement
 from app.routers.skus import _check_duplicate_embedding, _sku_to_response
 from app.schemas import (
@@ -986,6 +986,7 @@ def create_concept_product(
     response: Response,
     supplier_code: str = Form(...),
     description: str | None = Form(None),
+    organization_id: int | None = Form(None),
     db: Session = Depends(get_db),
     user: User = Depends(require_warehouse),
 ):
@@ -994,11 +995,23 @@ def create_concept_product(
     if not code:
         raise HTTPException(400, "supplier_code is verplicht")
 
+    if organization_id is not None:
+        if not db.get(Organization, organization_id):
+            raise HTTPException(404, "Organisatie niet gevonden")
+        if (
+            user.role in ("owner", "member")
+            and organization_id != user.organization_id
+        ):
+            raise HTTPException(403, "Geen toegang tot deze organisatie")
+        target_org_id: int | None = organization_id
+    else:
+        target_org_id = user.organization_id
+
     base_query = db.query(SKU).filter(SKU.sku_code == code)
 
     def _get_visible_existing() -> SKU | None:
-        if user.organization_id is not None:
-            return base_query.filter(SKU.organization_id == user.organization_id).first()
+        if target_org_id is not None:
+            return base_query.filter(SKU.organization_id == target_org_id).first()
         return base_query.filter(SKU.organization_id.is_(None)).first()
 
     existing = _get_visible_existing()
@@ -1018,7 +1031,7 @@ def create_concept_product(
         description=concept_name,
         category="other",
         active=False,
-        organization_id=user.organization_id,
+        organization_id=target_org_id,
     )
     sku.set_attributes({"status": "concept", "source": "inbound_scan"})
     db.add(sku)
