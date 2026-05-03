@@ -293,6 +293,13 @@ def require_product_manager(user: User = Depends(current_active_user)) -> User:
     return user
 
 
+def require_inbound_booker(user: User = Depends(current_active_user)) -> User:
+    """Platform admin, org owner/member, or courier — anyone who books inbound goods."""
+    if user.is_platform_admin or user.role in ("owner", "member", "courier"):
+        return user
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "Inbound booking access required")
+
+
 def require_can_create_orders(user: User = Depends(current_active_user)) -> User:
     """Must be platform admin, org owner/member, or customer."""
     if user.is_platform_admin:

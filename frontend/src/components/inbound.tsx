@@ -129,8 +129,10 @@ export function InboundPage() {
     void loadSkus();
   }, []);
 
+  const needsOrgSelector = !!user && (user.is_platform_admin || user.role === "courier");
+
   useEffect(() => {
-    if (!user?.is_platform_admin) return;
+    if (!needsOrgSelector) return;
     async function loadOrgs() {
       try {
         const orgs = await api.listOrganizations();
@@ -140,7 +142,7 @@ export function InboundPage() {
       }
     }
     void loadOrgs();
-  }, [user?.is_platform_admin]);
+  }, [needsOrgSelector]);
 
   async function extractFromBlob(blob: Blob) {
     setLoading(true);
@@ -197,15 +199,15 @@ export function InboundPage() {
       return;
     }
 
-    if (user?.is_platform_admin && !selectedOrgId) {
-      toast.error("Selecteer een organisatie om de pakbon voor in te boeken.");
+    if (needsOrgSelector && !selectedOrgId) {
+      toast.error("Selecteer een handelaar om de pakbon voor in te boeken.");
       return;
     }
 
     setConfirmingInbound(true);
     try {
       const created = await api.createShipment({
-        organization_id: user?.is_platform_admin ? selectedOrgId : null,
+        organization_id: needsOrgSelector ? selectedOrgId : null,
         supplier_name: preview.supplier_name || null,
         reference: preview.reference || null,
         lines,
@@ -257,8 +259,17 @@ export function InboundPage() {
       return;
     }
 
+    if (needsOrgSelector && !selectedOrgId) {
+      toast.error("Selecteer eerst een handelaar.");
+      return;
+    }
+
     try {
-      const created = await api.createConceptProduct(supplierCode, line.description || undefined);
+      const created = await api.createConceptProduct(
+        supplierCode,
+        line.description || undefined,
+        needsOrgSelector ? selectedOrgId : null,
+      );
 
       setPreview((prev) => {
         if (!prev) return prev;
@@ -291,13 +302,13 @@ export function InboundPage() {
       <h2 className="text-xl font-bold">Inbound pakbon/factuur</h2>
 
       <Card className="p-3 space-y-3">
-        {user?.is_platform_admin && (
+        {needsOrgSelector && (
           <Select
             value={selectedOrgId ? String(selectedOrgId) : ""}
             onValueChange={(v) => setSelectedOrgId(v ? Number(v) : null)}
           >
             <SelectTrigger className="text-sm">
-              <SelectValue placeholder="Selecteer organisatie..." />
+              <SelectValue placeholder="Selecteer handelaar..." />
             </SelectTrigger>
             <SelectContent>
               {organizations.map((org) => (

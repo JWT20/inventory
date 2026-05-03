@@ -244,10 +244,15 @@ export const api = {
       "image.jpg",
     );
   },
-  createConceptProduct: (supplierCode: string, description?: string) => {
+  createConceptProduct: (
+    supplierCode: string,
+    description?: string,
+    organizationId?: number | null,
+  ) => {
     const form = new FormData();
     form.append("supplier_code", supplierCode);
     if (description) form.append("description", description);
+    if (organizationId) form.append("organization_id", String(organizationId));
     return request("/receiving/concept-product", { method: "POST", body: form });
   },
 
