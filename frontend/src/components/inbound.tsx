@@ -225,12 +225,42 @@ export function InboundPage() {
   }
 
 
-  function linkExistingSku(lineIndex: number) {
+  async function linkExistingSku(lineIndex: number) {
     if (!preview) return;
     const selectedSkuId = selectedSkuByLine[lineIndex];
     const sku = skuOptions.find((s) => s.id === selectedSkuId);
     if (!sku) {
       toast.error("Kies eerst een bestaande SKU");
+      return;
+    }
+
+    const line = preview.lines[lineIndex];
+    const supplierNameForMapping = (preview.supplier_name || "").trim();
+    const supplierCodeForMapping = (line.supplier_code || "").trim();
+
+    if (!supplierNameForMapping) {
+      toast.error("Vul eerst een leverancier in op de pakbon zodat de koppeling onthouden kan worden.");
+      return;
+    }
+    if (!supplierCodeForMapping) {
+      toast.error("Deze regel heeft geen supplier code; koppeling kan niet onthouden worden.");
+      return;
+    }
+    if (needsOrgSelector && !selectedOrgId) {
+      toast.error("Selecteer eerst een handelaar.");
+      return;
+    }
+
+    try {
+      await api.confirmLineMatch({
+        supplier_name: supplierNameForMapping,
+        supplier_code: supplierCodeForMapping,
+        chosen_sku_id: sku.id,
+        persist_mapping: true,
+        organization_id: needsOrgSelector ? selectedOrgId : null,
+      });
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Koppeling opslaan mislukt");
       return;
     }
 
@@ -245,7 +275,7 @@ export function InboundPage() {
       };
       return { ...prev, lines: nextLines };
     });
-    toast.success(`Gekoppeld aan ${sku.sku_code}`);
+    toast.success(`Gekoppeld aan ${sku.sku_code} (onthouden voor volgende pakbonnen)`);
   }
 
   async function createConceptForLine(lineIndex: number) {
@@ -271,6 +301,27 @@ export function InboundPage() {
         needsOrgSelector ? selectedOrgId : null,
       );
 
+      const supplierNameForMapping = (preview.supplier_name || "").trim();
+      let mappingPersisted = false;
+      if (supplierNameForMapping) {
+        try {
+          await api.confirmLineMatch({
+            supplier_name: supplierNameForMapping,
+            supplier_code: supplierCode,
+            chosen_sku_id: created.id,
+            persist_mapping: true,
+            organization_id: needsOrgSelector ? selectedOrgId : null,
+          });
+          mappingPersisted = true;
+        } catch (err: unknown) {
+          toast.error(
+            err instanceof Error
+              ? `Concept aangemaakt, maar koppeling niet opgeslagen: ${err.message}`
+              : "Concept aangemaakt, maar koppeling niet opgeslagen",
+          );
+        }
+      }
+
       setPreview((prev) => {
         if (!prev) return prev;
         const nextLines = [...prev.lines];
@@ -282,7 +333,15 @@ export function InboundPage() {
         };
         return { ...prev, lines: nextLines };
       });
-      toast.success(`Concept product ${created.sku_code} aangemaakt`);
+      if (mappingPersisted) {
+        toast.success(`Concept product ${created.sku_code} aangemaakt en gekoppeld`);
+      } else if (!supplierNameForMapping) {
+        toast.success(
+          `Concept product ${created.sku_code} aangemaakt — vul een leverancier in om de koppeling voor volgende pakbonnen te onthouden`,
+        );
+      } else {
+        toast.success(`Concept product ${created.sku_code} aangemaakt`);
+      }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Concept product aanmaken mislukt");
     }
@@ -490,7 +549,9 @@ export function InboundPage() {
                           <Button
                             type="button"
                             variant="outline"
-                            onClick={() => linkExistingSku(idx)}
+                            onClick={() => {
+                              void linkExistingSku(idx);
+                            }}
                           >
                             Koppel
                           </Button>
