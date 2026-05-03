@@ -4,12 +4,14 @@ interface ImageSlideshowProps {
   images: string[];
   className?: string;
   maxWidth?: string;
+  onImageClick?: (index: number) => void;
 }
 
 export function ImageSlideshow({
   images,
   className = "",
   maxWidth = "200px",
+  onImageClick,
 }: ImageSlideshowProps) {
   const [current, setCurrent] = useState(0);
   const touchStartX = useRef(0);
@@ -63,14 +65,16 @@ export function ImageSlideshow({
   if (total === 1) {
     return (
       <div
-        className={`aspect-square rounded-lg overflow-hidden bg-black mx-auto ${className}`}
+        className={`aspect-square rounded-lg overflow-hidden bg-black mx-auto relative ${className}`}
         style={{ maxWidth }}
       >
         <img
           src={images[0]}
           alt="Referentie"
-          className="w-full h-full object-cover"
+          className={`w-full h-full object-cover ${onImageClick ? "cursor-zoom-in" : ""}`}
+          onClick={onImageClick ? () => onImageClick(0) : undefined}
         />
+        {onImageClick && <ZoomBadge />}
       </div>
     );
   }
@@ -91,13 +95,16 @@ export function ImageSlideshow({
         <img
           src={images[current]}
           alt={`Referentie ${current + 1} van ${total}`}
-          className="w-full h-full object-cover transition-opacity duration-200"
+          className={`w-full h-full object-cover transition-opacity duration-200 ${onImageClick ? "cursor-zoom-in" : ""}`}
+          onClick={onImageClick ? () => onImageClick(current) : undefined}
         />
 
         {/* Counter badge */}
         <div className="absolute top-2 right-2 bg-black/60 text-white text-xs px-2 py-0.5 rounded-full">
           {current + 1} / {total}
         </div>
+
+        {onImageClick && <ZoomBadge />}
 
         {/* Left arrow */}
         <button
@@ -135,6 +142,19 @@ export function ImageSlideshow({
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+function ZoomBadge() {
+  return (
+    <div className="absolute bottom-2 right-2 bg-black/60 text-white p-1 rounded-full pointer-events-none">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="11" cy="11" r="7" />
+        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        <line x1="11" y1="8" x2="11" y2="14" />
+        <line x1="8" y1="11" x2="14" y2="11" />
+      </svg>
     </div>
   );
 }

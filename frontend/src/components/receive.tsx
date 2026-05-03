@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ImageSlideshow } from "@/components/image-slideshow";
+import { ImageLightbox } from "@/components/image-lightbox";
 import { QuantityPicker } from "@/components/quantity-picker";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -554,6 +555,7 @@ function ResultStep({
   const [moreQuantity, setMoreQuantity] = useState(1);
   const [bookingMore, setBookingMore] = useState(false);
   const [totalBooked, setTotalBooked] = useState(booking.booked_quantity ?? 1);
+  const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
 
   async function handleBookMore() {
     if (!booking.sku_id || !booking.order_id) return;
@@ -630,19 +632,32 @@ function ResultStep({
             {booking.scan_image_url && (
               <div>
                 <p className="text-xs text-muted-foreground mb-1 font-semibold text-center">Scan</p>
-                <div className="aspect-square rounded-lg overflow-hidden bg-black">
+                <div className="aspect-square rounded-lg overflow-hidden bg-black relative">
                   <img
                     src={booking.scan_image_url}
                     alt="Scan"
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-cover cursor-zoom-in"
+                    onClick={() => setLightbox({ images: [booking.scan_image_url!], index: 0 })}
                   />
+                  <div className="absolute bottom-2 right-2 bg-black/60 text-white p-1 rounded-full pointer-events-none">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="11" cy="11" r="7" />
+                      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                      <line x1="11" y1="8" x2="11" y2="14" />
+                      <line x1="8" y1="11" x2="14" y2="11" />
+                    </svg>
+                  </div>
                 </div>
               </div>
             )}
             {referenceImages.length > 0 && (
               <div>
                 <p className="text-xs text-muted-foreground mb-1 font-semibold text-center">Referentie</p>
-                <ImageSlideshow images={referenceImages} maxWidth="100%" />
+                <ImageSlideshow
+                  images={referenceImages}
+                  maxWidth="100%"
+                  onImageClick={(i) => setLightbox({ images: referenceImages, index: i })}
+                />
               </div>
             )}
           </div>
@@ -679,6 +694,13 @@ function ResultStep({
           Terug naar orders
         </Button>
       </div>
+
+      <ImageLightbox
+        images={lightbox?.images ?? []}
+        startIndex={lightbox?.index ?? 0}
+        open={lightbox !== null}
+        onClose={() => setLightbox(null)}
+      />
     </>
   );
 }
@@ -696,6 +718,7 @@ function ConfirmStep({
 }) {
   const [confirming, setConfirming] = useState(false);
   const [quantity, setQuantity] = useState(1);
+  const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
   const hasAlternatives = confirmation.alternatives && confirmation.alternatives.length > 0;
   const capRemaining = confirmation.cap_for_customer != null
     ? confirmation.cap_for_customer
@@ -763,12 +786,21 @@ function ConfirmStep({
       {/* Scan image */}
       <Card className="p-4 mb-4">
         <p className="text-xs text-muted-foreground mb-2 font-semibold">Uw scan</p>
-        <div className="aspect-square rounded-lg overflow-hidden bg-black max-w-[200px] mx-auto">
+        <div className="aspect-square rounded-lg overflow-hidden bg-black max-w-[200px] mx-auto relative">
           <img
             src={confirmation.scan_image_url}
             alt="Scan"
-            className="w-full h-full object-cover"
+            className="w-full h-full object-cover cursor-zoom-in"
+            onClick={() => setLightbox({ images: [confirmation.scan_image_url], index: 0 })}
           />
+          <div className="absolute bottom-2 right-2 bg-black/60 text-white p-1 rounded-full pointer-events-none">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="7" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              <line x1="11" y1="8" x2="11" y2="14" />
+              <line x1="8" y1="11" x2="14" y2="11" />
+            </svg>
+          </div>
         </div>
       </Card>
 
@@ -819,6 +851,10 @@ function ConfirmStep({
             <ImageSlideshow
               images={confirmation.reference_image_urls?.length ? confirmation.reference_image_urls : (confirmation.reference_image_url ? [confirmation.reference_image_url] : [])}
               maxWidth="160px"
+              onImageClick={(i) => {
+                const imgs = confirmation.reference_image_urls?.length ? confirmation.reference_image_urls : (confirmation.reference_image_url ? [confirmation.reference_image_url] : []);
+                setLightbox({ images: imgs, index: i });
+              }}
             />
             <Button
               size="lg"
@@ -850,6 +886,10 @@ function ConfirmStep({
               <ImageSlideshow
                 images={alt.reference_image_urls?.length ? alt.reference_image_urls : (alt.reference_image_url ? [alt.reference_image_url] : [])}
                 maxWidth="160px"
+                onImageClick={(i) => {
+                  const imgs = alt.reference_image_urls?.length ? alt.reference_image_urls : (alt.reference_image_url ? [alt.reference_image_url] : []);
+                  setLightbox({ images: imgs, index: i });
+                }}
               />
               <Button
                 size="lg"
@@ -903,6 +943,10 @@ function ConfirmStep({
             <ImageSlideshow
               images={confirmation.reference_image_urls?.length ? confirmation.reference_image_urls : (confirmation.reference_image_url ? [confirmation.reference_image_url] : [])}
               maxWidth="200px"
+              onImageClick={(i) => {
+                const imgs = confirmation.reference_image_urls?.length ? confirmation.reference_image_urls : (confirmation.reference_image_url ? [confirmation.reference_image_url] : []);
+                setLightbox({ images: imgs, index: i });
+              }}
             />
           </Card>
 
@@ -927,6 +971,13 @@ function ConfirmStep({
           </div>
         </>
       )}
+
+      <ImageLightbox
+        images={lightbox?.images ?? []}
+        startIndex={lightbox?.index ?? 0}
+        open={lightbox !== null}
+        onClose={() => setLightbox(null)}
+      />
     </>
   );
 }
@@ -1054,7 +1105,11 @@ function IdentifyResultStep({
   onNext: () => void;
   onDone: () => void;
 }) {
+  const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
+
   if (!result) return null;
+
+  const referenceImages = result.reference_image_urls ?? [];
 
   return (
     <>
@@ -1103,19 +1158,32 @@ function IdentifyResultStep({
             {result.scan_image_url && (
               <div>
                 <p className="text-xs text-muted-foreground mb-1 font-semibold text-center">Scan</p>
-                <div className="aspect-square rounded-lg overflow-hidden bg-black">
+                <div className="aspect-square rounded-lg overflow-hidden bg-black relative">
                   <img
                     src={result.scan_image_url}
                     alt="Scan"
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-cover cursor-zoom-in"
+                    onClick={() => setLightbox({ images: [result.scan_image_url!], index: 0 })}
                   />
+                  <div className="absolute bottom-2 right-2 bg-black/60 text-white p-1 rounded-full pointer-events-none">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="11" cy="11" r="7" />
+                      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                      <line x1="11" y1="8" x2="11" y2="14" />
+                      <line x1="8" y1="11" x2="14" y2="11" />
+                    </svg>
+                  </div>
                 </div>
               </div>
             )}
-            {result.reference_image_urls && result.reference_image_urls.length > 0 && (
+            {referenceImages.length > 0 && (
               <div>
                 <p className="text-xs text-muted-foreground mb-1 font-semibold text-center">Referentie</p>
-                <ImageSlideshow images={result.reference_image_urls} maxWidth="100%" />
+                <ImageSlideshow
+                  images={referenceImages}
+                  maxWidth="100%"
+                  onImageClick={(i) => setLightbox({ images: referenceImages, index: i })}
+                />
               </div>
             )}
           </div>
@@ -1130,6 +1198,13 @@ function IdentifyResultStep({
           Terug naar orders
         </Button>
       </div>
+
+      <ImageLightbox
+        images={lightbox?.images ?? []}
+        startIndex={lightbox?.index ?? 0}
+        open={lightbox !== null}
+        onClose={() => setLightbox(null)}
+      />
     </>
   );
 }
