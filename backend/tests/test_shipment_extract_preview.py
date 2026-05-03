@@ -1,6 +1,6 @@
 from unittest.mock import AsyncMock, patch
 
-from app.models import SKU, SupplierSKUMapping
+from app.models import Organization, SKU, SupplierSKUMapping
 from tests.conftest import auth_header
 
 
@@ -147,6 +147,72 @@ def test_extract_preview_uses_case_insensitive_supplier_mapping(
     assert resp.status_code == 200
     body = resp.json()
     assert body["lines"][0]["matched_sku_code"] == sample_sku.sku_code
+
+
+def test_extract_preview_uses_selected_organization_mapping_for_courier(
+    client, db, courier_token, sample_org, tmp_path
+):
+    other_org = Organization(name="Andere handelaar", slug="andere-handelaar")
+    db.add(other_org)
+    db.flush()
+    selected_sku = SKU(
+        sku_code="ORG-A-WINE",
+        name="Org A Wine",
+        organization_id=sample_org.id,
+    )
+    other_sku = SKU(
+        sku_code="ORG-B-WINE",
+        name="Org B Wine",
+        organization_id=other_org.id,
+    )
+    db.add_all([selected_sku, other_sku])
+    db.flush()
+    db.add_all([
+        SupplierSKUMapping(
+            organization_id=sample_org.id,
+            supplier_name="ANFORS",
+            supplier_code="WINE-ORG",
+            sku_id=selected_sku.id,
+        ),
+        SupplierSKUMapping(
+            organization_id=other_org.id,
+            supplier_name="ANFORS",
+            supplier_code="WINE-ORG",
+            sku_id=other_sku.id,
+        ),
+    ])
+    db.commit()
+
+    mocked = {
+        "supplier_name": "Anfors",
+        "reference": "PKB-ORG",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [
+            {
+                "supplier_code": "WINE-ORG",
+                "description": "Selected org mapping",
+                "quantity_boxes": 1,
+                "confidence": 0.9,
+            }
+        ],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(courier_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={
+                "document_type": "pakbon",
+                "organization_id": str(sample_org.id),
+            },
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["lines"][0]["matched_sku_code"] == "ORG-A-WINE"
 
 
 def test_extract_preview_llm_matches_when_supplier_code_missing(

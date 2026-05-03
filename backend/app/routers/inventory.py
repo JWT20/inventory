@@ -302,6 +302,7 @@ async def extract_shipment_preview(
     file: UploadFile = File(...),
     supplier_name: str = Form(""),
     document_type: str = Form("unknown"),
+    organization_id: int | None = Form(None),
     db: Session = Depends(get_db),
     user: User = Depends(require_warehouse),
 ):
@@ -327,6 +328,11 @@ async def extract_shipment_preview(
         lines: list[ShipmentExtractedLine] = []
         extracted_supplier = str(extracted.get("supplier_name", "") or "")
         normalized_supplier = _normalize_supplier_name(supplier_name) or _normalize_supplier_name(extracted_supplier)
+        target_org_id = user.organization_id
+        if user.is_platform_admin or user.role == "courier":
+            target_org_id = organization_id
+            if target_org_id is not None and not db.get(Organization, target_org_id):
+                raise HTTPException(404, "Organisatie niet gevonden")
         mapping_lookup: dict[tuple[str, str], tuple[int, str, str]] = {}
         sku_candidates: dict[str, tuple[int, str, str]] = {}
         supplier_scoped_candidates: dict[str, tuple[int, str, str]] = {}
@@ -334,7 +340,11 @@ async def extract_shipment_preview(
             mappings = db.query(SupplierSKUMapping, SKU).join(
                 SKU, SKU.id == SupplierSKUMapping.sku_id
             )
-            if not user.is_platform_admin:
+            if target_org_id is not None:
+                mappings = mappings.filter(
+                    SupplierSKUMapping.organization_id == target_org_id
+                )
+            elif not user.is_platform_admin:
                 mappings = mappings.filter(
                     SupplierSKUMapping.organization_id == user.organization_id
                 )
@@ -348,7 +358,9 @@ async def extract_shipment_preview(
                 supplier_scoped_candidates[_normalize_supplier_code(sku.sku_code)] = normalized_mapping
 
         sku_query = db.query(SKU)
-        if not user.is_platform_admin:
+        if target_org_id is not None:
+            sku_query = sku_query.filter(SKU.organization_id == target_org_id)
+        elif not user.is_platform_admin:
             if user.organization_id:
                 sku_query = sku_query.filter(SKU.organization_id == user.organization_id)
             else:

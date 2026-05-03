@@ -332,11 +332,13 @@ export const api = {
     blob: Blob,
     supplierName = "",
     documentType: "pakbon" | "invoice" | "unknown" = "unknown",
+    organizationId?: number | null,
   ) => {
     const form = new FormData();
     form.append("file", blob, "shipment.jpg");
     if (supplierName) form.append("supplier_name", supplierName);
     form.append("document_type", documentType);
+    if (organizationId) form.append("organization_id", String(organizationId));
     return request("/shipments/extract-preview", { method: "POST", body: form });
   },
   createShipment: (data: {
@@ -347,6 +349,21 @@ export const api = {
   }) => json("/shipments", "POST", data),
   bookShipment: (shipmentId: number) =>
     request(`/shipments/${shipmentId}/book`, { method: "POST" }),
+  confirmLineMatch: (data: {
+    supplier_name: string;
+    supplier_code: string;
+    chosen_sku_id: number;
+    persist_mapping?: boolean;
+    organization_id?: number | null;
+  }) => {
+    const qs = data.organization_id ? `?organization_id=${data.organization_id}` : "";
+    return json(`/shipments/confirm-line-match${qs}`, "POST", {
+      supplier_name: data.supplier_name,
+      supplier_code: data.supplier_code,
+      chosen_sku_id: data.chosen_sku_id,
+      persist_mapping: data.persist_mapping ?? true,
+    });
+  },
   updateDefaultPrice: (skuId: number, defaultPrice: number | null) =>
     json(`/skus/${skuId}/price`, "PUT", { default_price: defaultPrice }),
   updateCustomerPrice: (customerId: number, skuId: number, unitPrice: number | null) =>
