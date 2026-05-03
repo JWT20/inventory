@@ -318,7 +318,6 @@ export function ImageLightbox({
       <div
         ref={containerRef}
         className="relative w-full h-full flex items-center justify-center overflow-hidden touch-none select-none"
-        onClick={(e) => e.stopPropagation()}
         onWheel={handleWheel}
         onDoubleClick={handleDoubleClick}
         onMouseDown={handleMouseDown}
@@ -336,6 +335,7 @@ export function ImageLightbox({
           src={images[index]}
           alt={`Afbeelding ${index + 1} van ${total}`}
           draggable={false}
+          onClick={(e) => e.stopPropagation()}
           className="max-w-full max-h-full object-contain"
           style={{
             transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
