@@ -222,6 +222,7 @@ export function InventoryPage() {
       <InventoryDetailDialog
         item={selected}
         canViewPrices={canViewPrices}
+        organizationId={selectedOrganizationId ? Number(selectedOrganizationId) : null}
         onClose={() => setSelected(null)}
         onUpdated={(updated) => {
           setItems((prev) =>
@@ -238,19 +239,28 @@ export function InventoryPage() {
 function InventoryDetailDialog({
   item,
   canViewPrices,
+  organizationId,
   onClose,
   onUpdated,
   onRefresh,
 }: {
   item: InventoryItem | null;
   canViewPrices: boolean;
+  organizationId: number | null;
   onClose: () => void;
   onUpdated: (item: InventoryItem) => void;
   onRefresh: () => void;
 }) {
   const { user } = useAuth();
+  const needsOrganizationSelection =
+    !!user && (user.is_platform_admin || user.role === "courier");
   const canAdjustStock =
-    !!user && (user.is_platform_admin || user.role === "owner" || user.role === "member");
+    !!user &&
+    (user.is_platform_admin ||
+      user.role === "owner" ||
+      user.role === "member" ||
+      user.role === "courier") &&
+    (!needsOrganizationSelection || organizationId != null);
   const canManagePrices = canViewPrices && canAdjustStock;
 
   const [editingDefaultPrice, setEditingDefaultPrice] = useState(false);
@@ -294,7 +304,7 @@ function InventoryDetailDialog({
     const note = stockNoteValue.trim() || null;
     setSavingStock(true);
     try {
-      await api.adjustInventory(item.sku_id, delta, note);
+      await api.adjustInventory(item.sku_id, delta, note, organizationId);
       const quantityOnHand = item.quantity_on_hand + delta;
       onUpdated({
         ...item,
