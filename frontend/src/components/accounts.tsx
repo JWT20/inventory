@@ -45,12 +45,6 @@ interface Organization {
   created_at: string;
 }
 
-interface Supplier {
-  id: number;
-  name: string;
-  created_at: string;
-}
-
 const ROLE_LABELS: Record<string, string> = {
   owner: "Eigenaar",
   member: "Medewerker",
@@ -62,29 +56,20 @@ export function AccountsPage() {
   const { user: me } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [showNew, setShowNew] = useState(false);
   const [showNewOrg, setShowNewOrg] = useState(false);
-  const [showNewSupplier, setShowNewSupplier] = useState(false);
   const [resetUser, setResetUser] = useState<User | null>(null);
   const [editOrg, setEditOrg] = useState<Organization | null>(null);
 
   const load = useCallback(async () => {
+    if (!me?.is_platform_admin) return;
     try {
-      const supplierPromise = api.listSuppliers();
-      if (me?.is_platform_admin) {
-        const [u, o, s] = await Promise.all([
-          api.listUsers(),
-          api.listOrganizations(),
-          supplierPromise,
-        ]);
-        setUsers(u);
-        setOrganizations(o);
-        setSuppliers(s);
-      } else {
-        const [s] = await Promise.all([supplierPromise]);
-        setSuppliers(s);
-      }
+      const [u, o] = await Promise.all([
+        api.listUsers(),
+        api.listOrganizations(),
+      ]);
+      setUsers(u);
+      setOrganizations(o);
     } catch {
       toast.error("Kan gegevens niet laden");
     }
@@ -103,17 +88,6 @@ export function AccountsPage() {
     try {
       await api.deleteUser(u.id);
       toast.success("Gebruiker verwijderd");
-      load();
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Fout");
-    }
-  }
-
-  async function handleDeleteSupplier(s: Supplier) {
-    if (!confirm(`Leverancier '${s.name}' verwijderen?`)) return;
-    try {
-      await api.deleteSupplier(s.id);
-      toast.success("Leverancier verwijderd");
       load();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Fout");
@@ -179,36 +153,6 @@ export function AccountsPage() {
       </div>
       </>
       )}
-
-      {/* Suppliers section */}
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="text-xl font-bold">Leveranciers</h2>
-        <Button size="sm" onClick={() => setShowNewSupplier(true)}>
-          + Leverancier
-        </Button>
-      </div>
-
-      <div className="space-y-3 mb-8">
-        {suppliers.map((s) => (
-          <Card key={s.id} className="p-4">
-            <div className="flex justify-between items-center">
-              <p className="font-semibold">{s.name}</p>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => handleDeleteSupplier(s)}
-              >
-                <Trash2 className="h-4 w-4 text-destructive" />
-              </Button>
-            </div>
-          </Card>
-        ))}
-        {suppliers.length === 0 && (
-          <p className="text-center text-muted-foreground py-4">
-            Geen leveranciers
-          </p>
-        )}
-      </div>
 
       {/* Users section - admin only */}
       {me?.is_platform_admin && (
@@ -289,12 +233,6 @@ export function AccountsPage() {
       <ResetPasswordDialog
         user={resetUser}
         onClose={() => setResetUser(null)}
-      />
-
-      <NewSupplierDialog
-        open={showNewSupplier}
-        onClose={() => setShowNewSupplier(false)}
-        onCreated={load}
       />
     </>
   );
@@ -710,56 +648,3 @@ function ResetPasswordDialog({
   );
 }
 
-function NewSupplierDialog({
-  open,
-  onClose,
-  onCreated,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [name, setName] = useState("");
-
-  useEffect(() => {
-    if (open) setName("");
-  }, [open]);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    try {
-      await api.createSupplier({ name: name.trim() });
-      toast.success(`Leverancier '${name.trim()}' aangemaakt`);
-      onClose();
-      onCreated();
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Fout");
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Nieuwe leverancier</DialogTitle>
-        </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-2">
-            <Label>Naam</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Bijv. Domaine Leflaive"
-              minLength={1}
-              required
-              autoFocus
-            />
-          </div>
-          <Button type="submit" className="w-full">
-            Aanmaken
-          </Button>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
