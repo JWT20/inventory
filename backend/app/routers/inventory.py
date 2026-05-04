@@ -1043,7 +1043,7 @@ def list_movements(
 def adjust_inventory(
     data: InventoryAdjustRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_product_manager),
+    user: User = Depends(require_inbound_booker),
 ):
     """Manual stock adjustment (positive or negative delta)."""
     if data.quantity == 0:
@@ -1053,14 +1053,9 @@ def adjust_inventory(
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
 
-    if user.is_platform_admin:
-        organization_id = sku.organization_id
-    else:
-        if not user.organization_id:
-            raise HTTPException(400, "User has no organization")
-        if sku.organization_id != user.organization_id:
-            raise HTTPException(403, "Geen toegang tot deze SKU")
-        organization_id = user.organization_id
+    organization_id = _resolve_inventory_org_id(db, user, data.organization_id)
+    if sku.organization_id != organization_id:
+        raise HTTPException(403, "Geen toegang tot deze SKU")
 
     movement = apply_stock_movement(
         db,
@@ -1094,21 +1089,16 @@ def adjust_inventory(
 def count_inventory(
     data: InventoryCountRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_product_manager),
+    user: User = Depends(require_inbound_booker),
 ):
     """Physical count: set stock to absolute value by computing delta."""
     sku = db.get(SKU, data.sku_id)
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
 
-    if user.is_platform_admin:
-        organization_id = sku.organization_id
-    else:
-        if not user.organization_id:
-            raise HTTPException(400, "User has no organization")
-        if sku.organization_id != user.organization_id:
-            raise HTTPException(403, "Geen toegang tot deze SKU")
-        organization_id = user.organization_id
+    organization_id = _resolve_inventory_org_id(db, user, data.organization_id)
+    if sku.organization_id != organization_id:
+        raise HTTPException(403, "Geen toegang tot deze SKU")
 
     balance = (
         db.query(InventoryBalance)

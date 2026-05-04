@@ -584,12 +584,14 @@ class InventoryAdjustRequest(BaseModel):
     sku_id: int = Field(..., gt=0)
     quantity: int
     note: str | None = None
+    organization_id: int | None = None
 
 
 class InventoryCountRequest(BaseModel):
     sku_id: int = Field(..., gt=0)
     counted_quantity: int = Field(..., ge=0)
     note: str | None = None
+    organization_id: int | None = None
 
 
 class UpdateDefaultPriceRequest(BaseModel):
