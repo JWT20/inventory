@@ -7,7 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, selectinload
 
-from app.auth import get_current_user, require_admin, require_product_manager
+from app.auth import get_current_user, require_product_manager
 from app.config import settings
 from app.database import get_db
 from app.events import publish_event
@@ -416,11 +416,17 @@ def delete_sku(
     sku_id: int,
     force: bool = False,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_product_manager),
 ):
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU not found")
+    if not user.is_platform_admin:
+        if user.organization_id:
+            if sku.organization_id != user.organization_id:
+                raise HTTPException(404, "SKU not found")
+        elif sku.organization_id is not None:
+            raise HTTPException(404, "SKU not found")
 
     if force:
         db.query(Booking).filter(Booking.sku_id == sku_id).delete()

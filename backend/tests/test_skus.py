@@ -189,12 +189,23 @@ class TestDeleteSKU:
         )
         assert resp.status_code == 404
 
-    def test_merchant_cannot_delete_sku(self, client, merchant_token, sample_sku):
+    def test_owner_deletes_own_org_sku(self, client, db, merchant_token, merchant_user, sample_sku):
+        sample_sku.organization_id = merchant_user.organization_id
+        db.commit()
+
         resp = client.delete(
             f"/api/skus/{sample_sku.id}",
             headers=auth_header(merchant_token),
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 204
+
+    def test_owner_cannot_delete_other_org_sku(self, client, merchant_token, sample_sku):
+        # sample_sku has no organization_id, merchant belongs to an org → 404
+        resp = client.delete(
+            f"/api/skus/{sample_sku.id}",
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 404
 
     def test_delete_nonexistent_sku(self, client, admin_token):
         resp = client.delete(
