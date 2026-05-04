@@ -1,0 +1,35 @@
+---
+title: "Vision-scan inventory voor een wijn-magazijn"
+label: "Live"
+summary: "Producten herkennen via beeld, automatisch koppelen aan voorraad en orderlijst."
+client: "Wijn-MKB"
+date: "2025-09-01"
+---
+
+## Het probleem
+
+In een wijn-magazijn lopen elke dag honderden flessen door de schappen. Het inboeken
+gebeurde handmatig op basis van etiket en SKU-code — foutgevoelig en traag, zeker
+bij flessen die op elkaar lijken.
+
+## De aanpak
+
+Ik heb een vision-systeem gebouwd dat foto's van wijndozen koppelt aan een SKU-database.
+Onder de motorkap:
+
+- **Gemini Vision** voor beschrijving van het etiket
+- **Embedding-vector** per beeld, opgeslagen in PostgreSQL met pgvector
+- **Cosine similarity-match** tegen referentiebeelden van bekende SKU's
+- Werkende app met scan-flow voor magazijnmedewerkers
+
+## Het resultaat
+
+- Inboeken gaat in seconden in plaats van minuten
+- Mismatches worden direct gesignaleerd
+- Nieuwe SKU's leer je toe door één referentiefoto te uploaden
+
+## Wat dit laat zien
+
+Vision-AI is geen toekomstmuziek meer. Voor concrete, herhalende herkenning-taken
+in logistiek of retail is het inmiddels betaalbaar en betrouwbaar genoeg om in
+productie te draaien.
