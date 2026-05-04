@@ -5,6 +5,7 @@ import { ReceivePage } from "@/components/receive";
 import { SKUsPage } from "@/components/skus";
 import { OrdersPage } from "@/components/orders";
 import { AccountsPage } from "@/components/accounts";
+import { SuppliersPage } from "@/components/suppliers";
 import { CustomersPage } from "@/components/customers";
 import { InventoryPage } from "@/components/inventory";
 import { InboundPage } from "@/components/inbound";
@@ -14,13 +15,17 @@ import { LogOut } from "lucide-react";
 
 export { toast };
 
-type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "customers" | "accounts" | "weekly";
+type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "customers" | "suppliers" | "accounts" | "weekly";
 
 const JURJEN_ORG_SLUG = "jurjen";
 
 function Main() {
   const { user, loading, logout } = useAuth();
-  const defaultPage: Page = user?.role === "courier" ? "receive" : "orders";
+  const defaultPage: Page = user?.is_platform_admin
+    ? "accounts"
+    : user?.role === "courier"
+      ? "receive"
+      : "orders";
 
   if (loading) {
     return (
@@ -38,42 +43,47 @@ function Main() {
     {
       id: "orders",
       label: "Orders",
-      show: true,
+      show: !isAdmin,
     },
     {
       id: "receive",
       label: "Scan & Boek",
-      show: isAdmin || user.role === "courier",
+      show: user.role === "courier",
     },
     {
       id: "inbound",
       label: "Inbound",
-      show: isAdmin || user.role === "courier",
+      show: user.role === "courier",
     },
     {
       id: "skus",
       label: "Producten",
-      show: isAdmin || user.role === "owner" || user.role === "member",
+      show: user.role === "owner" || user.role === "member",
     },
     {
       id: "inventory",
       label: "Voorraad",
-      show: isAdmin || user.role === "owner" || user.role === "member" || user.role === "courier",
+      show: user.role === "owner" || user.role === "member" || user.role === "courier",
     },
     {
       id: "weekly",
       label: "Weekoverzicht",
-      show: isAdmin || user.role === "owner" || user.role === "member",
+      show: user.role === "owner" || user.role === "member",
     },
     {
       id: "customers",
       label: "Klanten",
-      show: isAdmin || user.role === "owner" || user.role === "member",
+      show: user.role === "owner" || user.role === "member",
+    },
+    {
+      id: "suppliers",
+      label: "Leveranciers",
+      show: user.role === "owner" || user.role === "member",
     },
     {
       id: "accounts",
-      label: isAdmin ? "Beheer" : "Leveranciers",
-      show: isAdmin || user.role === "owner",
+      label: "Beheer",
+      show: isAdmin,
     },
   ];
 
@@ -115,6 +125,7 @@ function Main() {
             {t.id === "inventory" && <InventoryPage />}
             {t.id === "weekly" && <WeeklySummaryPage />}
             {t.id === "customers" && <CustomersPage />}
+            {t.id === "suppliers" && <SuppliersPage />}
             {t.id === "accounts" && <AccountsPage />}
           </TabsContent>
         ))}
