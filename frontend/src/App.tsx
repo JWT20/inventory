@@ -48,37 +48,37 @@ function Main() {
     {
       id: "receive",
       label: "Scan & Boek",
-      show: user.role === "courier",
+      show: !isAdmin && user.role === "courier",
     },
     {
       id: "inbound",
       label: "Inbound",
-      show: user.role === "courier",
+      show: !isAdmin && user.role === "courier",
     },
     {
       id: "skus",
       label: "Producten",
-      show: user.role === "owner" || user.role === "member",
+      show: !isAdmin && (user.role === "owner" || user.role === "member"),
     },
     {
       id: "inventory",
       label: "Voorraad",
-      show: user.role === "owner" || user.role === "member" || user.role === "courier",
+      show: !isAdmin && (user.role === "owner" || user.role === "member" || user.role === "courier"),
     },
     {
       id: "weekly",
       label: "Weekoverzicht",
-      show: user.role === "owner" || user.role === "member",
+      show: !isAdmin && (user.role === "owner" || user.role === "member"),
     },
     {
       id: "customers",
       label: "Klanten",
-      show: user.role === "owner" || user.role === "member",
+      show: !isAdmin && (user.role === "owner" || user.role === "member"),
     },
     {
       id: "suppliers",
       label: "Leveranciers",
-      show: user.role === "owner" || user.role === "member",
+      show: !isAdmin && (user.role === "owner" || user.role === "member"),
     },
     {
       id: "accounts",
