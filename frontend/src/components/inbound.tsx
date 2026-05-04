@@ -424,6 +424,7 @@ export function InboundPage() {
               accept="image/*"
               onChange={(e) => {
                 const file = e.target.files?.[0];
+                e.target.value = "";
                 if (file) void uploadFallback(file);
               }}
             />
