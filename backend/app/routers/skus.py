@@ -363,7 +363,7 @@ def get_sku(
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU not found")
-    if not user.is_platform_admin:
+    if not user.is_platform_admin and user.role != "courier":
         if user.organization_id:
             if sku.organization_id != user.organization_id:
                 raise HTTPException(404, "SKU not found")
@@ -580,7 +580,7 @@ def list_reference_images(
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU not found")
-    if not user.is_platform_admin:
+    if not user.is_platform_admin and user.role != "courier":
         if user.organization_id:
             if sku.organization_id != user.organization_id:
                 raise HTTPException(404, "SKU not found")
@@ -606,7 +606,7 @@ def list_reference_image_statuses(
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU not found")
-    if not user.is_platform_admin:
+    if not user.is_platform_admin and user.role != "courier":
         if user.organization_id:
             if sku.organization_id != user.organization_id:
                 raise HTTPException(404, "SKU not found")
