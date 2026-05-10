@@ -296,3 +296,37 @@ class TestCourierAccess:
             headers=auth_header(courier_token),
         )
         assert resp.status_code == 403
+
+    def test_courier_can_read_other_org_sku_and_images(
+        self, client, courier_token, db, sample_org,
+    ):
+        from app.models import ReferenceImage, SKU
+        sku = SKU(sku_code="ORG-1", name="Other Org Wine", organization_id=sample_org.id)
+        db.add(sku)
+        db.flush()
+        db.add(ReferenceImage(
+            sku_id=sku.id,
+            image_path="reference_images/x.jpg",
+            processing_status="done",
+        ))
+        db.commit()
+
+        resp = client.get(
+            f"/api/skus/{sku.id}",
+            headers=auth_header(courier_token),
+        )
+        assert resp.status_code == 200
+
+        resp = client.get(
+            f"/api/skus/{sku.id}/images",
+            headers=auth_header(courier_token),
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
+
+        resp = client.get(
+            f"/api/skus/{sku.id}/images/status",
+            headers=auth_header(courier_token),
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
