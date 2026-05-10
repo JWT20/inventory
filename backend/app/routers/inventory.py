@@ -1,3 +1,4 @@
+import hashlib
 import logging
 
 import uuid
@@ -317,6 +318,21 @@ async def extract_shipment_preview(
         if len(image_bytes) > 10 * 1024 * 1024:
             raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
 
+        document_sha256 = hashlib.sha256(image_bytes).hexdigest()
+
+        target_org_id_for_dup = user.organization_id
+        if user.is_platform_admin or user.role == "courier":
+            target_org_id_for_dup = organization_id
+        duplicate_shipment = (
+            db.query(InboundShipment)
+            .filter(
+                InboundShipment.organization_id == target_org_id_for_dup,
+                InboundShipment.document_sha256 == document_sha256,
+            )
+            .order_by(InboundShipment.created_at.desc())
+            .first()
+        )
+
         image_key = f"shipment_docs/{uuid.uuid4().hex}.jpg"
         storage.save(image_key, image_bytes)
 
@@ -438,6 +454,9 @@ async def extract_shipment_preview(
             lines=lines,
             image_url=storage.url(image_key),
             raw_text=str(extracted.get("raw_text", "") or ""),
+            document_sha256=document_sha256,
+            duplicate_of_shipment_id=(duplicate_shipment.id if duplicate_shipment else None),
+            duplicate_of_status=(duplicate_shipment.status if duplicate_shipment else None),
         )
 
 
@@ -468,14 +487,82 @@ def create_shipment(
     normalized_supplier_name = _normalize_supplier_name(data.supplier_name)
     supplier_name_display = data.supplier_name.strip() if data.supplier_name else None
 
+    reference_value = (data.reference or "").strip() or None
+    if reference_value and not data.force:
+        existing = (
+            db.query(InboundShipment)
+            .filter(
+                InboundShipment.organization_id == org_id,
+                InboundShipment.supplier_name == supplier_name_display,
+                InboundShipment.reference == reference_value,
+                InboundShipment.status != "cancelled",
+            )
+            .order_by(InboundShipment.created_at.desc())
+            .first()
+        )
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "duplicate_pakbon",
+                    "message": (
+                        f"Pakbon '{reference_value}' van leverancier "
+                        f"'{supplier_name_display or '(onbekend)'}' bestaat al."
+                    ),
+                    "existing_shipment_id": existing.id,
+                    "existing_status": existing.status,
+                },
+            )
+
+    if reference_value and data.force:
+        suffix = 2
+        candidate = f"{reference_value}-dup-{suffix}"
+        while (
+            db.query(InboundShipment.id)
+            .filter(
+                InboundShipment.organization_id == org_id,
+                InboundShipment.supplier_name == supplier_name_display,
+                InboundShipment.reference == candidate,
+            )
+            .first()
+            is not None
+        ):
+            suffix += 1
+            candidate = f"{reference_value}-dup-{suffix}"
+        reference_value = candidate
+
     shipment = InboundShipment(
         organization_id=org_id,
         supplier_name=supplier_name_display,
-        reference=data.reference,
+        reference=reference_value,
         status="draft",
+        document_sha256=data.document_sha256,
     )
     db.add(shipment)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        existing = (
+            db.query(InboundShipment)
+            .filter(
+                InboundShipment.organization_id == org_id,
+                InboundShipment.supplier_name == supplier_name_display,
+                InboundShipment.reference == reference_value,
+                InboundShipment.status != "cancelled",
+            )
+            .order_by(InboundShipment.created_at.desc())
+            .first()
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "duplicate_pakbon",
+                "message": "Pakbon bestaat al.",
+                "existing_shipment_id": existing.id if existing else None,
+                "existing_status": existing.status if existing else None,
+            },
+        )
 
     for line in data.lines:
         db.add(InboundShipmentLine(

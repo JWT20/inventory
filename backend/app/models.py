@@ -341,6 +341,26 @@ class Booking(Base):
 class InboundShipment(Base):
     """Pakbon / delivery note for incoming goods."""
     __tablename__ = "inbound_shipments"
+    __table_args__ = (
+        Index(
+            "ux_inbound_shipments_org_supplier_ref",
+            "organization_id",
+            "supplier_name",
+            "reference",
+            unique=True,
+            postgresql_where=text(
+                "reference IS NOT NULL AND reference <> '' AND status <> 'cancelled'"
+            ),
+            sqlite_where=text(
+                "reference IS NOT NULL AND reference <> '' AND status <> 'cancelled'"
+            ),
+        ),
+        Index(
+            "ix_inbound_shipments_org_sha",
+            "organization_id",
+            "document_sha256",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     organization_id: Mapped[int | None] = mapped_column(
@@ -349,6 +369,7 @@ class InboundShipment(Base):
     supplier_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft")
+    document_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

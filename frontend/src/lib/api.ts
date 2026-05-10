@@ -345,6 +345,8 @@ export const api = {
     organization_id?: number | null;
     supplier_name?: string | null;
     reference?: string | null;
+    document_sha256?: string | null;
+    force?: boolean;
     lines: { sku_id: number; quantity: number; supplier_code?: string | null }[];
   }) => json("/shipments", "POST", data),
   bookShipment: (shipmentId: number) =>
