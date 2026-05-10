@@ -29,6 +29,13 @@ interface Supplier {
   name: string;
 }
 
+interface Organization {
+  id: number;
+  name: string;
+}
+
+const COURIER_ORG_STORAGE_KEY = "courier.skus.selectedOrgId";
+
 interface SKU {
   id: number;
   sku_code: string;
@@ -71,21 +78,53 @@ function SKUCardSkeleton() {
 
 export function SKUsPage() {
   const { user } = useAuth();
+  const isCourier = user?.role === "courier";
   const [skus, setSkus] = useState<SKU[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<SKU | null>(null);
   const [showNew, setShowNew] = useState(false);
+  const [orgs, setOrgs] = useState<Organization[]>([]);
+  const [courierOrgId, setCourierOrgId] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    const stored = window.localStorage.getItem(COURIER_ORG_STORAGE_KEY);
+    return stored ? Number(stored) : null;
+  });
+
+  useEffect(() => {
+    if (!isCourier) return;
+    api
+      .listOrganizations()
+      .then((list: Organization[]) => setOrgs(list))
+      .catch(() => toast.error("Kan organisaties niet laden"));
+  }, [isCourier]);
+
+  useEffect(() => {
+    if (!isCourier) return;
+    if (courierOrgId === null) {
+      window.localStorage.removeItem(COURIER_ORG_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(COURIER_ORG_STORAGE_KEY, String(courierOrgId));
+    }
+  }, [isCourier, courierOrgId]);
 
   const load = useCallback(async () => {
+    if (isCourier && courierOrgId === null) {
+      setSkus([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     try {
-      setSkus(await api.listSKUs());
+      setSkus(
+        await api.listSKUs(false, isCourier ? courierOrgId ?? undefined : undefined),
+      );
     } catch {
       toast.error("Kan SKU's niet laden");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isCourier, courierOrgId]);
 
   useEffect(() => {
     load();
@@ -102,6 +141,8 @@ export function SKUsPage() {
     );
   });
 
+  const courierNeedsOrg = isCourier && courierOrgId === null;
+
   return (
     <>
       <div className="flex justify-between items-center mb-4">
@@ -113,15 +154,42 @@ export function SKUsPage() {
         )}
       </div>
 
-      <Input
-        placeholder="Zoek op naam, code, producent..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        className="mb-4"
-      />
+      {isCourier && (
+        <div className="mb-4 space-y-1">
+          <Label className="text-xs">Organisatie</Label>
+          <Select
+            value={courierOrgId ? String(courierOrgId) : ""}
+            onValueChange={(v) => setCourierOrgId(v ? Number(v) : null)}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Kies een organisatie" />
+            </SelectTrigger>
+            <SelectContent>
+              {orgs.map((o) => (
+                <SelectItem key={o.id} value={String(o.id)}>
+                  {o.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {!courierNeedsOrg && (
+        <Input
+          placeholder="Zoek op naam, code, producent..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="mb-4"
+        />
+      )}
 
       <div className="space-y-3">
-        {loading ? (
+        {courierNeedsOrg ? (
+          <p className="text-center text-muted-foreground py-10">
+            Kies eerst een organisatie om producten te zien.
+          </p>
+        ) : loading ? (
           Array.from({ length: 3 }).map((_, i) => <SKUCardSkeleton key={i} />)
         ) : filteredSkus.length === 0 ? (
           <p className="text-center text-muted-foreground py-10">
@@ -177,6 +245,7 @@ function SKUDialog({
   onSaved: () => void;
 }) {
   const { user } = useAuth();
+  const isCourier = user?.role === "courier";
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [producent, setProducent] = useState("");
   const [wijnaam, setWijnaam] = useState("");
@@ -368,8 +437,13 @@ function SKUDialog({
     const file = e.target.files?.[0];
     if (!file) return;
     const preview = URL.createObjectURL(file);
-    setStagedFiles((prev) => [...prev, { file, preview }]);
     e.target.value = "";
+    if (isCourier && currentId) {
+      // Couriers have no Save button — upload immediately.
+      uploadImages(currentId, [{ file, preview }], false);
+      return;
+    }
+    setStagedFiles((prev) => [...prev, { file, preview }]);
   }
 
   function removeStagedFile(index: number) {
@@ -464,6 +538,7 @@ function SKUDialog({
                 onChange={(e) => setProducent(e.target.value)}
                 placeholder="Château Margaux"
                 required
+                disabled={isCourier}
               />
             </div>
             <div className="space-y-1">
@@ -473,6 +548,7 @@ function SKUDialog({
                 onChange={(e) => setWijnaam(e.target.value)}
                 placeholder="Grand Vin"
                 required
+                disabled={isCourier}
               />
             </div>
           </div>
@@ -484,6 +560,7 @@ function SKUDialog({
                 onChange={(e) => setWijntype(e.target.value)}
                 placeholder="Rood"
                 required
+                disabled={isCourier}
               />
             </div>
             <div className="space-y-1">
@@ -493,6 +570,7 @@ function SKUDialog({
                 onChange={(e) => setVolume(e.target.value)}
                 placeholder="750"
                 required
+                disabled={isCourier}
               />
             </div>
           </div>
@@ -501,6 +579,7 @@ function SKUDialog({
             <Select
               value={supplierId ? String(supplierId) : "none"}
               onValueChange={(v) => setSupplierId(v === "none" ? null : Number(v))}
+              disabled={isCourier}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Geen leverancier" />
@@ -513,7 +592,7 @@ function SKUDialog({
               </SelectContent>
             </Select>
           </div>
-          {user && user.role !== "courier" && (
+          {!isCourier && (
             <Button type="submit" className="w-full" disabled={submitting}>
               {submitting
                 ? currentId
@@ -563,14 +642,12 @@ function SKUDialog({
                       Mislukt
                     </span>
                   ) : null}
-                  {user && user.role !== "courier" && (
-                    <button
-                      onClick={() => deleteImage(img.id)}
-                      className="absolute top-1 right-1 bg-red-600/80 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center"
-                    >
-                      &times;
-                    </button>
-                  )}
+                  <button
+                    onClick={() => deleteImage(img.id)}
+                    className="absolute top-1 right-1 bg-red-600/80 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center"
+                  >
+                    &times;
+                  </button>
                 </div>
               ))}
               {stagedFiles.map((staged, i) => (
@@ -616,67 +693,61 @@ function SKUDialog({
                     <p className="mt-1 text-xs text-muted-foreground">
                       {img.processing_error_message || "De beeldanalyse is mislukt."}
                     </p>
-                    {user && user.role !== "courier" && (
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {img.processing_error_code === WINE_CHECK_FAILED && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            type="button"
-                            disabled={uploading}
-                            onClick={() => retryImageProcessing(img, true, false)}
-                          >
-                            Toch uploaden
-                          </Button>
-                        )}
-                        {img.processing_error_code === DUPLICATE_CHECK_FAILED && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            type="button"
-                            disabled={uploading}
-                            onClick={() => retryImageProcessing(img, false, true)}
-                          >
-                            Toch toevoegen
-                          </Button>
-                        )}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {img.processing_error_code === WINE_CHECK_FAILED && (
                         <Button
                           size="sm"
-                          variant="ghost"
+                          variant="outline"
                           type="button"
                           disabled={uploading}
-                          onClick={() => deleteImage(img.id)}
+                          onClick={() => retryImageProcessing(img, true, false)}
                         >
-                          Verwijderen
+                          Toch uploaden
                         </Button>
-                      </div>
-                    )}
+                      )}
+                      {img.processing_error_code === DUPLICATE_CHECK_FAILED && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          type="button"
+                          disabled={uploading}
+                          onClick={() => retryImageProcessing(img, false, true)}
+                        >
+                          Toch toevoegen
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        type="button"
+                        disabled={uploading}
+                        onClick={() => deleteImage(img.id)}
+                      >
+                        Verwijderen
+                      </Button>
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
           )}
-          {user && user.role !== "courier" && (
-            <>
-              <Button
-                variant="secondary"
-                size="sm"
-                type="button"
-                disabled={uploading}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                {uploading ? "Uploaden..." : "Foto toevoegen"}
-              </Button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                className="hidden"
-                onChange={handleUpload}
-              />
-            </>
-          )}
+          <Button
+            variant="secondary"
+            size="sm"
+            type="button"
+            disabled={uploading}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {uploading ? "Uploaden..." : "Foto toevoegen"}
+          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={handleUpload}
+          />
         </div>
 
         {user?.is_platform_admin && currentId && (

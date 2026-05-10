@@ -213,3 +213,86 @@ class TestDeleteSKU:
             headers=auth_header(admin_token),
         )
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Courier-specific access: org filter on list + photo CRUD
+# ---------------------------------------------------------------------------
+
+class TestCourierAccess:
+    def test_courier_filters_skus_by_organization(
+        self, client, db, courier_token, sample_org,
+    ):
+        from app.models import Organization, SKU
+        other_org = Organization(name="Other Wijnhandel", slug="other-wijnhandel")
+        db.add(other_org)
+        db.flush()
+        own = SKU(sku_code="OWN-1", name="Own", organization_id=sample_org.id)
+        other = SKU(sku_code="OTH-1", name="Other", organization_id=other_org.id)
+        db.add_all([own, other])
+        db.commit()
+
+        resp = client.get(
+            "/api/skus",
+            params={"organization_id": sample_org.id},
+            headers=auth_header(courier_token),
+        )
+        assert resp.status_code == 200
+        codes = [s["sku_code"] for s in resp.json()]
+        assert codes == ["OWN-1"]
+
+    def test_courier_can_upload_reference_image(
+        self, client, courier_token, sample_sku, db, tmp_path,
+    ):
+        import io
+        from unittest.mock import patch
+        from app.services.storage import LocalStorage
+        from tests.test_wine_filter import (
+            FAKE_IMAGE,
+            _mock_classify_and_describe_package,
+            _mock_generate_embedding,
+            _mock_no_duplicate,
+        )
+
+        with patch("app.routers.skus.classify_and_describe", side_effect=_mock_classify_and_describe_package), \
+             patch("app.routers.skus.generate_embedding", side_effect=_mock_generate_embedding), \
+             patch("app.routers.skus._check_duplicate_embedding", side_effect=_mock_no_duplicate), \
+             patch("app.routers.skus.storage", LocalStorage(str(tmp_path))):
+            resp = client.post(
+                f"/api/skus/{sample_sku.id}/images",
+                files={"file": ("wine.jpg", io.BytesIO(FAKE_IMAGE), "image/jpeg")},
+                headers=auth_header(courier_token),
+            )
+        assert resp.status_code == 201
+
+    def test_courier_can_delete_reference_image(
+        self, client, courier_token, sample_sku, db, tmp_path,
+    ):
+        from unittest.mock import patch
+        from app.models import ReferenceImage
+        from app.services.storage import LocalStorage
+
+        storage = LocalStorage(str(tmp_path))
+        storage.save("reference_images/x.jpg", b"\xff\xd8\xff\xe0")
+        img = ReferenceImage(
+            sku_id=sample_sku.id,
+            image_path="reference_images/x.jpg",
+            processing_status="done",
+        )
+        db.add(img)
+        db.commit()
+
+        with patch("app.routers.skus.storage", storage):
+            resp = client.delete(
+                f"/api/skus/{sample_sku.id}/images/{img.id}",
+                headers=auth_header(courier_token),
+            )
+        assert resp.status_code == 204
+        assert db.get(ReferenceImage, img.id) is None
+
+    def test_courier_cannot_delete_sku(self, client, courier_token, sample_sku):
+        resp = client.delete(
+            f"/api/skus/{sample_sku.id}",
+            headers=auth_header(courier_token),
+        )
+        assert resp.status_code == 403
