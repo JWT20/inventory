@@ -7,7 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, selectinload
 
-from app.auth import get_current_user, require_product_manager
+from app.auth import get_current_user, require_can_edit_photos, require_product_manager
 from app.config import settings
 from app.database import get_db
 from app.events import publish_event
@@ -281,6 +281,7 @@ def list_skus(
     active_only: bool = False,
     limit: int = 100,
     offset: int = 0,
+    organization_id: int | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -296,6 +297,10 @@ def list_skus(
             query = query.filter(SKU.organization_id == user.organization_id)
         # Couriers (no org) are platform-level warehouse workers and need
         # visibility into all SKUs to link inbound shipment lines.
+    if organization_id is not None and (
+        user.is_platform_admin or user.role == "courier"
+    ):
+        query = query.filter(SKU.organization_id == organization_id)
     skus = query.order_by(SKU.name).offset(offset).limit(limit).all()
     return [_sku_to_response(s) for s in skus]
 
@@ -473,7 +478,7 @@ async def upload_reference_image(
     skip_wine_check: bool = Form(False),
     skip_duplicate_check: bool = Form(False),
     db: Session = Depends(get_db),
-    user: User = Depends(require_product_manager),
+    user: User = Depends(require_can_edit_photos),
 ):
     sku = db.get(SKU, sku_id)
     if not sku:
@@ -523,7 +528,7 @@ async def retry_reference_image_processing(
     skip_wine_check: bool = Form(False),
     skip_duplicate_check: bool = Form(False),
     db: Session = Depends(get_db),
-    user: User = Depends(require_product_manager),
+    user: User = Depends(require_can_edit_photos),
 ):
     image = (
         db.query(ReferenceImage)
@@ -622,7 +627,7 @@ def delete_reference_image(
     sku_id: int,
     image_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_product_manager),
+    user: User = Depends(require_can_edit_photos),
 ):
     image = (
         db.query(ReferenceImage)

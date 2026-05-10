@@ -185,8 +185,13 @@ export const api = {
   deleteSupplier: (id: number) => request(`/suppliers/${id}`, { method: "DELETE" }),
 
   // SKUs
-  listSKUs: (activeOnly = false) =>
-    request(`/skus${activeOnly ? "?active_only=true" : ""}`),
+  listSKUs: (activeOnly = false, organizationId?: number) => {
+    const params = new URLSearchParams();
+    if (activeOnly) params.set("active_only", "true");
+    if (organizationId !== undefined) params.set("organization_id", String(organizationId));
+    const qs = params.toString();
+    return request(`/skus${qs ? `?${qs}` : ""}`);
+  },
   createSKU: (data: {
     sku_code?: string;
     name?: string;

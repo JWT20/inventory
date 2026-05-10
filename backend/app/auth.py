@@ -293,6 +293,13 @@ def require_product_manager(user: User = Depends(current_active_user)) -> User:
     return user
 
 
+def require_can_edit_photos(user: User = Depends(current_active_user)) -> User:
+    """Product managers plus couriers — anyone allowed to add/remove SKU photos."""
+    if user.is_platform_admin or user.role in ("owner", "member", "courier"):
+        return user
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "Photo edit access required")
+
+
 def require_inbound_booker(user: User = Depends(current_active_user)) -> User:
     """Platform admin, org owner/member, or courier — anyone who books inbound goods."""
     if user.is_platform_admin or user.role in ("owner", "member", "courier"):
