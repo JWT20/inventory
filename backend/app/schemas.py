@@ -443,6 +443,8 @@ class ShipmentCreate(BaseModel):
     organization_id: int | None = None
     supplier_name: str | None = None
     reference: str | None = None
+    document_sha256: str | None = None
+    force: bool = False
     lines: list[ShipmentLineCreate] = Field(..., min_length=1)
 
 
@@ -500,6 +502,9 @@ class ShipmentExtractPreviewResponse(BaseModel):
     lines: list[ShipmentExtractedLine] = []
     image_url: str = ""
     raw_text: str = ""
+    document_sha256: str | None = None
+    duplicate_of_shipment_id: int | None = None
+    duplicate_of_status: str | None = None
 
 
 # --- Inventory ---

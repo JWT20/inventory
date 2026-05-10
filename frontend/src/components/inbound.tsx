@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "@/App";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -71,6 +71,26 @@ interface ExtractPreview {
   lines: ExtractedLine[];
   image_url: string;
   raw_text: string;
+  document_sha256?: string | null;
+  duplicate_of_shipment_id?: number | null;
+  duplicate_of_status?: string | null;
+}
+
+interface DuplicatePakbonDetail {
+  code: "duplicate_pakbon";
+  message: string;
+  existing_shipment_id: number | null;
+  existing_status: string | null;
+}
+
+function isDuplicatePakbonError(err: unknown): err is ApiError & { detail: DuplicatePakbonDetail } {
+  return (
+    err instanceof ApiError &&
+    err.status === 409 &&
+    typeof err.detail === "object" &&
+    err.detail !== null &&
+    (err.detail as { code?: string }).code === "duplicate_pakbon"
+  );
 }
 
 export function InboundPage() {
@@ -216,12 +236,43 @@ export function InboundPage() {
 
     setConfirmingInbound(true);
     try {
-      const created = await api.createShipment({
-        organization_id: needsOrgSelector ? selectedOrgId : null,
-        supplier_name: preview.supplier_name || null,
-        reference: preview.reference || null,
-        lines,
-      });
+      let created: { id: number };
+      try {
+        created = await api.createShipment({
+          organization_id: needsOrgSelector ? selectedOrgId : null,
+          supplier_name: preview.supplier_name || null,
+          reference: preview.reference || null,
+          document_sha256: preview.document_sha256 ?? null,
+          lines,
+        });
+      } catch (err: unknown) {
+        if (isDuplicatePakbonError(err)) {
+          const existingId = err.detail.existing_shipment_id;
+          const status = err.detail.existing_status;
+          const choice = window.confirm(
+            `${err.detail.message}\n\n` +
+              (existingId
+                ? `Bestaande pakbon #${existingId} (status: ${status ?? "?"}).\n\n`
+                : "") +
+              "OK = toch nieuwe aanmaken (krijgt achtervoegsel -dup-N)\n" +
+              "Annuleren = afbreken",
+          );
+          if (!choice) {
+            toast.error("Inbound afgebroken — pakbon bestaat al.");
+            return;
+          }
+          created = await api.createShipment({
+            organization_id: needsOrgSelector ? selectedOrgId : null,
+            supplier_name: preview.supplier_name || null,
+            reference: preview.reference || null,
+            document_sha256: preview.document_sha256 ?? null,
+            force: true,
+            lines,
+          });
+        } else {
+          throw err;
+        }
+      }
       await api.bookShipment(created.id);
       toast.success(`Inbound geboekt (pakbon #${created.id})`);
       setPreview(null);
@@ -438,6 +489,19 @@ export function InboundPage() {
       {preview && (
         <div className="grid md:grid-cols-2 gap-4">
           <Card className="p-3">
+            {preview.duplicate_of_shipment_id && (
+              <div
+                role="alert"
+                className="mb-3 rounded-md border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900"
+              >
+                ⚠ Dit document is eerder geüpload als pakbon #
+                {preview.duplicate_of_shipment_id}
+                {preview.duplicate_of_status
+                  ? ` (status: ${preview.duplicate_of_status})`
+                  : ""}
+                . Controleer of dit echt een nieuwe pakbon is voor je doorgaat.
+              </div>
+            )}
             <p className="text-sm"><strong>Leverancier:</strong> {preview.supplier_name || "-"}</p>
             <p className="text-sm"><strong>Referentie:</strong> {preview.reference || "-"}</p>
             <p className="text-sm"><strong>Type:</strong> {preview.document_type || "unknown"}</p>
