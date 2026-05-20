@@ -252,6 +252,7 @@ class CustomerSKU(Base):
     discount_value: Mapped[float | None] = mapped_column(
         Numeric(10, 2), nullable=True
     )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     customer: Mapped["Customer"] = relationship(back_populates="sku_links")
     sku: Mapped["SKU"] = relationship()

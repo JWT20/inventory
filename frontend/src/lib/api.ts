@@ -274,6 +274,8 @@ export const api = {
     json(`/customers/${customerId}/skus`, "POST", { sku_ids: skuIds }),
   removeCustomerSKU: (customerId: number, skuId: number) =>
     request(`/customers/${customerId}/skus/${skuId}`, { method: "DELETE" }),
+  reorderCustomerSKUs: (customerId: number, skuIds: number[]) =>
+    json(`/customers/${customerId}/skus/reorder`, "PUT", { sku_ids: skuIds }),
 
   // Orders
   createOrder: (data: {
