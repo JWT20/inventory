@@ -30,6 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Minus, Plus } from "lucide-react";
 
 interface SKUOption {
   id: number;
@@ -692,19 +693,11 @@ function ManualOrderDialog({
                           >
                             {sku.name}
                           </span>
-                          <Input
-                            type="number"
-                            min={1}
-                            className="w-20 h-7 text-sm"
-                            placeholder="Dozen"
-                            value={line.checked ? line.quantity : ""}
+                          <OrderQuantityControl
+                            value={line.quantity}
                             disabled={!line.checked}
-                            onChange={(e) =>
-                              updateSkuQuantity(
-                                customerId,
-                                line.sku_id,
-                                Number(e.target.value) || 1,
-                              )
+                            onChange={(qty) =>
+                              updateSkuQuantity(customerId, line.sku_id, qty)
                             }
                           />
                         </div>
@@ -763,6 +756,80 @@ function ManualOrderDialog({
         </div>
       </SheetContent>
     </Sheet>
+  );
+}
+
+function OrderQuantityControl({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: number;
+  disabled?: boolean;
+  onChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (document.activeElement !== inputRef.current) {
+      setDraft(String(value));
+    }
+  }, [value]);
+
+  function commit(next: number) {
+    const normalized = Math.max(1, next);
+    setDraft(String(normalized));
+    onChange(normalized);
+  }
+
+  return (
+    <div className="flex items-center gap-1 shrink-0">
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="h-8 w-8"
+        disabled={disabled || value <= 1}
+        onClick={() => commit(value - 1)}
+        aria-label="Minder dozen"
+      >
+        <Minus className="h-3.5 w-3.5" />
+      </Button>
+      <Input
+        ref={inputRef}
+        data-order-quantity-input
+        type="text"
+        inputMode="numeric"
+        pattern="[0-9]*"
+        className="h-8 w-12 px-1 text-center text-sm tabular-nums"
+        aria-label="Aantal dozen"
+        placeholder="1"
+        value={disabled ? "" : draft}
+        disabled={disabled}
+        onFocus={(e) => e.currentTarget.select()}
+        onClick={(e) => e.currentTarget.select()}
+        onChange={(e) => {
+          const digits = e.target.value.replace(/\D/g, "");
+          setDraft(digits);
+          if (digits !== "") onChange(Math.max(1, Number(digits)));
+        }}
+        onBlur={() => {
+          if (draft === "") commit(1);
+        }}
+      />
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="h-8 w-8"
+        disabled={disabled}
+        onClick={() => commit(value + 1)}
+        aria-label="Meer dozen"
+      >
+        <Plus className="h-3.5 w-3.5" />
+      </Button>
+    </div>
   );
 }
 
