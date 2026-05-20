@@ -542,12 +542,13 @@ function AssortmentList({
             style={activeWidth ? { width: activeWidth } : undefined}
             className="border rounded-md bg-background shadow-lg pointer-events-none"
           >
-            <RowContent
-              sku={activeSku}
-              customerDiscount={customerDiscount}
-              formatPrice={formatPrice}
-              dragging
-            />
+            <div className="flex items-center gap-3 px-3 py-2">
+              <GripVertical className="h-4 w-4 text-muted-foreground shrink-0" />
+              <span className="font-medium text-sm">{activeSku.sku_name}</span>
+              <span className="text-xs text-muted-foreground font-mono">
+                {activeSku.sku_code}
+              </span>
+            </div>
           </div>
         ) : null}
       </DragOverlay>
