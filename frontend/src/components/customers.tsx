@@ -269,6 +269,7 @@ function CustomerDetail({
       await api.removeCustomerSKU(customerId, skuId);
       toast.success("Product verwijderd uit assortiment");
       reloadSKUs();
+      setDirty(true);
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Fout bij verwijderen");
     }
@@ -460,7 +461,7 @@ function CustomerDetail({
         onClose={() => setShowAddProduct(false)}
         customerId={customerId}
         existingSkuIds={skus.map((s) => s.sku_id)}
-        onAdded={() => { setShowAddProduct(false); reloadSKUs(); }}
+        onAdded={() => { setShowAddProduct(false); reloadSKUs(); setDirty(true); }}
       />
     </div>
   );
