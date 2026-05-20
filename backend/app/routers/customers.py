@@ -14,6 +14,7 @@ from app.schemas import (
     CustomerCreate,
     CustomerResponse,
     CustomerSKUAdd,
+    CustomerSKUReorder,
     CustomerSKUResponse,
     CustomerUpdate,
 )
@@ -32,6 +33,9 @@ def _require_customer_reader(user: User = Depends(get_current_user)) -> User:
 
 
 def _customer_to_response(customer: Customer) -> CustomerResponse:
+    ordered_links = sorted(
+        customer.sku_links, key=lambda l: (l.sort_order, l.id)
+    )
     return CustomerResponse(
         id=customer.id,
         name=customer.name,
@@ -42,8 +46,8 @@ def _customer_to_response(customer: Customer) -> CustomerResponse:
             else None
         ),
         delivery_day=customer.delivery_day,
-        sku_ids=[link.sku_id for link in customer.sku_links],
-        sku_count=len(customer.sku_links),
+        sku_ids=[link.sku_id for link in ordered_links],
+        sku_count=len(ordered_links),
         created_at=customer.created_at,
     )
 
@@ -242,7 +246,7 @@ def list_customer_skus(
         db.query(CustomerSKU, SKU)
         .join(SKU, CustomerSKU.sku_id == SKU.id)
         .filter(CustomerSKU.customer_id == customer_id)
-        .order_by(SKU.name)
+        .order_by(CustomerSKU.sort_order, SKU.name)
         .all()
     )
 
@@ -286,6 +290,14 @@ def add_customer_skus(
     if missing:
         raise HTTPException(404, f"SKU's niet gevonden: {sorted(missing)}")
 
+    from sqlalchemy import func
+
+    next_pos = (
+        db.query(func.coalesce(func.max(CustomerSKU.sort_order), 0))
+        .filter(CustomerSKU.customer_id == customer_id)
+        .scalar()
+    ) or 0
+
     added = 0
     for sku_id in body.sku_ids:
         exists = (
@@ -294,11 +306,46 @@ def add_customer_skus(
             .first()
         )
         if not exists:
-            db.add(CustomerSKU(customer_id=customer_id, sku_id=sku_id))
+            next_pos += 1
+            db.add(
+                CustomerSKU(
+                    customer_id=customer_id,
+                    sku_id=sku_id,
+                    sort_order=next_pos,
+                )
+            )
             added += 1
 
     db.commit()
     return {"added": added}
+
+
+@router.put("/{customer_id}/skus/reorder", status_code=204)
+def reorder_customer_skus(
+    customer_id: int,
+    body: CustomerSKUReorder,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    _get_customer_or_404(customer_id, user, db)
+
+    links = (
+        db.query(CustomerSKU)
+        .filter(CustomerSKU.customer_id == customer_id)
+        .all()
+    )
+    by_sku = {link.sku_id: link for link in links}
+
+    unknown = [sid for sid in body.sku_ids if sid not in by_sku]
+    if unknown:
+        raise HTTPException(
+            400, f"SKU's niet in assortiment van klant: {sorted(unknown)}"
+        )
+
+    for pos, sku_id in enumerate(body.sku_ids, start=1):
+        by_sku[sku_id].sort_order = pos
+
+    db.commit()
 
 
 @router.delete("/{customer_id}/skus/{sku_id}", status_code=204)

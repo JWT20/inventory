@@ -29,7 +29,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowLeft, Plus, Trash2, Search } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Search, GripVertical } from "lucide-react";
+import {
+  DndContext,
+  DragEndEvent,
+  PointerSensor,
+  TouchSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -265,6 +281,20 @@ function CustomerDetail({
     }
   }
 
+  async function handleReorder(nextSkus: CustomerSKU[]) {
+    const previous = skus;
+    setSKUs(nextSkus);
+    try {
+      await api.reorderCustomerSKUs(
+        customerId,
+        nextSkus.map((s) => s.sku_id),
+      );
+    } catch (err: unknown) {
+      setSKUs(previous);
+      toast.error(err instanceof Error ? err.message : "Fout bij herordenen");
+    }
+  }
+
   function markDirty(setter: (v: string) => void, value: string) {
     setter(value);
     setDirty(true);
@@ -379,70 +409,13 @@ function CustomerDetail({
             Geen producten in assortiment
           </p>
         ) : (
-          <div className="border rounded-md overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>SKU</TableHead>
-                  <TableHead>Naam</TableHead>
-                  <TableHead className="text-right">Standaardprijs</TableHead>
-                  <TableHead className="text-right">Klantprijs</TableHead>
-                  <TableHead className="text-right">Korting</TableHead>
-                  <TableHead className="text-right">Effectieve prijs</TableHead>
-                  <TableHead className="w-[50px]" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {skus.map((s) => {
-                  const hasSpecificDiscount = s.discount_type != null;
-                  const usesCustomerDiscount =
-                    !hasSpecificDiscount &&
-                    s.unit_price == null &&
-                    customer.discount_percentage != null;
-
-                  return (
-                    <TableRow key={s.sku_id}>
-                      <TableCell className="font-mono text-sm">{s.sku_code}</TableCell>
-                      <TableCell>{s.sku_name}</TableCell>
-                      <TableCell className="text-right">{formatPrice(s.default_price)}</TableCell>
-                      <TableCell className="text-right">
-                        {s.unit_price != null ? formatPrice(s.unit_price) : (
-                          <span className="text-muted-foreground">-</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {hasSpecificDiscount ? (
-                          <Badge variant="outline">
-                            {s.discount_type === "percentage"
-                              ? `${s.discount_value}%`
-                              : `€${s.discount_value?.toFixed(2)}`}
-                          </Badge>
-                        ) : usesCustomerDiscount ? (
-                          <Badge variant="secondary">
-                            {customer.discount_percentage}%
-                          </Badge>
-                        ) : (
-                          <span className="text-muted-foreground">-</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right font-medium">
-                        {formatPrice(s.effective_price)}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleRemoveSKU(s.sku_id, s.sku_name)}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
+          <AssortmentList
+            skus={skus}
+            customerDiscount={customer.discount_percentage}
+            onReorder={handleReorder}
+            onRemove={handleRemoveSKU}
+            formatPrice={formatPrice}
+          />
         )}
       </Card>
 
@@ -453,6 +426,251 @@ function CustomerDetail({
         existingSkuIds={skus.map((s) => s.sku_id)}
         onAdded={() => { setShowAddProduct(false); load(); }}
       />
+    </div>
+  );
+}
+
+// ── Assortment list (drag-and-drop) ──────────────────────────────────
+
+function AssortmentList({
+  skus,
+  customerDiscount,
+  onReorder,
+  onRemove,
+  formatPrice,
+}: {
+  skus: CustomerSKU[];
+  customerDiscount: number | null;
+  onReorder: (next: CustomerSKU[]) => void;
+  onRemove: (skuId: number, skuName: string) => void;
+  formatPrice: (p: number | null) => string;
+}) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 250, tolerance: 8 },
+    }),
+  );
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = skus.findIndex((s) => s.sku_id === active.id);
+    const newIndex = skus.findIndex((s) => s.sku_id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    onReorder(arrayMove(skus, oldIndex, newIndex));
+  }
+
+  const ids = skus.map((s) => s.sku_id);
+
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragEnd={handleDragEnd}
+    >
+      <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+        {/* Desktop: table layout */}
+        <div className="hidden sm:block border rounded-md overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[40px]" />
+                <TableHead>SKU</TableHead>
+                <TableHead>Naam</TableHead>
+                <TableHead className="text-right">Standaardprijs</TableHead>
+                <TableHead className="text-right">Klantprijs</TableHead>
+                <TableHead className="text-right">Korting</TableHead>
+                <TableHead className="text-right">Effectieve prijs</TableHead>
+                <TableHead className="w-[50px]" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {skus.map((s) => (
+                <SortableTableRow
+                  key={s.sku_id}
+                  sku={s}
+                  customerDiscount={customerDiscount}
+                  onRemove={onRemove}
+                  formatPrice={formatPrice}
+                />
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+
+        {/* Mobile: card layout */}
+        <div className="sm:hidden space-y-2">
+          {skus.map((s) => (
+            <SortableCard
+              key={s.sku_id}
+              sku={s}
+              customerDiscount={customerDiscount}
+              onRemove={onRemove}
+              formatPrice={formatPrice}
+            />
+          ))}
+        </div>
+      </SortableContext>
+    </DndContext>
+  );
+}
+
+function discountBadge(
+  sku: CustomerSKU,
+  customerDiscount: number | null,
+) {
+  const hasSpecificDiscount = sku.discount_type != null;
+  const usesCustomerDiscount =
+    !hasSpecificDiscount && sku.unit_price == null && customerDiscount != null;
+
+  if (hasSpecificDiscount) {
+    return (
+      <Badge variant="outline">
+        {sku.discount_type === "percentage"
+          ? `${sku.discount_value}%`
+          : `€${sku.discount_value?.toFixed(2)}`}
+      </Badge>
+    );
+  }
+  if (usesCustomerDiscount) {
+    return <Badge variant="secondary">{customerDiscount}%</Badge>;
+  }
+  return <span className="text-muted-foreground">-</span>;
+}
+
+function SortableTableRow({
+  sku,
+  customerDiscount,
+  onRemove,
+  formatPrice,
+}: {
+  sku: CustomerSKU;
+  customerDiscount: number | null;
+  onRemove: (skuId: number, skuName: string) => void;
+  formatPrice: (p: number | null) => string;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: sku.sku_id });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : undefined,
+    background: isDragging ? "var(--muted, #f4f4f5)" : undefined,
+  };
+
+  return (
+    <TableRow ref={setNodeRef} style={style}>
+      <TableCell className="w-[40px]">
+        <button
+          {...attributes}
+          {...listeners}
+          aria-label="Verslepen"
+          className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground touch-none p-1"
+          type="button"
+        >
+          <GripVertical className="h-4 w-4" />
+        </button>
+      </TableCell>
+      <TableCell className="font-mono text-sm">{sku.sku_code}</TableCell>
+      <TableCell>{sku.sku_name}</TableCell>
+      <TableCell className="text-right">{formatPrice(sku.default_price)}</TableCell>
+      <TableCell className="text-right">
+        {sku.unit_price != null ? (
+          formatPrice(sku.unit_price)
+        ) : (
+          <span className="text-muted-foreground">-</span>
+        )}
+      </TableCell>
+      <TableCell className="text-right">
+        {discountBadge(sku, customerDiscount)}
+      </TableCell>
+      <TableCell className="text-right font-medium">
+        {formatPrice(sku.effective_price)}
+      </TableCell>
+      <TableCell>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => onRemove(sku.sku_id, sku.sku_name)}
+        >
+          <Trash2 className="h-4 w-4 text-destructive" />
+        </Button>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function SortableCard({
+  sku,
+  customerDiscount,
+  onRemove,
+  formatPrice,
+}: {
+  sku: CustomerSKU;
+  customerDiscount: number | null;
+  onRemove: (skuId: number, skuName: string) => void;
+  formatPrice: (p: number | null) => string;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: sku.sku_id });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : undefined,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="border rounded-md p-3 flex items-start gap-2 bg-background"
+    >
+      <button
+        {...attributes}
+        {...listeners}
+        aria-label="Verslepen"
+        className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground touch-none -ml-1 p-2"
+        type="button"
+      >
+        <GripVertical className="h-5 w-5" />
+      </button>
+      <div className="flex-1 min-w-0 space-y-1">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="font-medium truncate">{sku.sku_name}</div>
+            <div className="text-xs text-muted-foreground font-mono">
+              {sku.sku_code}
+            </div>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="-mr-2 shrink-0"
+            onClick={() => onRemove(sku.sku_id, sku.sku_name)}
+          >
+            <Trash2 className="h-4 w-4 text-destructive" />
+          </Button>
+        </div>
+        <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-sm pt-1">
+          <span className="text-muted-foreground">Standaardprijs</span>
+          <span className="text-right">{formatPrice(sku.default_price)}</span>
+          {sku.unit_price != null && (
+            <>
+              <span className="text-muted-foreground">Klantprijs</span>
+              <span className="text-right">{formatPrice(sku.unit_price)}</span>
+            </>
+          )}
+          <span className="text-muted-foreground">Korting</span>
+          <span className="text-right">
+            {discountBadge(sku, customerDiscount)}
+          </span>
+          <span className="text-muted-foreground">Effectief</span>
+          <span className="text-right font-medium">
+            {formatPrice(sku.effective_price)}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

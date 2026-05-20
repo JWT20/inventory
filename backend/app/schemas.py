@@ -305,6 +305,10 @@ class CustomerSKUAdd(BaseModel):
     sku_ids: list[int] = Field(..., min_length=1)
 
 
+class CustomerSKUReorder(BaseModel):
+    sku_ids: list[int] = Field(..., min_length=1)
+
+
 # --- Order ---
 class OrderLineResponse(BaseModel):
     id: int
