@@ -215,6 +215,15 @@ function CustomerDetail({
     }
   }, [customerId]);
 
+  const reloadSKUs = useCallback(async () => {
+    try {
+      const s = await api.listCustomerSKUs(customerId);
+      setSKUs(s);
+    } catch {
+      toast.error("Fout bij laden producten");
+    }
+  }, [customerId]);
+
   useEffect(() => { load(); }, [load]);
 
   async function save() {
@@ -259,7 +268,7 @@ function CustomerDetail({
     try {
       await api.removeCustomerSKU(customerId, skuId);
       toast.success("Product verwijderd uit assortiment");
-      load();
+      reloadSKUs();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Fout bij verwijderen");
     }
@@ -451,7 +460,7 @@ function CustomerDetail({
         onClose={() => setShowAddProduct(false)}
         customerId={customerId}
         existingSkuIds={skus.map((s) => s.sku_id)}
-        onAdded={() => { setShowAddProduct(false); load(); }}
+        onAdded={() => { setShowAddProduct(false); reloadSKUs(); }}
       />
     </div>
   );
