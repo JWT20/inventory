@@ -382,7 +382,10 @@ class OrderLineUpdate(BaseModel):
 class BookingResponse(BaseModel):
     id: int
     order_id: int
+    order_line_id: int = 0
     order_reference: str
+    context_order_id: int | None = None
+    context_order_reference: str | None = None
     sku_id: int = 0
     sku_code: str
     sku_name: str
@@ -403,6 +406,11 @@ class BookingConfirmation(BaseModel):
     """Returned when a scan requires human approval before booking."""
     needs_confirmation: bool = True
     confirmation_token: str
+    order_id: int = 0
+    order_line_id: int = 0
+    order_reference: str = ""
+    context_order_id: int | None = None
+    context_order_reference: str | None = None
     sku_code: str
     sku_name: str
     confidence: float
