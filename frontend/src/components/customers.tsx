@@ -457,6 +457,7 @@ function AssortmentList({
   onRemove: (skuId: number, skuName: string) => void;
   formatPrice: (p: number | null) => string;
 }) {
+  const isDesktop = useMediaQuery("(min-width: 640px)");
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, {
@@ -482,21 +483,34 @@ function AssortmentList({
       onDragEnd={handleDragEnd}
     >
       <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-        {/* Desktop: card-style rows (table-like grid) */}
-        <div className="hidden sm:block rounded-md border bg-muted/30 p-2">
-          <div className="grid grid-cols-[40px_120px_1fr_110px_110px_110px_120px_50px] gap-2 rounded-sm px-3 py-2 text-xs font-medium text-muted-foreground">
-            <span />
-            <span>SKU</span>
-            <span>Naam</span>
-            <span className="text-right">Standaardprijs</span>
-            <span className="text-right">Klantprijs</span>
-            <span className="text-right">Korting</span>
-            <span className="text-right">Effectieve prijs</span>
-            <span />
+        {isDesktop ? (
+          <div className="rounded-md border bg-muted/30 p-2">
+            <div className="grid grid-cols-[40px_120px_1fr_110px_110px_110px_120px_50px] gap-2 rounded-sm px-3 py-2 text-xs font-medium text-muted-foreground">
+              <span />
+              <span>SKU</span>
+              <span>Naam</span>
+              <span className="text-right">Standaardprijs</span>
+              <span className="text-right">Klantprijs</span>
+              <span className="text-right">Korting</span>
+              <span className="text-right">Effectieve prijs</span>
+              <span />
+            </div>
+            <div className="mt-1 space-y-2">
+              {skus.map((s) => (
+                <SortableRow
+                  key={s.sku_id}
+                  sku={s}
+                  customerDiscount={customerDiscount}
+                  onRemove={onRemove}
+                  formatPrice={formatPrice}
+                />
+              ))}
+            </div>
           </div>
-          <div className="mt-1 space-y-2">
+        ) : (
+          <div className="space-y-2">
             {skus.map((s) => (
-              <SortableRow
+              <SortableCard
                 key={s.sku_id}
                 sku={s}
                 customerDiscount={customerDiscount}
@@ -505,23 +519,31 @@ function AssortmentList({
               />
             ))}
           </div>
-        </div>
-
-        {/* Mobile: card layout */}
-        <div className="sm:hidden space-y-2">
-          {skus.map((s) => (
-            <SortableCard
-              key={s.sku_id}
-              sku={s}
-              customerDiscount={customerDiscount}
-              onRemove={onRemove}
-              formatPrice={formatPrice}
-            />
-          ))}
-        </div>
+        )}
       </SortableContext>
     </DndContext>
   );
+}
+
+function useMediaQuery(query: string) {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia(query).matches;
+  });
+
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    setMatches(media.matches);
+
+    function handleChange(event: MediaQueryListEvent) {
+      setMatches(event.matches);
+    }
+
+    media.addEventListener("change", handleChange);
+    return () => media.removeEventListener("change", handleChange);
+  }, [query]);
+
+  return matches;
 }
 
 function discountBadge(
@@ -552,14 +574,12 @@ function RowContent({
   customerDiscount,
   onRemove,
   formatPrice,
-  dragHandle,
   dragging,
 }: {
   sku: CustomerSKU;
   customerDiscount: number | null;
   onRemove?: (skuId: number, skuName: string) => void;
   formatPrice: (p: number | null) => string;
-  dragHandle?: React.ReactNode;
   dragging?: boolean;
 }) {
   return (
@@ -570,9 +590,7 @@ function RowContent({
       )}
     >
       <div className="flex items-center justify-center">
-        {dragHandle ?? (
-          <GripVertical className="h-4 w-4 text-muted-foreground" />
-        )}
+        <GripVertical className="h-4 w-4 text-muted-foreground" />
       </div>
       <div className="font-mono text-sm truncate">{sku.sku_code}</div>
       <div className="truncate">{sku.sku_name}</div>
@@ -593,6 +611,7 @@ function RowContent({
           <Button
             variant="ghost"
             size="icon"
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={() => onRemove(sku.sku_id, sku.sku_name)}
           >
             <Trash2 className="h-4 w-4 text-destructive" />
@@ -620,6 +639,9 @@ function SortableRow({
     transform: CSS.Transform.toString(transform),
     transition,
     zIndex: isDragging ? 50 : undefined,
+    boxShadow: isDragging
+      ? "0 10px 25px -5px rgba(0,0,0,0.15), 0 8px 10px -6px rgba(0,0,0,0.1)"
+      : undefined,
     position: isDragging ? "relative" : undefined,
   };
 
@@ -627,9 +649,11 @@ function SortableRow({
     <div
       ref={setNodeRef}
       style={style}
+      {...attributes}
+      {...listeners}
       className={cn(
-        "select-none overflow-hidden rounded-md border bg-background transition-shadow",
-        isDragging && "shadow-lg ring-1 ring-ring/10",
+        "select-none overflow-hidden rounded-md border bg-background transition-shadow cursor-grab active:cursor-grabbing",
+        isDragging && "ring-1 ring-ring/10",
       )}
     >
       <RowContent
@@ -638,17 +662,6 @@ function SortableRow({
         onRemove={onRemove}
         formatPrice={formatPrice}
         dragging={isDragging}
-        dragHandle={
-          <button
-            {...attributes}
-            {...listeners}
-            aria-label="Verslepen"
-            className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground touch-none p-1"
-            type="button"
-          >
-            <GripVertical className="h-4 w-4" />
-          </button>
-        }
       />
     </div>
   );
