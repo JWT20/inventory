@@ -447,6 +447,7 @@ function AssortmentList({
   onRemove: (skuId: number, skuName: string) => void;
   formatPrice: (p: number | null) => string;
 }) {
+  const isDesktop = useMediaQuery("(min-width: 640px)");
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, {
@@ -472,21 +473,34 @@ function AssortmentList({
       onDragEnd={handleDragEnd}
     >
       <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-        {/* Desktop: card-style rows (table-like grid) */}
-        <div className="hidden sm:block rounded-md border bg-muted/30 p-2">
-          <div className="grid grid-cols-[40px_120px_1fr_110px_110px_110px_120px_50px] gap-2 rounded-sm px-3 py-2 text-xs font-medium text-muted-foreground">
-            <span />
-            <span>SKU</span>
-            <span>Naam</span>
-            <span className="text-right">Standaardprijs</span>
-            <span className="text-right">Klantprijs</span>
-            <span className="text-right">Korting</span>
-            <span className="text-right">Effectieve prijs</span>
-            <span />
+        {isDesktop ? (
+          <div className="rounded-md border bg-muted/30 p-2">
+            <div className="grid grid-cols-[40px_120px_1fr_110px_110px_110px_120px_50px] gap-2 rounded-sm px-3 py-2 text-xs font-medium text-muted-foreground">
+              <span />
+              <span>SKU</span>
+              <span>Naam</span>
+              <span className="text-right">Standaardprijs</span>
+              <span className="text-right">Klantprijs</span>
+              <span className="text-right">Korting</span>
+              <span className="text-right">Effectieve prijs</span>
+              <span />
+            </div>
+            <div className="mt-1 space-y-2">
+              {skus.map((s) => (
+                <SortableRow
+                  key={s.sku_id}
+                  sku={s}
+                  customerDiscount={customerDiscount}
+                  onRemove={onRemove}
+                  formatPrice={formatPrice}
+                />
+              ))}
+            </div>
           </div>
-          <div className="mt-1 space-y-2">
+        ) : (
+          <div className="space-y-2">
             {skus.map((s) => (
-              <SortableRow
+              <SortableCard
                 key={s.sku_id}
                 sku={s}
                 customerDiscount={customerDiscount}
@@ -495,23 +509,31 @@ function AssortmentList({
               />
             ))}
           </div>
-        </div>
-
-        {/* Mobile: card layout */}
-        <div className="sm:hidden space-y-2">
-          {skus.map((s) => (
-            <SortableCard
-              key={s.sku_id}
-              sku={s}
-              customerDiscount={customerDiscount}
-              onRemove={onRemove}
-              formatPrice={formatPrice}
-            />
-          ))}
-        </div>
+        )}
       </SortableContext>
     </DndContext>
   );
+}
+
+function useMediaQuery(query: string) {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia(query).matches;
+  });
+
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    setMatches(media.matches);
+
+    function handleChange(event: MediaQueryListEvent) {
+      setMatches(event.matches);
+    }
+
+    media.addEventListener("change", handleChange);
+    return () => media.removeEventListener("change", handleChange);
+  }, [query]);
+
+  return matches;
 }
 
 function discountBadge(
