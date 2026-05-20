@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -482,8 +483,8 @@ function AssortmentList({
     >
       <SortableContext items={ids} strategy={verticalListSortingStrategy}>
         {/* Desktop: card-style rows (table-like grid) */}
-        <div className="hidden sm:block border rounded-md divide-y">
-          <div className="grid grid-cols-[40px_120px_1fr_110px_110px_110px_120px_50px] gap-2 px-3 py-2 text-xs font-medium text-muted-foreground bg-muted/40">
+        <div className="hidden sm:block rounded-md border bg-muted/30 p-2">
+          <div className="grid grid-cols-[40px_120px_1fr_110px_110px_110px_120px_50px] gap-2 rounded-sm px-3 py-2 text-xs font-medium text-muted-foreground">
             <span />
             <span>SKU</span>
             <span>Naam</span>
@@ -493,15 +494,17 @@ function AssortmentList({
             <span className="text-right">Effectieve prijs</span>
             <span />
           </div>
-          {skus.map((s) => (
-            <SortableRow
-              key={s.sku_id}
-              sku={s}
-              customerDiscount={customerDiscount}
-              onRemove={onRemove}
-              formatPrice={formatPrice}
-            />
-          ))}
+          <div className="mt-1 space-y-2">
+            {skus.map((s) => (
+              <SortableRow
+                key={s.sku_id}
+                sku={s}
+                customerDiscount={customerDiscount}
+                onRemove={onRemove}
+                formatPrice={formatPrice}
+              />
+            ))}
+          </div>
         </div>
 
         {/* Mobile: card layout */}
@@ -561,7 +564,10 @@ function RowContent({
 }) {
   return (
     <div
-      className={`grid grid-cols-[40px_120px_1fr_110px_110px_110px_120px_50px] gap-2 px-3 py-2 items-center ${dragging ? "" : "bg-background"}`}
+      className={cn(
+        "grid grid-cols-[40px_120px_1fr_110px_110px_110px_120px_50px] items-center gap-2 px-3 py-2",
+        !dragging && "bg-background",
+      )}
     >
       <div className="flex items-center justify-center">
         {dragHandle ?? (
@@ -613,21 +619,25 @@ function SortableRow({
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
-    zIndex: isDragging ? 10 : undefined,
-    boxShadow: isDragging
-      ? "0 10px 25px -5px rgba(0,0,0,0.15), 0 8px 10px -6px rgba(0,0,0,0.1)"
-      : undefined,
+    zIndex: isDragging ? 50 : undefined,
     position: isDragging ? "relative" : undefined,
-    background: isDragging ? "var(--background, #fff)" : undefined,
   };
 
   return (
-    <div ref={setNodeRef} style={style} className="select-none">
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        "select-none overflow-hidden rounded-md border bg-background transition-shadow",
+        isDragging && "shadow-lg ring-1 ring-ring/10",
+      )}
+    >
       <RowContent
         sku={sku}
         customerDiscount={customerDiscount}
         onRemove={onRemove}
         formatPrice={formatPrice}
+        dragging={isDragging}
         dragHandle={
           <button
             {...attributes}
