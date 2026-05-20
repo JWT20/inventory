@@ -20,6 +20,7 @@ interface Order {
   id: number;
   reference: string;
   status: string;
+  delivery_week?: string | null;
   merchant_name: string;
   total_boxes: number;
   booked_boxes: number;
@@ -41,7 +42,10 @@ const DELIVERY_DAY_SHORT: Record<string, string> = {
 interface BookingResult {
   id: number;
   order_id: number;
+  order_line_id?: number;
   order_reference: string;
+  context_order_id?: number | null;
+  context_order_reference?: string | null;
   sku_id?: number;
   sku_code: string;
   sku_name: string;
@@ -68,6 +72,11 @@ interface AlternativeMatch {
 interface ConfirmationData {
   needs_confirmation: true;
   confirmation_token: string;
+  order_id?: number;
+  order_line_id?: number;
+  order_reference?: string;
+  context_order_id?: number | null;
+  context_order_reference?: string | null;
   sku_code: string;
   sku_name: string;
   confidence: number;
@@ -447,9 +456,11 @@ function ScanStep({
     return (
       <>
         <Card className="p-3 mb-3">
-          <p className="text-sm font-semibold">{order.reference}</p>
+          <p className="text-sm font-semibold">
+            Week {order.delivery_week || "onbekend"}
+          </p>
           <p className="text-xs text-muted-foreground">
-            {order.merchant_name} &middot; {order.booked_boxes}/{order.total_boxes} dozen
+            Gestart vanuit {order.reference}
           </p>
         </Card>
 
@@ -477,7 +488,7 @@ function ScanStep({
             >
               <p className="font-semibold text-sm">{c.sku_name}</p>
               <p className="text-xs text-muted-foreground font-mono">
-                {c.sku_code} &middot; nog {c.remaining_quantity} te boeken
+                {c.sku_code} &middot; nog {c.remaining_quantity} open in deze week
               </p>
             </button>
           ))}
@@ -498,9 +509,11 @@ function ScanStep({
   return (
     <>
       <Card className="p-3 mb-3">
-        <p className="text-sm font-semibold">{order.reference}</p>
+        <p className="text-sm font-semibold">
+          Week {order.delivery_week || "onbekend"}
+        </p>
         <p className="text-xs text-muted-foreground">
-          {order.merchant_name} &middot; {order.booked_boxes}/{order.total_boxes} dozen
+          Gestart vanuit {order.reference}
         </p>
       </Card>
 
@@ -558,12 +571,11 @@ function ResultStep({
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
 
   async function handleBookMore() {
-    if (!booking.sku_id || !booking.order_id) return;
+    if (!booking.order_line_id) return;
     setBookingMore(true);
     try {
       const result: BookingResult = await api.bookMore(
-        booking.order_id,
-        booking.sku_id,
+        booking.order_line_id,
         moreQuantity,
         booking.scan_image_url ?? "",
       );
@@ -620,6 +632,12 @@ function ResultStep({
             <span className="text-muted-foreground">Order:</span>{" "}
             {booking.order_reference}
           </p>
+          {booking.context_order_reference && booking.context_order_reference !== booking.order_reference && (
+            <p className="text-sm">
+              <span className="text-muted-foreground">Gestart vanuit:</span>{" "}
+              {booking.context_order_reference}
+            </p>
+          )}
           <p className="text-sm">
             <span className="text-muted-foreground">Klant:</span>{" "}
             {booking.klant}
@@ -665,7 +683,7 @@ function ResultStep({
       </Card>
 
       {/* Book more identical boxes */}
-      {remaining > 0 && booking.sku_id && (
+      {remaining > 0 && booking.order_line_id && (
         <Card className="p-4 mb-4 border-2 border-blue-600/30">
           <p className="text-sm font-semibold text-center mb-3">
             Nog {remaining} dezelfde in deze order

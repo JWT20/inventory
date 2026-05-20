@@ -317,10 +317,9 @@ export const api = {
       body: JSON.stringify({ confirmation_token: token, quantity }),
     }),
 
-  bookMore: (orderId: number, skuId: number, quantity: number, scanImagePath = "") => {
+  bookMore: (orderLineId: number, quantity: number, scanImagePath = "") => {
     const form = new FormData();
-    form.append("order_id", String(orderId));
-    form.append("sku_id", String(skuId));
+    form.append("order_line_id", String(orderLineId));
     form.append("quantity", String(quantity));
     if (scanImagePath) form.append("scan_image_path", scanImagePath);
     return request("/receiving/book/more", { method: "POST", body: form });

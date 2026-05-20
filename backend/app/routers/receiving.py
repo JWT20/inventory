@@ -44,23 +44,149 @@ REGISTER_TOKEN_MAX_AGE = 300  # seconds
 
 # Image processing states that count as "the SKU has a usable reference image".
 _USABLE_REF_STATUSES = ("pending", "processing", "done")
+_DELIVERY_DAY_SORT = {"wednesday": 0, "thursday": 1, "friday": 2}
 
 
-def _missing_reference_candidates(order: "Order") -> list[MissingReferenceCandidate]:
-    """SKUs on this order that have no usable reference image and still need bookings."""
-    out: list[MissingReferenceCandidate] = []
-    for line in order.lines:
+def _scope_label(context_order: "Order") -> str:
+    return "deze week" if context_order.delivery_week else "deze order"
+
+
+def _open_scope_lines_query(db: Session, context_order: "Order", sku_id: int | None = None):
+    """Open active order lines in the context order's week, or the order itself as fallback."""
+    query = (
+        db.query(OrderLine)
+        .join(Order, OrderLine.order_id == Order.id)
+        .filter(
+            Order.status == "active",
+            OrderLine.booked_count < OrderLine.quantity,
+        )
+    )
+    if context_order.delivery_week:
+        query = query.filter(
+            Order.delivery_week == context_order.delivery_week,
+            Order.organization_id == context_order.organization_id,
+        )
+    else:
+        query = query.filter(Order.id == context_order.id)
+    if sku_id is not None:
+        query = query.filter(OrderLine.sku_id == sku_id)
+    return query
+
+
+def _scope_sku_ids(db: Session, context_order: "Order") -> list[int]:
+    lines = _open_scope_lines_query(db, context_order).all()
+    return sorted({line.sku_id for line in lines})
+
+
+def _cap_remaining_by_line(
+    db: Session,
+    context_order: "Order",
+    sku_id: int,
+    lines: list["OrderLine"],
+) -> dict[int, int]:
+    """Return remaining bookable quantity per line, respecting caps per delivery day."""
+    if not context_order.delivery_week:
+        return {
+            line.id: max(0, line.quantity - line.booked_count)
+            for line in lines
+        }
+
+    caps_by_line: dict[int, int] = {}
+    days = sorted({line.delivery_day for line in lines}, key=lambda d: _DELIVERY_DAY_SORT.get(d, 9))
+    for delivery_day in days:
+        caps = compute_allocation(
+            db,
+            context_order.delivery_week,
+            sku_id,
+            context_order.organization_id,
+            delivery_day,
+        )
+        for line in lines:
+            if line.delivery_day != delivery_day:
+                continue
+            cap_total = caps.get(line.id, line.booked_count)
+            caps_by_line[line.id] = max(0, cap_total - line.booked_count)
+    return caps_by_line
+
+
+def _select_order_line_for_scope(
+    db: Session,
+    context_order: "Order",
+    sku_id: int,
+) -> tuple["OrderLine", int]:
+    """Pick the exact order line for a scan: startorder first, then week fallback."""
+    lines = _open_scope_lines_query(db, context_order, sku_id).all()
+    if not lines:
+        raise HTTPException(
+            400,
+            f"SKU staat niet open in {_scope_label(context_order)}",
+        )
+
+    cap_remaining_by_line = _cap_remaining_by_line(db, context_order, sku_id, lines)
+    candidates = [
+        (line, min(line.quantity - line.booked_count, cap_remaining_by_line.get(line.id, 0)))
+        for line in lines
+        if cap_remaining_by_line.get(line.id, 0) > 0
+    ]
+    if not candidates:
+        raise HTTPException(
+            409,
+            f"Toewijzingslimiet bereikt voor deze SKU in {_scope_label(context_order)}",
+        )
+
+    def sort_key(item: tuple["OrderLine", int]) -> tuple[int, int, int]:
+        line, _cap_remaining = item
+        return (
+            0 if line.order_id == context_order.id else 1,
+            _DELIVERY_DAY_SORT.get(line.delivery_day, 9),
+            line.id,
+        )
+
+    return sorted(candidates, key=sort_key)[0]
+
+
+def _missing_reference_candidates(
+    db: Session,
+    context_order: "Order",
+) -> list[MissingReferenceCandidate]:
+    """SKUs in the scan scope that have no usable reference image and still need bookings."""
+    by_sku: dict[int, MissingReferenceCandidate] = {}
+    for line in _open_scope_lines_query(db, context_order).all():
         if line.booked_count >= line.quantity:
             continue
         sku = line.sku
         if not any(img.processing_status in _USABLE_REF_STATUSES for img in sku.reference_images):
-            out.append(MissingReferenceCandidate(
-                sku_id=sku.id,
-                sku_code=sku.sku_code,
-                sku_name=sku.name,
-                remaining_quantity=line.quantity - line.booked_count,
-            ))
-    return out
+            remaining = line.quantity - line.booked_count
+            existing = by_sku.get(sku.id)
+            if existing:
+                existing.remaining_quantity += remaining
+            else:
+                by_sku[sku.id] = MissingReferenceCandidate(
+                    sku_id=sku.id,
+                    sku_code=sku.sku_code,
+                    sku_name=sku.name,
+                    remaining_quantity=remaining,
+                )
+    return list(by_sku.values())
+
+
+def _confirmation_token_data(
+    context_order: "Order",
+    order_line: "OrderLine",
+    sku_id: int,
+    confidence: float,
+    scan_key: str,
+    user_id: int,
+) -> dict:
+    return {
+        "context_order_id": context_order.id,
+        "order_id": order_line.order_id,
+        "order_line_id": order_line.id,
+        "sku_id": sku_id,
+        "confidence": round(confidence, 4),
+        "scan_image_key": scan_key,
+        "user_id": user_id,
+    }
 
 
 def _image_url(key: str | None) -> str:
@@ -305,9 +431,14 @@ async def book_box(
                 "Dit is geen doos of verpakking — scan een productdoos",
             )
 
-        # Only match against SKUs in this order
-        order_sku_ids = [line.sku_id for line in order.lines]
-        candidates = find_best_matches(db, embedding, top_n=5, sku_ids=order_sku_ids)
+        # Match against open SKUs in the selected order's week scope.
+        scope_sku_ids = set(_scope_sku_ids(db, order))
+        if not scope_sku_ids:
+            raise HTTPException(
+                400,
+                f"Geen open orderregels in {_scope_label(order)}",
+            )
+        candidates = find_best_matches(db, embedding, top_n=5, sku_ids=list(scope_sku_ids))
         t_match = time.perf_counter()
 
         matched_sku, confidence, matched_image_path, matched_ref_desc = None, 0.0, None, None
@@ -318,23 +449,23 @@ async def book_box(
         all_candidates = find_best_matches(db, embedding, top_n=5)
 
         if matched_sku is None:
-            # Check if the box matches a SKU outside this order
+            # Check if the box matches a SKU outside this week's open order lines.
             if all_candidates and all_candidates[0][1] >= settings.match_threshold:
                 wrong_sku = all_candidates[0][0]
                 raise HTTPException(
                     409,
                     f"Deze doos lijkt op SKU {wrong_sku.sku_code} ({wrong_sku.name}), "
-                    f"maar die zit niet in deze order",
+                    f"maar die staat niet open in {_scope_label(order)}",
                 )
 
-            # Surface SKUs on this order that have no reference image yet —
+            # Surface SKUs in this scan scope that have no reference image yet —
             # matching cannot succeed against them. The koerier is holding the
             # bottle right now, so they can pick which SKU this box is for and
             # the scan becomes the first reference image.
-            missing_refs = _missing_reference_candidates(order)
+            missing_refs = _missing_reference_candidates(db, order)
             if missing_refs:
                 register_token = _register_signer.dumps({
-                    "order_id": order_id,
+                    "context_order_id": order_id,
                     "scan_image_key": scan_key,
                     "user_id": user.id,
                 })
@@ -343,7 +474,7 @@ async def book_box(
                     detail={
                         "error": "needs_reference_image",
                         "message": (
-                            "Doos niet herkend. Eén of meer SKUs in deze order "
+                            f"Doos niet herkend. Eén of meer SKUs in {_scope_label(order)} "
                             "hebben nog geen referentiefoto. Kies de juiste SKU "
                             "om deze scan als referentiefoto te registreren."
                         ),
@@ -355,7 +486,7 @@ async def book_box(
 
             raise HTTPException(
                 404,
-                "Doos niet herkend — geen match gevonden met SKUs in deze order",
+                f"Doos niet herkend — geen match gevonden met open SKUs in {_scope_label(order)}",
             )
 
         # Collect quality/confidence/ambiguity reasons for logging.
@@ -389,14 +520,14 @@ async def book_box(
                         ))
 
         # Cross-check: if the unrestricted catalog has a better or close match
-        # with a *different* SKU, flag ambiguity even when the order has only one SKU.
+        # with a *different* SKU that is also open in scope, flag ambiguity.
         for s, sim, img_path, _ref_desc in all_candidates:
             if s.id == matched_sku.id:
                 continue
-            if sim >= confidence - settings.ambiguity_margin:
+            if s.id in scope_sku_ids and sim >= confidence - settings.ambiguity_margin:
                 if not any(a.sku_id == s.id for a in alternatives):
                     reason.append(
-                        f"better match outside order ({s.sku_code} at {sim:.3f} vs order match at {confidence:.3f})"
+                        f"close match in scope ({s.sku_code} at {sim:.3f} vs best match at {confidence:.3f})"
                     )
                     alternatives.append(AlternativeMatch(
                         sku_id=s.id,
@@ -413,48 +544,30 @@ async def book_box(
                 matched_sku.sku_code, ", ".join(reason),
             )
 
-        token_data = {
-            "order_id": order_id,
-            "sku_id": matched_sku.id,
-            "confidence": round(confidence, 4),
-            "scan_image_key": scan_key,
-            "user_id": user.id,
-        }
-        token = _signer.dumps(token_data)
+        order_line, cap_remaining_for_line = _select_order_line_for_scope(db, order, matched_sku.id)
+        booking_order = order_line.order
+        token = _signer.dumps(_confirmation_token_data(
+            order, order_line, matched_sku.id, confidence, scan_key, user.id
+        ))
 
         # Generate a confirmation token for each alternative
         for alt in alternatives:
-            alt_token_data = {
-                "order_id": order_id,
-                "sku_id": alt.sku_id,
-                "confidence": round(alt.confidence, 4),
-                "scan_image_key": scan_key,
-                "user_id": user.id,
-            }
-            alt.confirmation_token = _signer.dumps(alt_token_data)
-
-        # Calculate remaining quantity for the matched SKU in this order
-        order_line = (
-            db.query(OrderLine)
-            .filter(
-                OrderLine.order_id == order_id,
-                OrderLine.sku_id == matched_sku.id,
-                OrderLine.booked_count < OrderLine.quantity,
-            )
-            .first()
-        )
-        if not order_line:
-            raise HTTPException(
-                400,
-                f"SKU {matched_sku.sku_code} is al volledig geboekt in deze order",
-            )
+            try:
+                alt_line, _alt_cap_remaining = _select_order_line_for_scope(db, order, alt.sku_id)
+            except HTTPException:
+                alt.confirmation_token = ""
+                continue
+            alt.confirmation_token = _signer.dumps(_confirmation_token_data(
+                order, alt_line, alt.sku_id, alt.confidence, scan_key, user.id
+            ))
+        alternatives = [alt for alt in alternatives if alt.confirmation_token]
 
         # Pre-check stock availability (with row lock to prevent race conditions)
         balance = (
             db.query(InventoryBalance)
             .filter(
                 InventoryBalance.sku_id == matched_sku.id,
-                InventoryBalance.organization_id == order.organization_id,
+                InventoryBalance.organization_id == booking_order.organization_id,
             )
             .with_for_update()
             .first()
@@ -468,18 +581,9 @@ async def book_box(
         remaining = order_line.quantity - order_line.booked_count
 
         # Compute allocation cap for this customer/day
-        cap_for_customer: int | None = None
-        ordered_by_customer: int | None = None
-        if order.delivery_week and order_line.delivery_day:
-            caps = compute_allocation(
-                db, order.delivery_week, matched_sku.id,
-                order.organization_id, order_line.delivery_day,
-            )
-            cap_total = caps.get(order_line.id)
-            if cap_total is not None:
-                cap_for_customer = max(0, cap_total - order_line.booked_count)
-                ordered_by_customer = order_line.quantity
-                remaining = min(remaining, cap_for_customer)
+        cap_for_customer: int | None = cap_remaining_for_line if order.delivery_week else None
+        ordered_by_customer: int | None = order_line.quantity if order.delivery_week else None
+        remaining = min(remaining, cap_remaining_for_line)
 
         t_done = time.perf_counter()
         logger.info(
@@ -495,6 +599,11 @@ async def book_box(
 
         return BookingConfirmation(
             confirmation_token=token,
+            order_id=booking_order.id,
+            order_line_id=order_line.id,
+            order_reference=booking_order.reference,
+            context_order_id=order.id,
+            context_order_reference=order.reference,
             sku_code=matched_sku.sku_code,
             sku_name=matched_sku.name,
             confidence=confidence,
@@ -525,30 +634,39 @@ def confirm_booking(
     except BadSignature:
         raise HTTPException(400, "Ongeldig bevestigingstoken")
 
-    order = db.get(Order, data["order_id"])
-    if not order:
-        raise HTTPException(404, "Order niet gevonden")
-    if order.status != "active":
-        raise HTTPException(400, f"Order is niet actief (status: {order.status})")
-
     sku = db.get(SKU, data["sku_id"])
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
 
-    order_line = (
-        db.query(OrderLine)
-        .filter(
-            OrderLine.order_id == data["order_id"],
-            OrderLine.sku_id == data["sku_id"],
-            OrderLine.booked_count < OrderLine.quantity,
+    order_line = None
+    if data.get("order_line_id"):
+        order_line = db.get(OrderLine, data["order_line_id"])
+        if order_line and order_line.sku_id != data["sku_id"]:
+            raise HTTPException(400, "Bevestiging hoort niet bij deze SKU")
+        if order_line and order_line.booked_count >= order_line.quantity:
+            order_line = None
+    else:
+        # Backward-compatible path for short-lived tokens issued before this change.
+        order_line = (
+            db.query(OrderLine)
+            .filter(
+                OrderLine.order_id == data["order_id"],
+                OrderLine.sku_id == data["sku_id"],
+                OrderLine.booked_count < OrderLine.quantity,
+            )
+            .first()
         )
-        .first()
-    )
     if not order_line:
         raise HTTPException(
             400,
-            f"SKU {sku.sku_code} is al volledig geboekt in deze order",
+            f"SKU {sku.sku_code} is al volledig geboekt voor deze orderregel",
         )
+
+    order = order_line.order
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+    if order.status != "active":
+        raise HTTPException(400, f"Order is niet actief (status: {order.status})")
 
     available = order_line.quantity - order_line.booked_count
     quantity = min(body.quantity, available)
@@ -579,7 +697,7 @@ def confirm_booking(
     last_booking = None
     for _ in range(quantity):
         booking = Booking(
-            order_id=data["order_id"],
+            order_id=order.id,
             order_line_id=order_line.id,
             sku_id=data["sku_id"],
             scanned_by=user.id,
@@ -630,10 +748,18 @@ def confirm_booking(
     )
 
     scan_key = data.get("scan_image_key", data.get("scan_image_path", ""))
+    context_order_reference = None
+    if data.get("context_order_id"):
+        context_order = db.get(Order, data["context_order_id"])
+        context_order_reference = context_order.reference if context_order else None
+
     return BookingResponse(
         id=last_booking.id,
         order_id=order.id,
+        order_line_id=order_line.id,
         order_reference=order.reference,
+        context_order_id=data.get("context_order_id"),
+        context_order_reference=context_order_reference,
         sku_id=sku.id,
         sku_code=sku.sku_code,
         sku_name=sku.name,
@@ -671,33 +797,21 @@ async def register_reference_and_book(
     except BadSignature:
         raise HTTPException(400, "Ongeldig registratietoken")
 
-    order_id = data["order_id"]
+    context_order_id = data.get("context_order_id", data.get("order_id"))
     scan_image_key = data["scan_image_key"]
 
-    order = db.get(Order, order_id)
-    if not order:
+    context_order = db.get(Order, context_order_id)
+    if not context_order:
         raise HTTPException(404, "Order niet gevonden")
-    if order.status != "active":
-        raise HTTPException(400, f"Order is niet actief (status: {order.status})")
+    if context_order.status != "active":
+        raise HTTPException(400, f"Order is niet actief (status: {context_order.status})")
 
     sku = db.get(SKU, body.sku_id)
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
 
-    order_line = (
-        db.query(OrderLine)
-        .filter(
-            OrderLine.order_id == order_id,
-            OrderLine.sku_id == body.sku_id,
-            OrderLine.booked_count < OrderLine.quantity,
-        )
-        .first()
-    )
-    if not order_line:
-        raise HTTPException(
-            400,
-            f"SKU {sku.sku_code} zit niet (meer) in deze order",
-        )
+    order_line, cap_remaining_for_line = _select_order_line_for_scope(db, context_order, body.sku_id)
+    order = order_line.order
 
     # Refuse to overwrite an existing reference — the koerier should only land
     # here when the SKU genuinely has no usable image.
@@ -736,7 +850,11 @@ async def register_reference_and_book(
 
     publish_event(
         "reference_image_registered_at_scan",
-        details={"sku_code": sku.sku_code, "order_reference": order.reference},
+        details={
+            "sku_code": sku.sku_code,
+            "order_reference": order.reference,
+            "context_order_reference": context_order.reference,
+        },
         user=user,
         resource_type="sku",
         resource_id=sku.id,
@@ -744,19 +862,21 @@ async def register_reference_and_book(
 
     # Hand back a booking-confirm token so the UI can finalize the booking
     # without forcing the koerier to scan again.
-    confirm_token = _signer.dumps({
-        "order_id": order_id,
-        "sku_id": sku.id,
-        "confidence": 1.0,
-        "scan_image_key": scan_image_key,
-        "user_id": user.id,
-    })
+    confirm_token = _signer.dumps(_confirmation_token_data(
+        context_order, order_line, sku.id, 1.0, scan_image_key, user.id
+    ))
 
     remaining = order_line.quantity - order_line.booked_count
+    remaining = min(remaining, cap_remaining_for_line)
     rolcontainer = f"KLANT {order_line.customer_name.upper()}"
 
     return BookingConfirmation(
         confirmation_token=confirm_token,
+        order_id=order.id,
+        order_line_id=order_line.id,
+        order_reference=order.reference,
+        context_order_id=context_order.id,
+        context_order_reference=context_order.reference,
         sku_code=sku.sku_code,
         sku_name=sku.name,
         confidence=1.0,
@@ -767,14 +887,17 @@ async def register_reference_and_book(
         reference_image_urls=_all_reference_image_urls(db, sku.id),
         alternatives=[],
         remaining_quantity=remaining,
+        cap_for_customer=cap_remaining_for_line if context_order.delivery_week else None,
+        ordered_by_customer=order_line.quantity if context_order.delivery_week else None,
     )
 
 
 @router.post("/book/more", response_model=BookingResponse)
 @observe()
 def book_more(
-    order_id: int = Form(...),
-    sku_id: int = Form(...),
+    order_line_id: int | None = Form(None),
+    order_id: int | None = Form(None),
+    sku_id: int | None = Form(None),
     quantity: int = Form(..., ge=1),
     scan_image_path: str = Form(""),
     db: Session = Depends(get_db),
@@ -784,30 +907,41 @@ def book_more(
 
     Used after an initial scan+book to add more of the same SKU.
     """
-    order = db.get(Order, order_id)
+    if order_line_id is not None:
+        order_line = db.get(OrderLine, order_line_id)
+        if not order_line:
+            raise HTTPException(404, "Orderregel niet gevonden")
+        if order_line.booked_count >= order_line.quantity:
+            order_line = None
+    elif order_id is not None and sku_id is not None:
+        # Backward-compatible path for clients that have not yet sent order_line_id.
+        order_line = (
+            db.query(OrderLine)
+            .filter(
+                OrderLine.order_id == order_id,
+                OrderLine.sku_id == sku_id,
+                OrderLine.booked_count < OrderLine.quantity,
+            )
+            .first()
+        )
+    else:
+        raise HTTPException(400, "order_line_id is verplicht")
+
+    if not order_line:
+        raise HTTPException(
+            400,
+            "Deze orderregel is al volledig geboekt",
+        )
+
+    order = order_line.order
     if not order:
         raise HTTPException(404, "Order niet gevonden")
     if order.status != "active":
         raise HTTPException(400, f"Order is niet actief (status: {order.status})")
 
-    sku = db.get(SKU, sku_id)
+    sku = db.get(SKU, order_line.sku_id)
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
-
-    order_line = (
-        db.query(OrderLine)
-        .filter(
-            OrderLine.order_id == order_id,
-            OrderLine.sku_id == sku_id,
-            OrderLine.booked_count < OrderLine.quantity,
-        )
-        .first()
-    )
-    if not order_line:
-        raise HTTPException(
-            400,
-            f"SKU {sku.sku_code} is al volledig geboekt in deze order",
-        )
 
     available = order_line.quantity - order_line.booked_count
     actual_quantity = min(quantity, available)
@@ -838,9 +972,9 @@ def book_more(
     last_booking = None
     for _ in range(actual_quantity):
         booking = Booking(
-            order_id=order_id,
+            order_id=order.id,
             order_line_id=order_line.id,
-            sku_id=sku_id,
+            sku_id=sku.id,
             scanned_by=user.id,
             scan_image_path=scan_image_path or None,
             confidence=None,
@@ -853,7 +987,7 @@ def book_more(
     # Deduct stock
     apply_stock_movement(
         db,
-        sku_id=sku_id,
+        sku_id=sku.id,
         organization_id=order.organization_id,
         quantity=-actual_quantity,
         movement_type="pick",
@@ -890,6 +1024,7 @@ def book_more(
     return BookingResponse(
         id=last_booking.id,
         order_id=order.id,
+        order_line_id=order_line.id,
         order_reference=order.reference,
         sku_id=sku.id,
         sku_code=sku.sku_code,
