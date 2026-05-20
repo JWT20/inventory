@@ -33,7 +33,9 @@ import { ArrowLeft, Plus, Trash2, Search, GripVertical } from "lucide-react";
 import {
   DndContext,
   DragEndEvent,
-  PointerSensor,
+  DragOverlay,
+  DragStartEvent,
+  MouseSensor,
   TouchSensor,
   closestCenter,
   useSensor,
@@ -299,6 +301,7 @@ function CustomerDetail({
         customerId,
         nextSkus.map((s) => s.sku_id),
       );
+      setDirty(true);
     } catch (err: unknown) {
       setSKUs(previous);
       toast.error(err instanceof Error ? err.message : "Fout bij herordenen");
@@ -455,14 +458,20 @@ function AssortmentList({
   onRemove: (skuId: number, skuName: string) => void;
   formatPrice: (p: number | null) => string;
 }) {
+  const [activeId, setActiveId] = useState<number | null>(null);
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, {
       activationConstraint: { delay: 250, tolerance: 8 },
     }),
   );
 
+  function handleDragStart(event: DragStartEvent) {
+    setActiveId(event.active.id as number);
+  }
+
   function handleDragEnd(event: DragEndEvent) {
+    setActiveId(null);
     const { active, over } = event;
     if (!over || active.id === over.id) return;
     const oldIndex = skus.findIndex((s) => s.sku_id === active.id);
@@ -472,41 +481,38 @@ function AssortmentList({
   }
 
   const ids = skus.map((s) => s.sku_id);
+  const activeSku = activeId != null ? skus.find((s) => s.sku_id === activeId) : null;
 
   return (
     <DndContext
       sensors={sensors}
       collisionDetection={closestCenter}
+      onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      onDragCancel={() => setActiveId(null)}
     >
       <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-        {/* Desktop: table layout */}
-        <div className="hidden sm:block border rounded-md overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[40px]" />
-                <TableHead>SKU</TableHead>
-                <TableHead>Naam</TableHead>
-                <TableHead className="text-right">Standaardprijs</TableHead>
-                <TableHead className="text-right">Klantprijs</TableHead>
-                <TableHead className="text-right">Korting</TableHead>
-                <TableHead className="text-right">Effectieve prijs</TableHead>
-                <TableHead className="w-[50px]" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {skus.map((s) => (
-                <SortableTableRow
-                  key={s.sku_id}
-                  sku={s}
-                  customerDiscount={customerDiscount}
-                  onRemove={onRemove}
-                  formatPrice={formatPrice}
-                />
-              ))}
-            </TableBody>
-          </Table>
+        {/* Desktop: card-style rows (table-like grid) */}
+        <div className="hidden sm:block border rounded-md divide-y">
+          <div className="grid grid-cols-[40px_120px_1fr_110px_110px_110px_120px_50px] gap-2 px-3 py-2 text-xs font-medium text-muted-foreground bg-muted/40">
+            <span />
+            <span>SKU</span>
+            <span>Naam</span>
+            <span className="text-right">Standaardprijs</span>
+            <span className="text-right">Klantprijs</span>
+            <span className="text-right">Korting</span>
+            <span className="text-right">Effectieve prijs</span>
+            <span />
+          </div>
+          {skus.map((s) => (
+            <SortableRow
+              key={s.sku_id}
+              sku={s}
+              customerDiscount={customerDiscount}
+              onRemove={onRemove}
+              formatPrice={formatPrice}
+            />
+          ))}
         </div>
 
         {/* Mobile: card layout */}
@@ -522,6 +528,27 @@ function AssortmentList({
           ))}
         </div>
       </SortableContext>
+
+      <DragOverlay dropAnimation={null}>
+        {activeSku ? (
+          <div className="hidden sm:block border rounded-md bg-background shadow-lg">
+            <RowContent
+              sku={activeSku}
+              customerDiscount={customerDiscount}
+              formatPrice={formatPrice}
+              dragging
+            />
+          </div>
+        ) : null}
+        {activeSku ? (
+          <div className="sm:hidden border rounded-md bg-background shadow-lg p-3">
+            <div className="font-medium">{activeSku.sku_name}</div>
+            <div className="text-xs text-muted-foreground font-mono">
+              {activeSku.sku_code}
+            </div>
+          </div>
+        ) : null}
+      </DragOverlay>
     </DndContext>
   );
 }
@@ -549,7 +576,60 @@ function discountBadge(
   return <span className="text-muted-foreground">-</span>;
 }
 
-function SortableTableRow({
+function RowContent({
+  sku,
+  customerDiscount,
+  onRemove,
+  formatPrice,
+  dragHandle,
+  dragging,
+}: {
+  sku: CustomerSKU;
+  customerDiscount: number | null;
+  onRemove?: (skuId: number, skuName: string) => void;
+  formatPrice: (p: number | null) => string;
+  dragHandle?: React.ReactNode;
+  dragging?: boolean;
+}) {
+  return (
+    <div
+      className={`grid grid-cols-[40px_120px_1fr_110px_110px_110px_120px_50px] gap-2 px-3 py-2 items-center ${dragging ? "" : "bg-background"}`}
+    >
+      <div className="flex items-center justify-center">
+        {dragHandle ?? (
+          <GripVertical className="h-4 w-4 text-muted-foreground" />
+        )}
+      </div>
+      <div className="font-mono text-sm truncate">{sku.sku_code}</div>
+      <div className="truncate">{sku.sku_name}</div>
+      <div className="text-right text-sm">{formatPrice(sku.default_price)}</div>
+      <div className="text-right text-sm">
+        {sku.unit_price != null ? (
+          formatPrice(sku.unit_price)
+        ) : (
+          <span className="text-muted-foreground">-</span>
+        )}
+      </div>
+      <div className="text-right">{discountBadge(sku, customerDiscount)}</div>
+      <div className="text-right font-medium text-sm">
+        {formatPrice(sku.effective_price)}
+      </div>
+      <div className="flex justify-end">
+        {onRemove ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => onRemove(sku.sku_id, sku.sku_name)}
+          >
+            <Trash2 className="h-4 w-4 text-destructive" />
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function SortableRow({
   sku,
   customerDiscount,
   onRemove,
@@ -565,49 +645,29 @@ function SortableTableRow({
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : undefined,
-    background: isDragging ? "var(--muted, #f4f4f5)" : undefined,
+    opacity: isDragging ? 0 : undefined,
   };
 
   return (
-    <TableRow ref={setNodeRef} style={style}>
-      <TableCell className="w-[40px]">
-        <button
-          {...attributes}
-          {...listeners}
-          aria-label="Verslepen"
-          className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground touch-none p-1"
-          type="button"
-        >
-          <GripVertical className="h-4 w-4" />
-        </button>
-      </TableCell>
-      <TableCell className="font-mono text-sm">{sku.sku_code}</TableCell>
-      <TableCell>{sku.sku_name}</TableCell>
-      <TableCell className="text-right">{formatPrice(sku.default_price)}</TableCell>
-      <TableCell className="text-right">
-        {sku.unit_price != null ? (
-          formatPrice(sku.unit_price)
-        ) : (
-          <span className="text-muted-foreground">-</span>
-        )}
-      </TableCell>
-      <TableCell className="text-right">
-        {discountBadge(sku, customerDiscount)}
-      </TableCell>
-      <TableCell className="text-right font-medium">
-        {formatPrice(sku.effective_price)}
-      </TableCell>
-      <TableCell>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => onRemove(sku.sku_id, sku.sku_name)}
-        >
-          <Trash2 className="h-4 w-4 text-destructive" />
-        </Button>
-      </TableCell>
-    </TableRow>
+    <div ref={setNodeRef} style={style} className="select-none">
+      <RowContent
+        sku={sku}
+        customerDiscount={customerDiscount}
+        onRemove={onRemove}
+        formatPrice={formatPrice}
+        dragHandle={
+          <button
+            {...attributes}
+            {...listeners}
+            aria-label="Verslepen"
+            className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground touch-none p-1"
+            type="button"
+          >
+            <GripVertical className="h-4 w-4" />
+          </button>
+        }
+      />
+    </div>
   );
 }
 
@@ -627,24 +687,23 @@ function SortableCard({
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : undefined,
+    opacity: isDragging ? 0.3 : undefined,
   };
 
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className="border rounded-md p-3 flex items-start gap-2 bg-background"
+      {...attributes}
+      {...listeners}
+      className="border rounded-md p-3 flex items-start gap-2 bg-background select-none [-webkit-touch-callout:none] cursor-grab active:cursor-grabbing"
     >
-      <button
-        {...attributes}
-        {...listeners}
-        aria-label="Verslepen"
-        className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground touch-none -ml-1 p-2"
-        type="button"
+      <div
+        aria-hidden
+        className="text-muted-foreground -ml-1 p-2 shrink-0"
       >
         <GripVertical className="h-5 w-5" />
-      </button>
+      </div>
       <div className="flex-1 min-w-0 space-y-1">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
@@ -657,6 +716,7 @@ function SortableCard({
             variant="ghost"
             size="icon"
             className="-mr-2 shrink-0"
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={() => onRemove(sku.sku_id, sku.sku_name)}
           >
             <Trash2 className="h-4 w-4 text-destructive" />
