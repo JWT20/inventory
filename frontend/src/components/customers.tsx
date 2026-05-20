@@ -41,31 +41,13 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import type { Modifier } from "@dnd-kit/core";
 import {
   SortableContext,
   arrayMove,
   useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { CSS, getEventCoordinates } from "@dnd-kit/utilities";
-
-const snapCenterToCursor: Modifier = ({
-  activatorEvent,
-  draggingNodeRect,
-  transform,
-}) => {
-  if (!draggingNodeRect || !activatorEvent) return transform;
-  const activatorCoordinates = getEventCoordinates(activatorEvent);
-  if (!activatorCoordinates) return transform;
-  const offsetX = activatorCoordinates.x - draggingNodeRect.left;
-  const offsetY = activatorCoordinates.y - draggingNodeRect.top;
-  return {
-    ...transform,
-    x: transform.x + offsetX - draggingNodeRect.width / 2,
-    y: transform.y + offsetY - draggingNodeRect.height / 2,
-  };
-};
+import { CSS } from "@dnd-kit/utilities";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -477,6 +459,7 @@ function AssortmentList({
   formatPrice: (p: number | null) => string;
 }) {
   const [activeId, setActiveId] = useState<number | null>(null);
+  const [activeWidth, setActiveWidth] = useState<number | null>(null);
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, {
@@ -486,10 +469,13 @@ function AssortmentList({
 
   function handleDragStart(event: DragStartEvent) {
     setActiveId(event.active.id as number);
+    const rect = event.active.rect.current.initial;
+    setActiveWidth(rect ? rect.width : null);
   }
 
   function handleDragEnd(event: DragEndEvent) {
     setActiveId(null);
+    setActiveWidth(null);
     const { active, over } = event;
     if (!over || active.id === over.id) return;
     const oldIndex = skus.findIndex((s) => s.sku_id === active.id);
@@ -507,8 +493,10 @@ function AssortmentList({
       collisionDetection={closestCenter}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      onDragCancel={() => setActiveId(null)}
-      modifiers={[snapCenterToCursor]}
+      onDragCancel={() => {
+        setActiveId(null);
+        setActiveWidth(null);
+      }}
     >
       <SortableContext items={ids} strategy={verticalListSortingStrategy}>
         {/* Desktop: card-style rows (table-like grid) */}
@@ -550,14 +538,16 @@ function AssortmentList({
 
       <DragOverlay dropAnimation={null}>
         {activeSku ? (
-          <div className="inline-flex items-center gap-2 border rounded-md bg-background shadow-lg px-3 py-2 pointer-events-none whitespace-nowrap">
-            <GripVertical className="h-4 w-4 text-muted-foreground shrink-0" />
-            <div>
-              <div className="font-medium text-sm">{activeSku.sku_name}</div>
-              <div className="text-xs text-muted-foreground font-mono">
-                {activeSku.sku_code}
-              </div>
-            </div>
+          <div
+            style={activeWidth ? { width: activeWidth } : undefined}
+            className="border rounded-md bg-background shadow-lg pointer-events-none"
+          >
+            <RowContent
+              sku={activeSku}
+              customerDiscount={customerDiscount}
+              formatPrice={formatPrice}
+              dragging
+            />
           </div>
         ) : null}
       </DragOverlay>
