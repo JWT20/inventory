@@ -41,13 +41,31 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
+import type { Modifier } from "@dnd-kit/core";
 import {
   SortableContext,
   arrayMove,
   useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+import { CSS, getEventCoordinates } from "@dnd-kit/utilities";
+
+const snapCenterToCursor: Modifier = ({
+  activatorEvent,
+  draggingNodeRect,
+  transform,
+}) => {
+  if (!draggingNodeRect || !activatorEvent) return transform;
+  const activatorCoordinates = getEventCoordinates(activatorEvent);
+  if (!activatorCoordinates) return transform;
+  const offsetX = activatorCoordinates.x - draggingNodeRect.left;
+  const offsetY = activatorCoordinates.y - draggingNodeRect.top;
+  return {
+    ...transform,
+    x: transform.x + offsetX - draggingNodeRect.width / 2,
+    y: transform.y + offsetY - draggingNodeRect.height / 2,
+  };
+};
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -490,6 +508,7 @@ function AssortmentList({
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveId(null)}
+      modifiers={[snapCenterToCursor]}
     >
       <SortableContext items={ids} strategy={verticalListSortingStrategy}>
         {/* Desktop: card-style rows (table-like grid) */}
@@ -531,11 +550,11 @@ function AssortmentList({
 
       <DragOverlay dropAnimation={null}>
         {activeSku ? (
-          <div className="flex items-center gap-2 border rounded-md bg-background shadow-lg px-3 py-2 max-w-sm">
+          <div className="inline-flex items-center gap-2 border rounded-md bg-background shadow-lg px-3 py-2 pointer-events-none whitespace-nowrap">
             <GripVertical className="h-4 w-4 text-muted-foreground shrink-0" />
-            <div className="min-w-0">
-              <div className="font-medium text-sm truncate">{activeSku.sku_name}</div>
-              <div className="text-xs text-muted-foreground font-mono truncate">
+            <div>
+              <div className="font-medium text-sm">{activeSku.sku_name}</div>
+              <div className="text-xs text-muted-foreground font-mono">
                 {activeSku.sku_code}
               </div>
             </div>
