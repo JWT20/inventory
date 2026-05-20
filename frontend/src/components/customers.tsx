@@ -564,14 +564,12 @@ function RowContent({
   customerDiscount,
   onRemove,
   formatPrice,
-  dragHandle,
   dragging,
 }: {
   sku: CustomerSKU;
   customerDiscount: number | null;
   onRemove?: (skuId: number, skuName: string) => void;
   formatPrice: (p: number | null) => string;
-  dragHandle?: React.ReactNode;
   dragging?: boolean;
 }) {
   return (
@@ -582,9 +580,7 @@ function RowContent({
       )}
     >
       <div className="flex items-center justify-center">
-        {dragHandle ?? (
-          <GripVertical className="h-4 w-4 text-muted-foreground" />
-        )}
+        <GripVertical className="h-4 w-4 text-muted-foreground" />
       </div>
       <div className="font-mono text-sm truncate">{sku.sku_code}</div>
       <div className="truncate">{sku.sku_name}</div>
@@ -605,6 +601,7 @@ function RowContent({
           <Button
             variant="ghost"
             size="icon"
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={() => onRemove(sku.sku_id, sku.sku_name)}
           >
             <Trash2 className="h-4 w-4 text-destructive" />
@@ -632,6 +629,9 @@ function SortableRow({
     transform: CSS.Transform.toString(transform),
     transition,
     zIndex: isDragging ? 50 : undefined,
+    boxShadow: isDragging
+      ? "0 10px 25px -5px rgba(0,0,0,0.15), 0 8px 10px -6px rgba(0,0,0,0.1)"
+      : undefined,
     position: isDragging ? "relative" : undefined,
   };
 
@@ -639,9 +639,11 @@ function SortableRow({
     <div
       ref={setNodeRef}
       style={style}
+      {...attributes}
+      {...listeners}
       className={cn(
-        "select-none overflow-hidden rounded-md border bg-background transition-shadow",
-        isDragging && "shadow-lg ring-1 ring-ring/10",
+        "select-none overflow-hidden rounded-md border bg-background transition-shadow cursor-grab active:cursor-grabbing",
+        isDragging && "ring-1 ring-ring/10",
       )}
     >
       <RowContent
@@ -650,17 +652,6 @@ function SortableRow({
         onRemove={onRemove}
         formatPrice={formatPrice}
         dragging={isDragging}
-        dragHandle={
-          <button
-            {...attributes}
-            {...listeners}
-            aria-label="Verslepen"
-            className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground touch-none p-1"
-            type="button"
-          >
-            <GripVertical className="h-4 w-4" />
-          </button>
-        }
       />
     </div>
   );
