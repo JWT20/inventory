@@ -33,8 +33,6 @@ import { ArrowLeft, Plus, Trash2, Search, GripVertical } from "lucide-react";
 import {
   DndContext,
   DragEndEvent,
-  DragOverlay,
-  DragStartEvent,
   MouseSensor,
   TouchSensor,
   closestCenter,
@@ -448,8 +446,6 @@ function AssortmentList({
   onRemove: (skuId: number, skuName: string) => void;
   formatPrice: (p: number | null) => string;
 }) {
-  const [activeId, setActiveId] = useState<number | null>(null);
-  const [activeWidth, setActiveWidth] = useState<number | null>(null);
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, {
@@ -457,15 +453,7 @@ function AssortmentList({
     }),
   );
 
-  function handleDragStart(event: DragStartEvent) {
-    setActiveId(event.active.id as number);
-    const rect = event.active.rect.current.initial;
-    setActiveWidth(rect ? rect.width : null);
-  }
-
   function handleDragEnd(event: DragEndEvent) {
-    setActiveId(null);
-    setActiveWidth(null);
     const { active, over } = event;
     if (!over || active.id === over.id) return;
     const oldIndex = skus.findIndex((s) => s.sku_id === active.id);
@@ -475,18 +463,12 @@ function AssortmentList({
   }
 
   const ids = skus.map((s) => s.sku_id);
-  const activeSku = activeId != null ? skus.find((s) => s.sku_id === activeId) : null;
 
   return (
     <DndContext
       sensors={sensors}
       collisionDetection={closestCenter}
-      onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      onDragCancel={() => {
-        setActiveId(null);
-        setActiveWidth(null);
-      }}
     >
       <SortableContext items={ids} strategy={verticalListSortingStrategy}>
         {/* Desktop: card-style rows (table-like grid) */}
@@ -525,23 +507,6 @@ function AssortmentList({
           ))}
         </div>
       </SortableContext>
-
-      <DragOverlay dropAnimation={null}>
-        {activeSku ? (
-          <div
-            style={activeWidth ? { width: activeWidth } : undefined}
-            className="border rounded-md bg-background shadow-lg pointer-events-none"
-          >
-            <div className="flex items-center gap-3 px-3 py-2">
-              <GripVertical className="h-4 w-4 text-muted-foreground shrink-0" />
-              <span className="font-medium text-sm">{activeSku.sku_name}</span>
-              <span className="text-xs text-muted-foreground font-mono">
-                {activeSku.sku_code}
-              </span>
-            </div>
-          </div>
-        ) : null}
-      </DragOverlay>
     </DndContext>
   );
 }
@@ -638,7 +603,12 @@ function SortableRow({
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.4 : undefined,
+    zIndex: isDragging ? 10 : undefined,
+    boxShadow: isDragging
+      ? "0 10px 25px -5px rgba(0,0,0,0.15), 0 8px 10px -6px rgba(0,0,0,0.1)"
+      : undefined,
+    position: isDragging ? "relative" : undefined,
+    background: isDragging ? "var(--background, #fff)" : undefined,
   };
 
   return (
@@ -680,7 +650,11 @@ function SortableCard({
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.4 : undefined,
+    zIndex: isDragging ? 10 : undefined,
+    boxShadow: isDragging
+      ? "0 10px 25px -5px rgba(0,0,0,0.15), 0 8px 10px -6px rgba(0,0,0,0.1)"
+      : undefined,
+    position: isDragging ? "relative" : undefined,
   };
 
   return (
