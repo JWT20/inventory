@@ -246,6 +246,9 @@ function SKUDialog({
 }) {
   const { user } = useAuth();
   const isCourier = user?.role === "courier";
+  const canDeleteProduct =
+    !!user &&
+    (user.is_platform_admin || user.role === "owner" || user.role === "member");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [producent, setProducent] = useState("");
   const [wijnaam, setWijnaam] = useState("");
@@ -750,7 +753,7 @@ function SKUDialog({
           />
         </div>
 
-        {user?.is_platform_admin && currentId && (
+        {canDeleteProduct && currentId && (
           <div className="mt-6 pt-4 border-t border-border">
             <Button
               variant="destructive"
