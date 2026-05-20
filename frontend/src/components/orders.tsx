@@ -12,6 +12,7 @@ import {
   Dialog,
   DialogContent,
   DialogHeader,
+  DialogBody,
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
@@ -884,7 +885,7 @@ function OrderDetailDialog({
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-3">
+        <DialogBody className="space-y-3">
           <p className="text-sm text-muted-foreground">
             {order.organization_name}
             {order.created_by_name && ` — ${order.created_by_name}`}
@@ -1042,7 +1043,7 @@ function OrderDetailDialog({
               {deleting ? "Verwijderen..." : "Order verwijderen"}
             </Button>
           )}
-        </div>
+        </DialogBody>
       </DialogContent>
     </Dialog>
   );
