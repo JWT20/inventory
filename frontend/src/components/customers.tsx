@@ -35,7 +35,7 @@ import {
   DragEndEvent,
   DragOverlay,
   DragStartEvent,
-  PointerSensor,
+  MouseSensor,
   TouchSensor,
   closestCenter,
   useSensor,
@@ -291,6 +291,7 @@ function CustomerDetail({
         customerId,
         nextSkus.map((s) => s.sku_id),
       );
+      setDirty(true);
     } catch (err: unknown) {
       setSKUs(previous);
       toast.error(err instanceof Error ? err.message : "Fout bij herordenen");
@@ -449,7 +450,7 @@ function AssortmentList({
 }) {
   const [activeId, setActiveId] = useState<number | null>(null);
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, {
       activationConstraint: { delay: 250, tolerance: 8 },
     }),
@@ -638,7 +639,7 @@ function SortableRow({
   };
 
   return (
-    <div ref={setNodeRef} style={style}>
+    <div ref={setNodeRef} style={style} className="select-none">
       <RowContent
         sku={sku}
         customerDiscount={customerDiscount}
@@ -676,24 +677,23 @@ function SortableCard({
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : undefined,
+    opacity: isDragging ? 0.3 : undefined,
   };
 
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className="border rounded-md p-3 flex items-start gap-2 bg-background"
+      {...attributes}
+      {...listeners}
+      className="border rounded-md p-3 flex items-start gap-2 bg-background select-none [-webkit-touch-callout:none] cursor-grab active:cursor-grabbing"
     >
-      <button
-        {...attributes}
-        {...listeners}
-        aria-label="Verslepen"
-        className="cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground touch-none -ml-1 p-2"
-        type="button"
+      <div
+        aria-hidden
+        className="text-muted-foreground -ml-1 p-2 shrink-0"
       >
         <GripVertical className="h-5 w-5" />
-      </button>
+      </div>
       <div className="flex-1 min-w-0 space-y-1">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
@@ -706,6 +706,7 @@ function SortableCard({
             variant="ghost"
             size="icon"
             className="-mr-2 shrink-0"
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={() => onRemove(sku.sku_id, sku.sku_name)}
           >
             <Trash2 className="h-4 w-4 text-destructive" />
