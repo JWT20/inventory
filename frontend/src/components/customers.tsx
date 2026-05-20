@@ -531,20 +531,13 @@ function AssortmentList({
 
       <DragOverlay dropAnimation={null}>
         {activeSku ? (
-          <div className="hidden sm:block border rounded-md bg-background shadow-lg">
-            <RowContent
-              sku={activeSku}
-              customerDiscount={customerDiscount}
-              formatPrice={formatPrice}
-              dragging
-            />
-          </div>
-        ) : null}
-        {activeSku ? (
-          <div className="sm:hidden border rounded-md bg-background shadow-lg p-3">
-            <div className="font-medium">{activeSku.sku_name}</div>
-            <div className="text-xs text-muted-foreground font-mono">
-              {activeSku.sku_code}
+          <div className="flex items-center gap-2 border rounded-md bg-background shadow-lg px-3 py-2 max-w-sm">
+            <GripVertical className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div className="min-w-0">
+              <div className="font-medium text-sm truncate">{activeSku.sku_name}</div>
+              <div className="text-xs text-muted-foreground font-mono truncate">
+                {activeSku.sku_code}
+              </div>
             </div>
           </div>
         ) : null}
@@ -645,7 +638,7 @@ function SortableRow({
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0 : undefined,
+    opacity: isDragging ? 0.4 : undefined,
   };
 
   return (
@@ -687,7 +680,7 @@ function SortableCard({
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.3 : undefined,
+    opacity: isDragging ? 0.4 : undefined,
   };
 
   return (
