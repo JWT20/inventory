@@ -351,6 +351,15 @@ class OrderResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class WeeklyPickPhotoResponse(BaseModel):
+    order_line_id: int
+    sku_id: int
+    wine_name: str
+    image_url: str | None = None
+    quantity: int
+    booked_count: int
+
+
 class ManualOrderLineCreate(BaseModel):
     customer_id: int = Field(..., gt=0)
     sku_id: int = Field(..., gt=0)

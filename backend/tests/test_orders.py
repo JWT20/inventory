@@ -1,7 +1,7 @@
 """Tests for order management."""
 
 from tests.conftest import auth_header
-from app.models import Customer, CustomerSKU, SKU, ReferenceImage
+from app.models import Customer, CustomerSKU, Order, OrderLine, ReferenceImage, SKU
 
 
 class TestCreateOrder:
@@ -103,6 +103,71 @@ class TestCreateOrder:
 
         assert data["visible_total"] == 33.0
         assert data["hidden_lines_count"] == 1
+
+
+class TestWeeklyPickPhotos:
+    def test_weekly_pick_photos_returns_only_open_lines_for_week(
+        self, client, db, owner_user, owner_token, sample_org
+    ):
+        customer = Customer(name="week klant", organization_id=sample_org.id)
+        open_sku = SKU(sku_code="WINE-WEEK-OPEN", name="Open wijn")
+        done_sku = SKU(sku_code="WINE-WEEK-DONE", name="Klaar wijn")
+        other_week_sku = SKU(sku_code="WINE-WEEK-OTHER", name="Andere week wijn")
+        db.add_all([customer, open_sku, done_sku, other_week_sku])
+        db.commit()
+
+        db.add(ReferenceImage(sku_id=open_sku.id, image_path="reference_images/open.jpg"))
+        order = Order(
+            organization_id=sample_org.id,
+            created_by=owner_user.id,
+            reference="ORD-WEEK-PHOTOS",
+            status="active",
+            delivery_week="2026-W21",
+        )
+        other_order = Order(
+            organization_id=sample_org.id,
+            created_by=owner_user.id,
+            reference="ORD-WEEK-OTHER",
+            status="active",
+            delivery_week="2026-W22",
+        )
+        db.add_all([order, other_order])
+        db.commit()
+
+        open_line = OrderLine(
+            order_id=order.id,
+            sku_id=open_sku.id,
+            customer_id=customer.id,
+            quantity=4,
+            booked_count=2,
+        )
+        done_line = OrderLine(
+            order_id=order.id,
+            sku_id=done_sku.id,
+            customer_id=customer.id,
+            quantity=3,
+            booked_count=3,
+        )
+        other_week_line = OrderLine(
+            order_id=other_order.id,
+            sku_id=other_week_sku.id,
+            customer_id=customer.id,
+            quantity=2,
+            booked_count=0,
+        )
+        db.add_all([open_line, done_line, other_week_line])
+        db.commit()
+
+        resp = client.get(
+            "/api/orders/weekly-pick-photos?week=2026-W21",
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert [item["wine_name"] for item in data] == ["Open wijn"]
+        assert data[0]["order_line_id"] == open_line.id
+        assert data[0]["image_url"] == "/api/thumbnails/320/reference_images/open.jpg"
 
 
 class TestCustomerSkuRestrictions:
