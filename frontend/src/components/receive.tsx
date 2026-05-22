@@ -136,6 +136,7 @@ type Step = "select-order" | "this-week" | "scan" | "result" | "confirm" | "iden
 export function ReceivePage() {
   const [step, setStep] = useState<Step>("select-order");
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [overviewWeek, setOverviewWeek] = useState(() => getISOWeek(new Date()));
   const [lastBooking, setLastBooking] = useState<BookingResult | null>(null);
   const [lastIdentify, setLastIdentify] = useState<IdentifyResult | null>(null);
   const [pendingConfirmation, setPendingConfirmation] = useState<ConfirmationData | null>(null);
@@ -143,6 +144,11 @@ export function ReceivePage() {
   function handleOrderSelected(order: Order) {
     setSelectedOrder(order);
     setStep("scan");
+  }
+
+  function handleThisWeek(week: string) {
+    setOverviewWeek(week);
+    setStep("this-week");
   }
 
   function handleBooked(booking: ConfirmationData) {
@@ -183,12 +189,12 @@ export function ReceivePage() {
         <OrderSelectStep
           onSelect={handleOrderSelected}
           onIdentify={() => setStep("identify-scan")}
-          onThisWeek={() => setStep("this-week")}
+          onThisWeek={handleThisWeek}
         />
       )}
 
       {step === "this-week" && (
-        <ThisWeekStep onBack={reset} />
+        <ThisWeekStep week={overviewWeek} onBack={reset} />
       )}
 
       {step === "scan" && selectedOrder && (
@@ -275,7 +281,7 @@ function OrderSelectStep({
 }: {
   onSelect: (order: Order) => void;
   onIdentify: () => void;
-  onThisWeek: () => void;
+  onThisWeek: (week: string) => void;
 }) {
   const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
@@ -359,7 +365,7 @@ function OrderSelectStep({
           <Button
             variant="secondary"
             className="w-full"
-            onClick={onThisWeek}
+            onClick={() => onThisWeek(week)}
           >
             Deze week
           </Button>
@@ -378,10 +384,9 @@ function OrderSelectStep({
 
 /* ---------- This Week Overview ---------- */
 
-function ThisWeekStep({ onBack }: { onBack: () => void }) {
+function ThisWeekStep({ week, onBack }: { week: string; onBack: () => void }) {
   const [items, setItems] = useState<WeeklyPickPhoto[]>([]);
   const [loading, setLoading] = useState(true);
-  const week = getISOWeek(new Date());
 
   useEffect(() => {
     let cancelled = false;
