@@ -103,6 +103,15 @@ interface IdentifyResult {
   reference_image_urls?: string[];
 }
 
+interface WeeklyPickPhoto {
+  order_line_id: number;
+  sku_id: number;
+  wine_name: string;
+  image_url: string | null;
+  quantity: number;
+  booked_count: number;
+}
+
 /* ---------- Week helpers (same logic as weekly-summary.tsx) ---------- */
 
 function getISOWeek(date: Date): string {
@@ -122,7 +131,7 @@ function shiftWeek(week: string, delta: number): string {
   return getISOWeek(monday);
 }
 
-type Step = "select-order" | "scan" | "result" | "confirm" | "identify-scan" | "identify-result";
+type Step = "select-order" | "this-week" | "scan" | "result" | "confirm" | "identify-scan" | "identify-result";
 
 export function ReceivePage() {
   const [step, setStep] = useState<Step>("select-order");
@@ -174,7 +183,12 @@ export function ReceivePage() {
         <OrderSelectStep
           onSelect={handleOrderSelected}
           onIdentify={() => setStep("identify-scan")}
+          onThisWeek={() => setStep("this-week")}
         />
+      )}
+
+      {step === "this-week" && (
+        <ThisWeekStep onBack={reset} />
       )}
 
       {step === "scan" && selectedOrder && (
@@ -257,9 +271,11 @@ function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (order: Ord
 function OrderSelectStep({
   onSelect,
   onIdentify,
+  onThisWeek,
 }: {
   onSelect: (order: Order) => void;
   onIdentify: () => void;
+  onThisWeek: () => void;
 }) {
   const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
@@ -339,13 +355,106 @@ function OrderSelectStep({
       )}
 
       {(user?.role === "courier" || user?.is_platform_admin) && (
-        <Button
-          variant="secondary"
-          className="w-full mt-4"
-          onClick={onIdentify}
-        >
-          Scan zonder order
+        <div className="grid grid-cols-2 gap-2 mt-4">
+          <Button
+            variant="secondary"
+            className="w-full"
+            onClick={onThisWeek}
+          >
+            Deze week
+          </Button>
+          <Button
+            variant="secondary"
+            className="w-full"
+            onClick={onIdentify}
+          >
+            Scan zonder order
+          </Button>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ---------- This Week Overview ---------- */
+
+function ThisWeekStep({ onBack }: { onBack: () => void }) {
+  const [items, setItems] = useState<WeeklyPickPhoto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const week = getISOWeek(new Date());
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      try {
+        const result = await api.weeklyPickPhotos(week);
+        if (!cancelled) setItems(result);
+      } catch (err: unknown) {
+        if (!cancelled) {
+          toast.error(err instanceof Error ? err.message : "Kan weekfoto's niet laden");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [week]);
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div>
+          <h3 className="text-lg font-semibold">Deze week</h3>
+          <p className="text-sm text-muted-foreground">{week}</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={onBack}>
+          Terug
         </Button>
+      </div>
+
+      {loading ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="space-y-2">
+              <Skeleton className="aspect-square w-full rounded-lg" />
+              <Skeleton className="h-4 w-4/5" />
+            </div>
+          ))}
+        </div>
+      ) : items.length === 0 ? (
+        <p className="text-center text-muted-foreground py-10">
+          Geen open pickfoto's voor deze week
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {items.map((item) => (
+            <div key={item.sku_id} className="min-w-0">
+              <div className="aspect-square overflow-hidden rounded-lg border border-border bg-muted">
+                {item.image_url ? (
+                  <img
+                    src={item.image_url}
+                    alt={item.wine_name}
+                    className="h-full w-full object-cover"
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center px-3 text-center text-sm text-muted-foreground">
+                    Geen foto
+                  </div>
+                )}
+              </div>
+              <p className="mt-2 truncate text-sm font-medium" title={item.wine_name}>
+                {item.wine_name}
+              </p>
+            </div>
+          ))}
+        </div>
       )}
     </>
   );

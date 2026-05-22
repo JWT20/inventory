@@ -297,6 +297,8 @@ export const api = {
     request(`/orders/${id}/activate`, { method: "POST" }),
   deleteOrder: (id: number) => request(`/orders/${id}`, { method: "DELETE" }),
   listBookings: (orderId: number) => request(`/orders/${orderId}/bookings`),
+  weeklyPickPhotos: (week?: string) =>
+    request(`/orders/weekly-pick-photos${week ? `?week=${week}` : ""}`),
   weeklyOrderSummary: (week?: string) =>
     request(`/orders/weekly-summary${week ? `?week=${week}` : ""}`),
   getDeadline: (week?: string) =>

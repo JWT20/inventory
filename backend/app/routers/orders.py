@@ -23,6 +23,7 @@ from app.schemas import (
     OrderLineUpdate,
     OrderResponse,
     OrderUpdate,
+    WeeklyPickPhotoResponse,
     WeeklySummaryCustomerOrder,
     WeeklySummaryResponse,
     WeeklySummarySupplier,
@@ -402,6 +403,79 @@ def _parse_iso_week(week_str: str) -> tuple[datetime.date, datetime.date]:
         raise HTTPException(400, f"Ongeldig weekformaat: '{week_str}'. Gebruik bijv. '2026-W15'.")
     sunday = monday + datetime.timedelta(days=6)
     return monday, sunday
+
+
+@router.get("/weekly-pick-photos", response_model=list[WeeklyPickPhotoResponse])
+def weekly_pick_photos(
+    week: str = Query(None, description="ISO week, bijv. '2026-W15'. Standaard: huidige week."),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Photos for order lines that are not fully picked when this view opens."""
+    if not week:
+        today = datetime.date.today()
+        week = f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"
+
+    monday, sunday = _parse_iso_week(week)
+    start_dt = datetime.datetime.combine(monday, datetime.time.min)
+    end_dt = datetime.datetime.combine(sunday, datetime.time.max)
+
+    query = (
+        db.query(OrderLine)
+        .join(Order, OrderLine.order_id == Order.id)
+        .options(selectinload(OrderLine.sku).selectinload(SKU.reference_images))
+        .filter(
+            Order.status == "active",
+            OrderLine.booked_count < OrderLine.quantity,
+            or_(
+                Order.delivery_week == week,
+                (Order.delivery_week.is_(None)) & (Order.created_at >= start_dt) & (Order.created_at <= end_dt),
+            ),
+        )
+    )
+
+    if user.is_platform_admin:
+        pass
+    elif user.role == "courier":
+        pass
+    elif user.organization_id:
+        query = query.filter(Order.organization_id == user.organization_id)
+    else:
+        return []
+
+    lines = query.all()
+    by_sku: dict[int, list[OrderLine]] = defaultdict(list)
+    for line in lines:
+        by_sku[line.sku_id].append(line)
+
+    items: list[WeeklyPickPhotoResponse] = []
+    for sku_lines in by_sku.values():
+        line = sku_lines[0]
+        image = next(
+            (
+                img
+                for img in sorted(
+                    line.sku.reference_images,
+                    key=lambda img: img.created_at or datetime.datetime.min,
+                )
+                if img.processing_status == "done" and img.image_path
+            ),
+            None,
+        )
+        image_url = f"/api/thumbnails/320/{image.image_path}" if image else None
+        items.append(
+            WeeklyPickPhotoResponse(
+                order_line_id=line.id,
+                sku_id=line.sku_id,
+                wine_name=line.sku.name,
+                image_url=image_url,
+                quantity=sum(l.quantity for l in sku_lines),
+                booked_count=sum(l.booked_count for l in sku_lines),
+            )
+        )
+
+    return sorted(items, key=lambda item: item.wine_name.lower())
+
 
 
 @router.get("/weekly-summary", response_model=WeeklySummaryResponse)
