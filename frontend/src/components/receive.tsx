@@ -477,6 +477,10 @@ function ScanStep({
   onBack: () => void;
 }) {
   const [scanning, setScanning] = useState(false);
+  const [weekProgress, setWeekProgress] = useState<{
+    openBoxes: number;
+    openOrders: number;
+  } | null>(null);
   const [needsRef, setNeedsRef] = useState<{
     register_token: string;
     scan_image_url: string;
@@ -486,6 +490,44 @@ function ScanStep({
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWeekProgress() {
+      try {
+        const weekOrders: Order[] = order.delivery_week
+          ? await api.listOrders(order.delivery_week)
+          : [order];
+        const openOrders = weekOrders
+          .filter((o) => o.status === "active")
+          .map((o) => ({
+            ...o,
+            remaining: Math.max(o.total_boxes - o.booked_boxes, 0),
+          }))
+          .filter((o) => o.remaining > 0);
+
+        if (!cancelled) {
+          setWeekProgress({
+            openBoxes: openOrders.reduce((sum, o) => sum + o.remaining, 0),
+            openOrders: openOrders.length,
+          });
+        }
+      } catch {
+        if (!cancelled) {
+          setWeekProgress({
+            openBoxes: Math.max(order.total_boxes - order.booked_boxes, 0),
+            openOrders: Math.max(order.total_boxes - order.booked_boxes, 0) > 0 ? 1 : 0,
+          });
+        }
+      }
+    }
+
+    loadWeekProgress();
+    return () => {
+      cancelled = true;
+    };
+  }, [order]);
 
   useEffect(() => {
     async function startCamera() {
@@ -574,7 +616,9 @@ function ScanStep({
             Week {order.delivery_week || "onbekend"}
           </p>
           <p className="text-xs text-muted-foreground">
-            Gestart vanuit {order.reference}
+            {weekProgress
+              ? `${weekProgress.openBoxes} dozen open · ${weekProgress.openOrders} orders`
+              : "Open orders laden..."}
           </p>
         </Card>
 
@@ -627,7 +671,9 @@ function ScanStep({
           Week {order.delivery_week || "onbekend"}
         </p>
         <p className="text-xs text-muted-foreground">
-          Gestart vanuit {order.reference}
+          {weekProgress
+            ? `${weekProgress.openBoxes} dozen open · ${weekProgress.openOrders} orders`
+            : "Open orders laden..."}
         </p>
       </Card>
 
