@@ -30,7 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Minus, Plus } from "lucide-react";
+import { ChevronDown, Minus, Plus } from "lucide-react";
 
 interface SKUOption {
   id: number;
@@ -148,6 +148,8 @@ export function OrdersPage() {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [showManual, setShowManual] = useState(false);
   const [deadline, setDeadline] = useState<DeadlineInfo | null>(null);
+  const [showOverdue, setShowOverdue] = useState(false);
+  const [showUpcoming, setShowUpcoming] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -205,7 +207,8 @@ export function OrdersPage() {
   // Determine unique delivery days across all order lines for display on cards
   const getOrderDeliveryDays = (order: Order): string[] => {
     const days = new Set(order.lines.map((l) => l.delivery_day));
-    return Array.from(days).sort();
+    const dayOrder: Record<string, number> = { wednesday: 0, thursday: 1, friday: 2 };
+    return Array.from(days).sort((a, b) => (dayOrder[a] ?? 9) - (dayOrder[b] ?? 9));
   };
 
   // Group orders by ISO week
@@ -276,6 +279,124 @@ export function OrdersPage() {
       }));
   })();
 
+  const currentGroup = groupedOrders.find((group) => group.week === currentWeek);
+  const overdueGroups = groupedOrders.filter((group) => group.week < currentWeek);
+  const upcomingGroups = groupedOrders
+    .filter((group) => group.week > currentWeek)
+    .sort((a, b) => a.week.localeCompare(b.week));
+
+  const remainingBoxes = (order: Order) =>
+    Math.max(order.total_boxes - order.booked_boxes, 0);
+
+  const sortForPicking = (items: Order[]) =>
+    [...items].sort((a, b) => {
+      const [aDay] = getOrderDeliveryDays(a);
+      const [bDay] = getOrderDeliveryDays(b);
+      const dayOrder: Record<string, number> = { wednesday: 0, thursday: 1, friday: 2 };
+      const dayDiff = (dayOrder[aDay] ?? 9) - (dayOrder[bDay] ?? 9);
+      if (dayDiff !== 0) return dayDiff;
+      return remainingBoxes(b) - remainingBoxes(a);
+    });
+
+  const weekStats = (weekOrders: Order[]) => {
+    const openOrders = weekOrders.filter(
+      (order) => order.status === "active" && remainingBoxes(order) > 0,
+    );
+    return {
+      openBoxes: openOrders.reduce((sum, order) => sum + remainingBoxes(order), 0),
+      openOrders: openOrders.length,
+    };
+  };
+
+  const groupStats = (groups: typeof groupedOrders) =>
+    weekStats(groups.flatMap((group) => group.orders));
+
+  const renderOrderCard = (o: Order, muted = false) => (
+    <Card
+      key={o.id}
+      className={`p-4 cursor-pointer active:scale-[0.98] transition-transform ${muted ? "opacity-70" : ""}`}
+      onClick={() => setSelectedOrder(o)}
+    >
+      <div className="flex justify-between items-center mb-1">
+        <span className="font-semibold">{o.reference}</span>
+        <Badge variant={STATUS_VARIANT[o.status] ?? "inactive"}>
+          {STATUS_LABELS[o.status] ?? o.status}
+        </Badge>
+      </div>
+      <p className="text-sm text-muted-foreground">
+        {o.organization_name || o.created_by_name} &middot;{" "}
+        {o.lines.length} product
+        {o.lines.length !== 1 ? "en" : ""}
+      </p>
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <span>{o.booked_boxes}/{o.total_boxes} dozen geboekt</span>
+        <span className="ml-auto flex gap-1">
+          {getOrderDeliveryDays(o).map((day) => (
+            <Badge key={day} variant="secondary" className="text-xs px-1.5 py-0">
+              {DELIVERY_DAY_LABELS[day] ?? day}
+            </Badge>
+          ))}
+        </span>
+      </div>
+    </Card>
+  );
+
+  const renderWeekGroup = (
+    group: { week: string; label: string; range: string; orders: Order[] },
+    muted = false,
+  ) => (
+    <div key={group.week}>
+      <div className="flex items-center gap-2 mb-2">
+        <span className={`text-sm font-semibold ${muted ? "text-muted-foreground" : ""}`}>
+          {group.label}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          levering {group.range}
+        </span>
+        <div className="flex-1 border-t border-border" />
+      </div>
+      <div className="space-y-3">
+        {sortForPicking(group.orders).map((o) => renderOrderCard(o, muted))}
+      </div>
+    </div>
+  );
+
+  const renderCollapsedGroup = (
+    title: string,
+    groups: typeof groupedOrders,
+    expanded: boolean,
+    onToggle: () => void,
+  ) => {
+    const stats = groupStats(groups);
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex w-full items-center gap-3 rounded-md border border-border px-4 py-3 text-left transition-colors hover:bg-muted/50"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold">{title}</p>
+            <p className="text-xs text-muted-foreground">
+              {stats.openBoxes} dozen open &middot; {stats.openOrders} orders
+            </p>
+          </div>
+          <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
+            {expanded ? "Verberg" : "Toon"}
+            <ChevronDown
+              className={`h-4 w-4 transition-transform ${expanded ? "rotate-180" : ""}`}
+            />
+          </span>
+        </button>
+        {expanded && (
+          <div className="mt-3 space-y-4">
+            {groups.map((group) => renderWeekGroup(group, true))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <>
       {deadline && (
@@ -327,50 +448,42 @@ export function OrdersPage() {
             Geen orders gevonden
           </p>
         ) : (
-          groupedOrders.map((group) => (
-            <div key={group.week}>
-              <div className="flex items-center gap-2 mb-2">
-                <span className={`text-sm font-semibold ${group.week === currentWeek ? "" : "text-muted-foreground"}`}>
-                  {group.label}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  levering {group.range}
-                </span>
-                <div className="flex-1 border-t border-border" />
-              </div>
-              <div className="space-y-3">
-                {group.orders.map((o) => (
-                  <Card
-                    key={o.id}
-                    className={`p-4 cursor-pointer active:scale-[0.98] transition-transform ${group.week !== currentWeek ? "opacity-70" : ""}`}
-                    onClick={() => setSelectedOrder(o)}
-                  >
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="font-semibold">{o.reference}</span>
-                      <Badge variant={STATUS_VARIANT[o.status] ?? "inactive"}>
-                        {STATUS_LABELS[o.status] ?? o.status}
-                      </Badge>
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      {o.organization_name || o.created_by_name} &middot;{" "}
-                      {o.lines.length} product
-                      {o.lines.length !== 1 ? "en" : ""}
-                    </p>
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <span>{o.booked_boxes}/{o.total_boxes} dozen geboekt</span>
-                      <span className="ml-auto flex gap-1">
-                        {getOrderDeliveryDays(o).map((day) => (
-                          <Badge key={day} variant="secondary" className="text-xs px-1.5 py-0">
-                            {DELIVERY_DAY_LABELS[day] ?? day}
-                          </Badge>
-                        ))}
-                      </span>
-                    </div>
-                  </Card>
-                ))}
-              </div>
+          <>
+            <div className="rounded-md border border-border bg-muted/30 px-4 py-3">
+              <p className="text-sm font-semibold">
+                Week {currentWeek.split("-W")[1]}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {weekStats(currentGroup?.orders ?? []).openBoxes} dozen open &middot;{" "}
+                {weekStats(currentGroup?.orders ?? []).openOrders} orders
+                {currentGroup ? ` · levering ${currentGroup.range}` : ""}
+              </p>
             </div>
-          ))
+
+            {currentGroup ? (
+              renderWeekGroup(currentGroup)
+            ) : (
+              <p className="text-center text-muted-foreground py-8">
+                Geen orders voor deze week
+              </p>
+            )}
+
+            {overdueGroups.length > 0 &&
+              renderCollapsedGroup(
+                "Achterstallig",
+                overdueGroups,
+                showOverdue,
+                () => setShowOverdue((value) => !value),
+              )}
+
+            {upcomingGroups.length > 0 &&
+              renderCollapsedGroup(
+                "Volgende weken",
+                upcomingGroups,
+                showUpcoming,
+                () => setShowUpcoming((value) => !value),
+              )}
+          </>
         )}
       </div>
 
