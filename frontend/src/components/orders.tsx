@@ -422,15 +422,25 @@ export function OrdersPage() {
     expanded: boolean,
     onToggle: () => void,
     children: ReactNode,
+    variant: "overdue" | "history" | "default" = "default",
   ) => (
     <div>
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center gap-3 rounded-md border border-border px-4 py-3 text-left transition-colors hover:bg-muted/50"
+        className={[
+          "flex w-full items-center gap-3 text-left transition-colors",
+          variant === "overdue"
+            ? "rounded-md border border-amber-200 border-l-4 border-l-amber-500 bg-amber-50 px-4 py-3 hover:bg-amber-100/70"
+            : variant === "history"
+              ? "border-t border-border px-1 py-3 hover:bg-muted/30"
+              : "rounded-md border border-border px-4 py-3 hover:bg-muted/50",
+        ].join(" ")}
       >
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold">{title}</p>
+          <p className={`text-sm font-semibold ${variant === "overdue" ? "text-amber-950" : ""}`}>
+            {title}
+          </p>
           <p className="text-xs text-muted-foreground">{summary}</p>
         </div>
         <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
@@ -508,7 +518,9 @@ export function OrdersPage() {
             </div>
 
             {currentGroup ? (
-              renderWeekGroup(currentGroup)
+              <div className="space-y-3">
+                {sortForPicking(currentGroup.orders).map((o) => renderOrderCard(o))}
+              </div>
             ) : (
               <p className="text-center text-muted-foreground py-8">
                 Geen orders voor deze week
@@ -524,6 +536,7 @@ export function OrdersPage() {
                 showOverdue,
                 () => setShowOverdue((value) => !value),
                 overdueGroups.map((group) => renderWeekGroup(group, true)),
+                "overdue",
               )}
 
             {historyOrders.length > 0 &&
@@ -533,6 +546,7 @@ export function OrdersPage() {
                 showHistory,
                 () => setShowHistory((value) => !value),
                 historyGroups.map(renderHistoryGroup),
+                "history",
               )}
 
             {upcomingGroups.length > 0 &&
