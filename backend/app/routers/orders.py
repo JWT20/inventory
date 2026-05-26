@@ -299,6 +299,7 @@ def create_order(
 @router.get("", response_model=list[OrderResponse])
 def list_orders(
     week: str | None = None,
+    include_history: bool = False,
     limit: int = 100,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -309,7 +310,8 @@ def list_orders(
     - Platform admin: all orders
     - Org owner/member: orders for their organization
     - Customer: only their own orders
-    - Courier: all active orders (for delivery)
+    - Courier: all active orders (for delivery), plus completed/cancelled orders
+      when include_history=true
 
     Optional ``week`` filter (e.g. "2026-W16") restricts to that delivery week.
     """
@@ -318,7 +320,10 @@ def list_orders(
     if user.is_platform_admin:
         pass  # See everything
     elif user.role == "courier":
-        query = query.filter(Order.status == "active")
+        if include_history:
+            query = query.filter(Order.status.in_(("active", "completed", "cancelled")))
+        else:
+            query = query.filter(Order.status == "active")
     elif user.role == "customer":
         query = query.filter(Order.created_by == user.id)
     elif user.organization_id:
