@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -149,12 +149,16 @@ export function OrdersPage() {
   const [showManual, setShowManual] = useState(false);
   const [deadline, setDeadline] = useState<DeadlineInfo | null>(null);
   const [showOverdue, setShowOverdue] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [showUpcoming, setShowUpcoming] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const [ordersData, deadlineData] = await Promise.all([
-        api.listOrders(),
+        api.listOrders(undefined, {
+          includeHistory: user?.role === "courier",
+          limit: user?.role === "courier" ? 150 : 100,
+        }),
         api.getDeadline(),
       ]);
       setOrders(ordersData);
@@ -164,7 +168,7 @@ export function OrdersPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user?.role]);
 
   useEffect(() => {
     load();
@@ -260,11 +264,23 @@ export function OrdersPage() {
     return `Week ${weekNum}`;
   };
 
-  // Build grouped structure
-  const groupedOrders: { week: string; label: string; range: string; orders: Order[] }[] = (() => {
-    if (orders.length === 0) return [];
+  const remainingBoxes = (order: Order) =>
+    Math.max(order.total_boxes - order.booked_boxes, 0);
+
+  const isOpenWorkOrder = (order: Order) =>
+    order.status === "active" && remainingBoxes(order) > 0;
+
+  const isHistoryOrder = (order: Order) =>
+    order.status === "completed" ||
+    order.status === "cancelled" ||
+    remainingBoxes(order) === 0;
+
+  type WeekGroup = { week: string; label: string; range: string; orders: Order[] };
+
+  const buildWeekGroups = (sourceOrders: Order[]): WeekGroup[] => {
+    if (sourceOrders.length === 0) return [];
     const groups: Record<string, Order[]> = {};
-    for (const o of orders) {
+    for (const o of sourceOrders) {
       const week = o.delivery_week || getISOWeek(o.created_at);
       if (!groups[week]) groups[week] = [];
       groups[week].push(o);
@@ -277,16 +293,20 @@ export function OrdersPage() {
         range: formatWeekRange(week),
         orders: groups[week],
       }));
-  })();
+  };
 
-  const currentGroup = groupedOrders.find((group) => group.week === currentWeek);
-  const overdueGroups = groupedOrders.filter((group) => group.week < currentWeek);
-  const upcomingGroups = groupedOrders
+  const openGroups = buildWeekGroups(orders.filter(isOpenWorkOrder));
+  const historyOrders = orders
+    .filter(isHistoryOrder)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, 50);
+  const historyGroups = buildWeekGroups(historyOrders);
+
+  const currentGroup = openGroups.find((group) => group.week === currentWeek);
+  const overdueGroups = openGroups.filter((group) => group.week < currentWeek);
+  const upcomingGroups = openGroups
     .filter((group) => group.week > currentWeek)
     .sort((a, b) => a.week.localeCompare(b.week));
-
-  const remainingBoxes = (order: Order) =>
-    Math.max(order.total_boxes - order.booked_boxes, 0);
 
   const sortForPicking = (items: Order[]) =>
     [...items].sort((a, b) => {
@@ -308,7 +328,7 @@ export function OrdersPage() {
     };
   };
 
-  const groupStats = (groups: typeof groupedOrders) =>
+  const groupStats = (groups: WeekGroup[]) =>
     weekStats(groups.flatMap((group) => group.orders));
 
   const renderOrderCard = (o: Order, muted = false) => (
@@ -342,7 +362,7 @@ export function OrdersPage() {
   );
 
   const renderWeekGroup = (
-    group: { week: string; label: string; range: string; orders: Order[] },
+    group: WeekGroup,
     muted = false,
   ) => (
     <div key={group.week}>
@@ -361,41 +381,68 @@ export function OrdersPage() {
     </div>
   );
 
+  const renderHistoryGroup = (group: WeekGroup) => (
+    <div key={group.week}>
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-sm font-semibold text-muted-foreground">
+          {group.label}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          levering {group.range}
+        </span>
+        <div className="flex-1 border-t border-border" />
+      </div>
+      <div className="overflow-hidden rounded-md border border-border">
+        {group.orders.map((order) => (
+          <button
+            key={order.id}
+            type="button"
+            className="flex w-full items-center gap-3 border-b border-border px-3 py-2 text-left last:border-b-0 hover:bg-muted/50"
+            onClick={() => setSelectedOrder(order)}
+          >
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">{order.reference}</p>
+              <p className="truncate text-xs text-muted-foreground">
+                {order.organization_name || order.created_by_name} &middot;{" "}
+                {order.booked_boxes}/{order.total_boxes} dozen
+              </p>
+            </div>
+            <Badge variant={STATUS_VARIANT[order.status] ?? "inactive"}>
+              {STATUS_LABELS[order.status] ?? order.status}
+            </Badge>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   const renderCollapsedGroup = (
     title: string,
-    groups: typeof groupedOrders,
+    summary: string,
     expanded: boolean,
     onToggle: () => void,
-  ) => {
-    const stats = groupStats(groups);
-    return (
-      <div>
-        <button
-          type="button"
-          onClick={onToggle}
-          className="flex w-full items-center gap-3 rounded-md border border-border px-4 py-3 text-left transition-colors hover:bg-muted/50"
-        >
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold">{title}</p>
-            <p className="text-xs text-muted-foreground">
-              {stats.openBoxes} dozen open &middot; {stats.openOrders} orders
-            </p>
-          </div>
-          <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
-            {expanded ? "Verberg" : "Toon"}
-            <ChevronDown
-              className={`h-4 w-4 transition-transform ${expanded ? "rotate-180" : ""}`}
-            />
-          </span>
-        </button>
-        {expanded && (
-          <div className="mt-3 space-y-4">
-            {groups.map((group) => renderWeekGroup(group, true))}
-          </div>
-        )}
-      </div>
-    );
-  };
+    children: ReactNode,
+  ) => (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-3 rounded-md border border-border px-4 py-3 text-left transition-colors hover:bg-muted/50"
+      >
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold">{title}</p>
+          <p className="text-xs text-muted-foreground">{summary}</p>
+        </div>
+        <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
+          {expanded ? "Verberg" : "Toon"}
+          <ChevronDown
+            className={`h-4 w-4 transition-transform ${expanded ? "rotate-180" : ""}`}
+          />
+        </span>
+      </button>
+      {expanded && <div className="mt-3 space-y-4">{children}</div>}
+    </div>
+  );
 
   return (
     <>
@@ -471,17 +518,32 @@ export function OrdersPage() {
             {overdueGroups.length > 0 &&
               renderCollapsedGroup(
                 "Achterstallig",
-                overdueGroups,
+                `${groupStats(overdueGroups).openBoxes} dozen open · ${
+                  groupStats(overdueGroups).openOrders
+                } orders`,
                 showOverdue,
                 () => setShowOverdue((value) => !value),
+                overdueGroups.map((group) => renderWeekGroup(group, true)),
+              )}
+
+            {historyOrders.length > 0 &&
+              renderCollapsedGroup(
+                "Historie",
+                `${historyOrders.length} laatste orders`,
+                showHistory,
+                () => setShowHistory((value) => !value),
+                historyGroups.map(renderHistoryGroup),
               )}
 
             {upcomingGroups.length > 0 &&
               renderCollapsedGroup(
                 "Volgende weken",
-                upcomingGroups,
+                `${groupStats(upcomingGroups).openBoxes} dozen open · ${
+                  groupStats(upcomingGroups).openOrders
+                } orders`,
                 showUpcoming,
                 () => setShowUpcoming((value) => !value),
+                upcomingGroups.map((group) => renderWeekGroup(group, true)),
               )}
           </>
         )}

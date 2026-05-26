@@ -290,8 +290,17 @@ export const api = {
   }) => json("/orders", "POST", data),
   updateOrder: (id: number, data: { remarks: string }) =>
     json(`/orders/${id}`, "PATCH", data),
-  listOrders: (week?: string) =>
-    request(`/orders${week ? `?week=${week}` : ""}`),
+  listOrders: (
+    week?: string,
+    options?: { includeHistory?: boolean; limit?: number },
+  ) => {
+    const params = new URLSearchParams();
+    if (week) params.set("week", week);
+    if (options?.includeHistory) params.set("include_history", "true");
+    if (options?.limit) params.set("limit", String(options.limit));
+    const query = params.toString();
+    return request(`/orders${query ? `?${query}` : ""}`);
+  },
   getOrder: (id: number) => request(`/orders/${id}`),
   activateOrder: (id: number) =>
     request(`/orders/${id}/activate`, { method: "POST" }),
