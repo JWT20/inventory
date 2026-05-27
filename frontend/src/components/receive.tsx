@@ -111,6 +111,7 @@ interface WeeklyPickPhoto {
   image_url: string | null;
   quantity: number;
   booked_count: number;
+  customers: string[];
 }
 
 /* ---------- Week helpers (same logic as weekly-summary.tsx) ---------- */
@@ -458,6 +459,14 @@ function ThisWeekStep({ week, onBack }: { week: string; onBack: () => void }) {
               <p className="mt-2 truncate text-sm font-medium" title={item.wine_name}>
                 {item.wine_name}
               </p>
+              {item.customers.length > 0 && (
+                <p
+                  className="truncate text-xs text-muted-foreground"
+                  title={item.customers.join(", ")}
+                >
+                  {item.customers.join(", ")}
+                </p>
+              )}
             </div>
           ))}
         </div>

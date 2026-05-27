@@ -472,6 +472,14 @@ def weekly_pick_photos(
             None,
         )
         image_url = f"/api/thumbnails/320/{image.image_path}" if image else None
+        customers = sorted(
+            {
+                l.customer_name
+                for l in sku_lines
+                if l.booked_count < l.quantity and l.customer_name
+            },
+            key=str.lower,
+        )
         items.append(
             WeeklyPickPhotoResponse(
                 order_line_id=line.id,
@@ -480,6 +488,7 @@ def weekly_pick_photos(
                 image_url=image_url,
                 quantity=sum(l.quantity for l in sku_lines),
                 booked_count=sum(l.booked_count for l in sku_lines),
+                customers=customers,
             )
         )
 
