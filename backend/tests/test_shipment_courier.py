@@ -4,8 +4,23 @@ Couriers retain access to the receiving concept-product endpoint, which is a
 separate flow from inbound.
 """
 
-from app.models import SKU
+from app.models import SKU, InboundShipment, InboundShipmentLine, Organization
 from tests.conftest import auth_header
+
+
+def _draft_shipment(db, org_id, sku_id, *, reference="PKB-DRAFT"):
+    shipment = InboundShipment(
+        organization_id=org_id,
+        supplier_name="Anfors",
+        reference=reference,
+        status="draft",
+    )
+    db.add(shipment)
+    db.flush()
+    db.add(InboundShipmentLine(shipment_id=shipment.id, sku_id=sku_id, quantity=2))
+    db.commit()
+    db.refresh(shipment)
+    return shipment
 
 
 def test_courier_cannot_create_shipment(client, db, courier_token, sample_org):
@@ -24,8 +39,8 @@ def test_courier_cannot_create_shipment(client, db, courier_token, sample_org):
         },
     )
 
-    # A courier has no own organization, so inbound is not available to them.
-    assert resp.status_code == 400, resp.text
+    # Inbound is per merchant; couriers are rejected by the access dependency.
+    assert resp.status_code == 403, resp.text
 
 
 def test_courier_can_create_concept_product_for_merchant(client, db, courier_token, sample_org):
@@ -88,3 +103,64 @@ def test_customer_cannot_create_shipment(client, customer_token):
         json={"lines": []},
     )
     assert resp.status_code == 403
+
+
+def test_courier_cannot_book_shipment(client, db, courier_token, owner_user):
+    sku = SKU(sku_code="SKU-BOOK-1", name="Wine", organization_id=owner_user.organization_id)
+    db.add(sku)
+    db.flush()
+    shipment = _draft_shipment(db, owner_user.organization_id, sku.id, reference="PKB-BOOK-1")
+
+    resp = client.post(
+        f"/api/shipments/{shipment.id}/book",
+        headers=auth_header(courier_token),
+    )
+    assert resp.status_code == 403, resp.text
+
+    # Stock must not have moved.
+    assert db.get(InboundShipment, shipment.id).status == "draft"
+
+
+def test_courier_cannot_delete_shipment(client, db, courier_token, owner_user):
+    sku = SKU(sku_code="SKU-DEL-1", name="Wine", organization_id=owner_user.organization_id)
+    db.add(sku)
+    db.flush()
+    shipment = _draft_shipment(db, owner_user.organization_id, sku.id, reference="PKB-DEL-1")
+
+    resp = client.delete(
+        f"/api/shipments/{shipment.id}",
+        headers=auth_header(courier_token),
+    )
+    assert resp.status_code == 403, resp.text
+    assert db.get(InboundShipment, shipment.id) is not None
+
+
+def test_owner_cannot_book_other_org_shipment(client, db, owner_token):
+    other_org = Organization(name="Andere", slug="andere-org")
+    db.add(other_org)
+    db.flush()
+    sku = SKU(sku_code="SKU-OTHER-1", name="Wine", organization_id=other_org.id)
+    db.add(sku)
+    db.flush()
+    shipment = _draft_shipment(db, other_org.id, sku.id, reference="PKB-OTHER-1")
+
+    resp = client.post(
+        f"/api/shipments/{shipment.id}/book",
+        headers=auth_header(owner_token),
+    )
+    assert resp.status_code == 404, resp.text
+    assert db.get(InboundShipment, shipment.id).status == "draft"
+
+
+def test_owner_can_book_own_shipment(client, db, owner_token, owner_user):
+    sku = SKU(sku_code="SKU-OWNBOOK-1", name="Wine", organization_id=owner_user.organization_id)
+    db.add(sku)
+    db.flush()
+    shipment = _draft_shipment(db, owner_user.organization_id, sku.id, reference="PKB-OWNBOOK-1")
+
+    resp = client.post(
+        f"/api/shipments/{shipment.id}/book",
+        headers=auth_header(owner_token),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "booked"

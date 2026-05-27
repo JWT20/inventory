@@ -9,7 +9,12 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from app.auth import get_current_user, require_inbound_booker, require_product_manager
+from app.auth import (
+    get_current_user,
+    require_inbound_booker,
+    require_merchant_inbound,
+    require_product_manager,
+)
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
@@ -435,7 +440,7 @@ async def extract_shipment_preview(
     supplier_name: str = Form(""),
     document_type: str = Form("unknown"),
     db: Session = Depends(get_db),
-    user: User = Depends(require_inbound_booker),
+    user: User = Depends(require_merchant_inbound),
 ):
     """Extraction preview for an uploaded pakbon/factuur (image or PDF)."""
     with propagate_attributes(
@@ -481,7 +486,7 @@ async def extract_shipment_preview(
 async def extract_shipment_preview_text(
     body: ShipmentTextExtractRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_inbound_booker),
+    user: User = Depends(require_merchant_inbound),
 ):
     """Extraction preview from pasted order text (no file). LLM-only extraction."""
     with propagate_attributes(
@@ -534,7 +539,7 @@ async def extract_shipment_preview_text(
 def create_shipment(
     data: ShipmentCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_inbound_booker),
+    user: User = Depends(require_merchant_inbound),
 ):
     """Create a new inbound shipment (pakbon) with lines."""
     sku_ids = [line.sku_id for line in data.lines]
@@ -706,7 +711,7 @@ def delete_supplier_mapping(
 def confirm_line_match(
     body: ConfirmLineMatchRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_inbound_booker),
+    user: User = Depends(require_merchant_inbound),
 ):
     org_id = user.organization_id
     if not user.is_platform_admin and not org_id:
@@ -803,7 +808,7 @@ def get_shipment(
 def book_shipment(
     shipment_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_inbound_booker),
+    user: User = Depends(require_merchant_inbound),
 ):
     """Book a shipment: create stock movements for all lines and update balances."""
     shipment = (
@@ -813,6 +818,8 @@ def book_shipment(
         .first()
     )
     if not shipment:
+        raise HTTPException(404, "Pakbon niet gevonden")
+    if not user.is_platform_admin and shipment.organization_id != user.organization_id:
         raise HTTPException(404, "Pakbon niet gevonden")
     if shipment.status != "draft":
         raise HTTPException(400, "Pakbon is al geboekt")
@@ -855,17 +862,13 @@ def book_shipment(
 def delete_shipment(
     shipment_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_inbound_booker),
+    user: User = Depends(require_merchant_inbound),
 ):
     """Delete a draft shipment. Booked shipments cannot be deleted."""
     shipment = db.query(InboundShipment).filter(InboundShipment.id == shipment_id).first()
     if not shipment:
         raise HTTPException(404, "Pakbon niet gevonden")
-    if (
-        not user.is_platform_admin
-        and user.role != "courier"
-        and shipment.organization_id != user.organization_id
-    ):
+    if not user.is_platform_admin and shipment.organization_id != user.organization_id:
         raise HTTPException(404, "Pakbon niet gevonden")
     if shipment.status != "draft":
         raise HTTPException(
