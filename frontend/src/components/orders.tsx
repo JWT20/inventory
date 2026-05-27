@@ -113,6 +113,7 @@ const STATUS_LABELS: Record<string, string> = {
   active: "Actief",
   completed: "Voltooid",
   cancelled: "Geannuleerd",
+  closed: "Gesloten",
 };
 
 const STATUS_VARIANT: Record<string, "active" | "inactive"> = {
@@ -121,6 +122,7 @@ const STATUS_VARIANT: Record<string, "active" | "inactive"> = {
   active: "active",
   completed: "active",
   cancelled: "inactive",
+  closed: "inactive",
 };
 
 const money = new Intl.NumberFormat("nl-NL", {
@@ -273,6 +275,7 @@ export function OrdersPage() {
   const isHistoryOrder = (order: Order) =>
     order.status === "completed" ||
     order.status === "cancelled" ||
+    order.status === "closed" ||
     remainingBoxes(order) === 0;
 
   type WeekGroup = { week: string; label: string; range: string; orders: Order[] };
@@ -1035,6 +1038,7 @@ function OrderDetailDialog({
 }) {
   const { user } = useAuth();
   const [activating, setActivating] = useState(false);
+  const [closing, setClosing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [uploadingSkuId, setUploadingSkuId] = useState<number | null>(null);
   const fileRefs = useRef<Record<number, HTMLInputElement | null>>({});
@@ -1053,6 +1057,9 @@ function OrderDetailDialog({
     (order.status === "draft" || order.status === "pending_images") &&
     skusWithoutImages.length === 0 &&
     canManage;
+  const canClose =
+    order.status === "active" &&
+    (canManage || user?.role === "member" || user?.role === "courier");
 
   async function activate() {
     if (!order) return;
@@ -1066,6 +1073,29 @@ function OrderDetailDialog({
       toast.error(err instanceof Error ? err.message : "Activatie mislukt");
     } finally {
       setActivating(false);
+    }
+  }
+
+  async function handleClose() {
+    if (!order) return;
+    const open = Math.max(order.total_boxes - order.booked_boxes, 0);
+    if (
+      !confirm(
+        `Order ${order.reference} sluiten?` +
+          (open > 0 ? ` Er blijven ${open} dozen open die niet meer geboekt worden.` : ""),
+      )
+    )
+      return;
+    setClosing(true);
+    try {
+      await api.closeOrder(order.id);
+      toast.success("Order gesloten");
+      onUpdated();
+      onClose();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Sluiten mislukt");
+    } finally {
+      setClosing(false);
     }
   }
 
@@ -1286,6 +1316,17 @@ function OrderDetailDialog({
               disabled={activating}
             >
               {activating ? "Activeren..." : "Order activeren"}
+            </Button>
+          )}
+
+          {canClose && (
+            <Button
+              variant="secondary"
+              className="w-full"
+              onClick={handleClose}
+              disabled={closing}
+            >
+              {closing ? "Sluiten..." : "Order sluiten"}
             </Button>
           )}
 
