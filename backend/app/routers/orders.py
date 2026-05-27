@@ -148,6 +148,7 @@ def _order_to_response(order: Order, db: Session) -> OrderResponse:
         status=order.status,
         remarks=order.remarks or "",
         delivery_week=order.delivery_week,
+        organization_id=order.organization_id,
         organization_name=order.organization.name if order.organization else "",
         created_by_name=order.creator.username if order.creator else "",
         created_at=order.created_at,

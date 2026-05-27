@@ -21,6 +21,7 @@ interface Order {
   reference: string;
   status: string;
   delivery_week?: string | null;
+  organization_id?: number | null;
   merchant_name: string;
   total_boxes: number;
   booked_boxes: number;
@@ -501,7 +502,7 @@ function ScanStep({
           ? await api.listOrders()
           : [order];
         const openOrders = allOrders
-          .filter((o) => o.status === "active")
+          .filter((o) => o.status === "active" && o.organization_id === order.organization_id)
           .map((o) => ({
             ...o,
             remaining: Math.max(o.total_boxes - o.booked_boxes, 0),
