@@ -463,12 +463,17 @@ class ShipmentLineCreate(BaseModel):
 
 
 class ShipmentCreate(BaseModel):
-    organization_id: int | None = None
     supplier_name: str | None = None
     reference: str | None = None
     document_sha256: str | None = None
     force: bool = False
     lines: list[ShipmentLineCreate] = Field(..., min_length=1)
+
+
+class ShipmentTextExtractRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    supplier_name: str = ""
+    document_type: Literal["pakbon", "invoice", "unknown"] = "unknown"
 
 
 class ShipmentLineResponse(BaseModel):

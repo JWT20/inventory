@@ -52,10 +52,10 @@ def test_extract_preview_does_not_fallback_to_direct_sku_code(client, db, admin_
     assert body["lines"][0]["quantity_boxes"] == 6
 
 
-def test_extract_preview_requires_warehouse_role(client, owner_token):
+def test_extract_preview_forbidden_for_customer(client, customer_token):
     resp = client.post(
         "/api/shipments/extract-preview",
-        headers=auth_header(owner_token),
+        headers=auth_header(customer_token),
         files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
     )
 
@@ -149,30 +149,31 @@ def test_extract_preview_uses_case_insensitive_supplier_mapping(
     assert body["lines"][0]["matched_sku_code"] == sample_sku.sku_code
 
 
-def test_extract_preview_uses_selected_organization_mapping_for_courier(
-    client, db, courier_token, sample_org, tmp_path
+def test_extract_preview_uses_own_organization_mapping(
+    client, db, owner_token, owner_user, tmp_path
 ):
+    """Each merchant only sees their own org's supplier mappings (no cross-org)."""
     other_org = Organization(name="Andere handelaar", slug="andere-handelaar")
     db.add(other_org)
     db.flush()
-    selected_sku = SKU(
+    own_sku = SKU(
         sku_code="ORG-A-WINE",
         name="Org A Wine",
-        organization_id=sample_org.id,
+        organization_id=owner_user.organization_id,
     )
     other_sku = SKU(
         sku_code="ORG-B-WINE",
         name="Org B Wine",
         organization_id=other_org.id,
     )
-    db.add_all([selected_sku, other_sku])
+    db.add_all([own_sku, other_sku])
     db.flush()
     db.add_all([
         SupplierSKUMapping(
-            organization_id=sample_org.id,
+            organization_id=owner_user.organization_id,
             supplier_name="ANFORS",
             supplier_code="WINE-ORG",
-            sku_id=selected_sku.id,
+            sku_id=own_sku.id,
         ),
         SupplierSKUMapping(
             organization_id=other_org.id,
@@ -191,7 +192,7 @@ def test_extract_preview_uses_selected_organization_mapping_for_courier(
         "lines": [
             {
                 "supplier_code": "WINE-ORG",
-                "description": "Selected org mapping",
+                "description": "Own org mapping",
                 "quantity_boxes": 1,
                 "confidence": 0.9,
             }
@@ -202,12 +203,9 @@ def test_extract_preview_uses_selected_organization_mapping_for_courier(
          patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
         resp = client.post(
             "/api/shipments/extract-preview",
-            headers=auth_header(courier_token),
+            headers=auth_header(owner_token),
             files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
-            data={
-                "document_type": "pakbon",
-                "organization_id": str(sample_org.id),
-            },
+            data={"document_type": "pakbon"},
         )
 
     assert resp.status_code == 200
@@ -469,3 +467,76 @@ def test_supplier_mapping_crud_and_confirm_flow(client, db, owner_token, owner_u
         headers=auth_header(owner_token),
     )
     assert deleted.status_code == 204
+
+
+def test_extract_preview_text_matches_supplier_mapping(
+    client, db, owner_token, owner_user
+):
+    """Pasted order text runs through the same SKU matching + box conversion."""
+    sku = SKU(sku_code="TXT-WINE", name="Tekst Wijn", organization_id=owner_user.organization_id)
+    db.add(sku)
+    db.flush()
+    db.add(SupplierSKUMapping(
+        organization_id=owner_user.organization_id,
+        supplier_name="ANFORS",
+        supplier_code="0009532",
+        sku_id=sku.id,
+    ))
+    db.commit()
+
+    mocked = {
+        "supplier_name": "Anfors",
+        "reference": "",
+        "document_type": "unknown",
+        "raw_text": "pasted",
+        "lines": [
+            {
+                "supplier_code": "0009532",
+                "description": "Vinho Verde Alvarinho 2024 Blanc",
+                "quantity": 6,
+                "quantity_unit": "pieces",
+                "confidence": 0.95,
+            }
+        ],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_text", new=AsyncMock(return_value=mocked)):
+        resp = client.post(
+            "/api/shipments/extract-preview-text",
+            headers=auth_header(owner_token),
+            json={"text": "0009532 Vinho Verde Alvarinho 2024 Blanc 6 7,31 43,86", "supplier_name": "Anfors"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["image_url"] == ""
+    assert body["document_sha256"]
+    assert body["lines"][0]["matched_sku_code"] == "TXT-WINE"
+    assert body["lines"][0]["quantity_boxes"] == 1
+    assert body["lines"][0]["quantity"] == 6
+
+
+def test_extract_preview_text_unavailable_prompt_returns_503(client, owner_token):
+    from app.services.langfuse_client import PromptUnavailableError
+
+    with patch(
+        "app.routers.inventory.extract_shipment_text",
+        new=AsyncMock(side_effect=PromptUnavailableError("missing")),
+    ):
+        resp = client.post(
+            "/api/shipments/extract-preview-text",
+            headers=auth_header(owner_token),
+            json={"text": "0009532 Wine 6"},
+        )
+
+    assert resp.status_code == 503
+    assert "extract-shipment-text" in resp.json()["detail"]
+
+
+def test_extract_preview_text_forbidden_for_customer(client, customer_token):
+    resp = client.post(
+        "/api/shipments/extract-preview-text",
+        headers=auth_header(customer_token),
+        json={"text": "0009532 Wine 6"},
+    )
+    assert resp.status_code == 403

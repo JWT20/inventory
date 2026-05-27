@@ -9,7 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from app.auth import get_current_user, require_inbound_booker, require_product_manager, require_warehouse
+from app.auth import get_current_user, require_inbound_booker, require_product_manager
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
@@ -40,6 +40,7 @@ from app.schemas import (
     ShipmentExtractedLine,
     ShipmentLineResponse,
     ShipmentResponse,
+    ShipmentTextExtractRequest,
     StockMovementResponse,
     UpdateCustomerPriceRequest,
     UpdateCustomerSKUDiscountRequest,
@@ -47,7 +48,12 @@ from app.schemas import (
 )
 from langfuse import observe, propagate_attributes
 
-from app.services.embedding import extract_shipment_document, match_shipment_article_name
+from app.services.embedding import (
+    extract_shipment_document,
+    extract_shipment_text,
+    match_shipment_article_name,
+)
+from app.services.langfuse_client import PromptUnavailableError
 from app.services.storage import storage
 
 logger = logging.getLogger(__name__)
@@ -297,162 +303,226 @@ def _upsert_supplier_mapping(
             raise
 
 
+async def _build_preview_lines(
+    db: Session,
+    user: User,
+    extracted: dict,
+    supplier_name_form: str,
+) -> list[ShipmentExtractedLine]:
+    """Resolve extracted rows into SKU-matched preview lines for the user's org.
+
+    Shared by the image/PDF and pasted-text extraction endpoints so all inputs
+    get identical supplier-mapping lookup, LLM article matching and pieces→boxes
+    conversion. Always scoped to ``user.organization_id``.
+    """
+    target_org_id = user.organization_id
+    extracted_supplier = str(extracted.get("supplier_name", "") or "")
+    normalized_supplier = (
+        _normalize_supplier_name(supplier_name_form)
+        or _normalize_supplier_name(extracted_supplier)
+    )
+
+    mapping_lookup: dict[tuple[str, str], tuple[int, str, str]] = {}
+    sku_candidates: dict[str, tuple[int, str, str]] = {}
+    supplier_scoped_candidates: dict[str, tuple[int, str, str]] = {}
+    if normalized_supplier:
+        mappings = db.query(SupplierSKUMapping, SKU).join(
+            SKU, SKU.id == SupplierSKUMapping.sku_id
+        )
+        if target_org_id is not None:
+            mappings = mappings.filter(
+                SupplierSKUMapping.organization_id == target_org_id
+            )
+        for mapping, sku in mappings.filter(
+            SupplierSKUMapping.supplier_name == normalized_supplier
+        ).all():
+            normalized_mapping = (sku.id, sku.sku_code, sku.name)
+            mapping_lookup[
+                (_normalize_supplier_name(mapping.supplier_name), _normalize_supplier_code(mapping.supplier_code))
+            ] = normalized_mapping
+            supplier_scoped_candidates[_normalize_supplier_code(sku.sku_code)] = normalized_mapping
+
+    sku_query = db.query(SKU)
+    if target_org_id is not None:
+        sku_query = sku_query.filter(SKU.organization_id == target_org_id)
+    else:
+        sku_query = sku_query.filter(SKU.organization_id.is_(None))
+    for sku in sku_query.all():
+        sku_candidates[_normalize_supplier_code(sku.sku_code)] = (sku.id, sku.sku_code, sku.name)
+
+    lines: list[ShipmentExtractedLine] = []
+    for row in extracted.get("lines", []):
+        row_dict = row if isinstance(row, dict) else {}
+        code = str(row_dict.get("supplier_code", "")).strip()
+        qty, qty_raw, qty_unit = _resolve_inbound_quantity(row_dict)
+        confidence = float(row_dict.get("confidence", 0.0) or 0.0)
+
+        matched_id = None
+        matched_code = None
+        matched_name = None
+        # Flag any no-code line for human review. Also flag when the LLM
+        # could not determine the unit (pieces vs. boxes), so the operator
+        # verifies the quantity before booking.
+        needs_confirmation = (not code) or qty_unit == "unknown"
+        match_source = "unresolved"
+        candidate_matches: list[ShipmentMatchCandidate] = []
+        if code:
+            # Resolution priority: supplier-specific mapping when supplier code exists
+            hit = mapping_lookup.get((normalized_supplier, _normalize_supplier_code(code)))
+            if hit:
+                matched_id, matched_code, matched_name = hit
+                match_source = "supplier_mapping"
+
+        # If supplier code is missing, use an LLM-only resolver on article description.
+        if not matched_id and not code and str(row_dict.get("description", "")).strip():
+            llm_candidate_pool = supplier_scoped_candidates or sku_candidates
+            supplier_name_for_matcher = normalized_supplier or "(unknown)"
+            suggested_code, llm_confidence = await match_shipment_article_name(
+                supplier_name=supplier_name_for_matcher,
+                article_description=str(row_dict.get("description", "")).strip(),
+                candidates=[(v[1], v[2]) for v in llm_candidate_pool.values()],
+            )
+            normalized_suggested_code = _normalize_supplier_code(suggested_code)
+            if (
+                normalized_suggested_code
+                and normalized_suggested_code in llm_candidate_pool
+            ):
+                c_id, c_code, c_name = llm_candidate_pool[normalized_suggested_code]
+                candidate_matches = [ShipmentMatchCandidate(
+                    sku_id=c_id,
+                    sku_code=c_code,
+                    sku_name=c_name,
+                    confidence=llm_confidence,
+                )]
+                needs_confirmation = True
+                match_source = "llm_suggestion"
+                if llm_confidence >= LLM_ARTICLE_MATCH_MIN_CONFIDENCE:
+                    confidence = max(confidence, llm_confidence)
+
+        lines.append(ShipmentExtractedLine(
+            supplier_code=code,
+            description=str(row_dict.get("description", "")).strip(),
+            quantity_boxes=max(0, qty),
+            quantity=max(0, qty_raw),
+            quantity_unit=qty_unit,
+            confidence=max(0.0, min(confidence, 1.0)),
+            matched_sku_id=matched_id,
+            matched_sku_code=matched_code,
+            matched_sku_name=matched_name,
+            needs_confirmation=needs_confirmation,
+            match_source=match_source,
+            candidate_matches=candidate_matches,
+        ))
+    return lines
+
+
+def _find_duplicate_shipment(db: Session, org_id: int | None, document_sha256: str):
+    return (
+        db.query(InboundShipment)
+        .filter(
+            InboundShipment.organization_id == org_id,
+            InboundShipment.document_sha256 == document_sha256,
+        )
+        .order_by(InboundShipment.created_at.desc())
+        .first()
+    )
+
+
 @router.post("/shipments/extract-preview", response_model=ShipmentExtractPreviewResponse)
 @observe()
 async def extract_shipment_preview(
     file: UploadFile = File(...),
     supplier_name: str = Form(""),
     document_type: str = Form("unknown"),
-    organization_id: int | None = Form(None),
     db: Session = Depends(get_db),
-    user: User = Depends(require_warehouse),
+    user: User = Depends(require_inbound_booker),
 ):
-    """Camera-first extraction preview for pakbon/factuur."""
+    """Extraction preview for an uploaded pakbon/factuur (image or PDF)."""
     with propagate_attributes(
         user_id=str(user.id),
         metadata={"endpoint": "/api/shipments/extract-preview", "username": user.username},
     ):
-        image_bytes = file.file.read()
-        if not image_bytes:
+        file_bytes = file.file.read()
+        if not file_bytes:
             raise HTTPException(400, "Leeg bestand")
-        if len(image_bytes) > 10 * 1024 * 1024:
-            raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
+        if len(file_bytes) > 20 * 1024 * 1024:
+            raise HTTPException(413, "Bestand te groot (max 20 MB)")
 
-        document_sha256 = hashlib.sha256(image_bytes).hexdigest()
+        document_sha256 = hashlib.sha256(file_bytes).hexdigest()
+        duplicate_shipment = _find_duplicate_shipment(db, user.organization_id, document_sha256)
 
-        target_org_id_for_dup = user.organization_id
-        if user.is_platform_admin or user.role == "courier":
-            target_org_id_for_dup = organization_id
-        duplicate_shipment = (
-            db.query(InboundShipment)
-            .filter(
-                InboundShipment.organization_id == target_org_id_for_dup,
-                InboundShipment.document_sha256 == document_sha256,
-            )
-            .order_by(InboundShipment.created_at.desc())
-            .first()
-        )
+        is_pdf = file_bytes[:1024].find(b"%PDF-") != -1
+        ext = "pdf" if is_pdf else "jpg"
+        image_key = f"shipment_docs/{uuid.uuid4().hex}.{ext}"
+        storage.save(image_key, file_bytes)
 
-        image_key = f"shipment_docs/{uuid.uuid4().hex}.jpg"
-        storage.save(image_key, image_bytes)
-
-        extracted = await extract_shipment_document(image_bytes)
+        extracted = await extract_shipment_document(file_bytes)
         detected_type = extracted.get("document_type") or "unknown"
         if document_type in {"pakbon", "invoice"}:
             detected_type = document_type
 
-        lines: list[ShipmentExtractedLine] = []
-        extracted_supplier = str(extracted.get("supplier_name", "") or "")
-        normalized_supplier = _normalize_supplier_name(supplier_name) or _normalize_supplier_name(extracted_supplier)
-        target_org_id = user.organization_id
-        if user.is_platform_admin or user.role == "courier":
-            target_org_id = organization_id
-            if target_org_id is not None and not db.get(Organization, target_org_id):
-                raise HTTPException(404, "Organisatie niet gevonden")
-        mapping_lookup: dict[tuple[str, str], tuple[int, str, str]] = {}
-        sku_candidates: dict[str, tuple[int, str, str]] = {}
-        supplier_scoped_candidates: dict[str, tuple[int, str, str]] = {}
-        if normalized_supplier:
-            mappings = db.query(SupplierSKUMapping, SKU).join(
-                SKU, SKU.id == SupplierSKUMapping.sku_id
-            )
-            if target_org_id is not None:
-                mappings = mappings.filter(
-                    SupplierSKUMapping.organization_id == target_org_id
-                )
-            elif not user.is_platform_admin:
-                mappings = mappings.filter(
-                    SupplierSKUMapping.organization_id == user.organization_id
-                )
-            for mapping, sku in mappings.filter(
-                SupplierSKUMapping.supplier_name == normalized_supplier
-            ).all():
-                normalized_mapping = (sku.id, sku.sku_code, sku.name)
-                mapping_lookup[
-                    (_normalize_supplier_name(mapping.supplier_name), _normalize_supplier_code(mapping.supplier_code))
-                ] = normalized_mapping
-                supplier_scoped_candidates[_normalize_supplier_code(sku.sku_code)] = normalized_mapping
-
-        sku_query = db.query(SKU)
-        if target_org_id is not None:
-            sku_query = sku_query.filter(SKU.organization_id == target_org_id)
-        elif not user.is_platform_admin:
-            if user.organization_id:
-                sku_query = sku_query.filter(SKU.organization_id == user.organization_id)
-            else:
-                sku_query = sku_query.filter(SKU.organization_id.is_(None))
-        for sku in sku_query.all():
-            sku_candidates[_normalize_supplier_code(sku.sku_code)] = (sku.id, sku.sku_code, sku.name)
-
-        for row in extracted.get("lines", []):
-            code = str(row.get("supplier_code", "")).strip()
-            row_dict = row if isinstance(row, dict) else {}
-            qty, qty_raw, qty_unit = _resolve_inbound_quantity(row_dict)
-            confidence = float(row.get("confidence", 0.0) or 0.0)
-
-            matched_id = None
-            matched_code = None
-            matched_name = None
-            # Flag any no-code line for human review. Also flag when the LLM
-            # could not determine the unit (pieces vs. boxes), so the operator
-            # verifies the quantity before booking.
-            needs_confirmation = (not code) or qty_unit == "unknown"
-            match_source = "unresolved"
-            candidate_matches: list[ShipmentMatchCandidate] = []
-            if code:
-                # Resolution priority: supplier-specific mapping when supplier code exists
-                hit = mapping_lookup.get((normalized_supplier, _normalize_supplier_code(code)))
-                if hit:
-                    matched_id, matched_code, matched_name = hit
-                    match_source = "supplier_mapping"
-
-            # If supplier code is missing, use an LLM-only resolver on article description.
-            if not matched_id and not code and str(row.get("description", "")).strip():
-                llm_candidate_pool = supplier_scoped_candidates or sku_candidates
-                supplier_name_for_matcher = normalized_supplier or "(unknown)"
-                suggested_code, llm_confidence = await match_shipment_article_name(
-                    supplier_name=supplier_name_for_matcher,
-                    article_description=str(row.get("description", "")).strip(),
-                    candidates=[(v[1], v[2]) for v in llm_candidate_pool.values()],
-                )
-                normalized_suggested_code = _normalize_supplier_code(suggested_code)
-                if (
-                    normalized_suggested_code
-                    and normalized_suggested_code in llm_candidate_pool
-                ):
-                    c_id, c_code, c_name = llm_candidate_pool[normalized_suggested_code]
-                    candidate_matches = [ShipmentMatchCandidate(
-                        sku_id=c_id,
-                        sku_code=c_code,
-                        sku_name=c_name,
-                        confidence=llm_confidence,
-                    )]
-                    needs_confirmation = True
-                    match_source = "llm_suggestion"
-                    if llm_confidence >= LLM_ARTICLE_MATCH_MIN_CONFIDENCE:
-                        confidence = max(confidence, llm_confidence)
-
-            lines.append(ShipmentExtractedLine(
-                supplier_code=code,
-                description=str(row.get("description", "")).strip(),
-                quantity_boxes=max(0, qty),
-                quantity=max(0, qty_raw),
-                quantity_unit=qty_unit,
-                confidence=max(0.0, min(confidence, 1.0)),
-                matched_sku_id=matched_id,
-                matched_sku_code=matched_code,
-                matched_sku_name=matched_name,
-                needs_confirmation=needs_confirmation,
-                match_source=match_source,
-                candidate_matches=candidate_matches,
-            ))
+        lines = await _build_preview_lines(db, user, extracted, supplier_name)
 
         return ShipmentExtractPreviewResponse(
             supplier_name=(supplier_name.strip() or str(extracted.get("supplier_name", "") or "").strip()),
             reference=str(extracted.get("reference", "") or ""),
             document_type=detected_type,
             lines=lines,
-            image_url=storage.url(image_key),
+            image_url=("" if is_pdf else storage.url(image_key)),
+            raw_text=str(extracted.get("raw_text", "") or ""),
+            document_sha256=document_sha256,
+            duplicate_of_shipment_id=(duplicate_shipment.id if duplicate_shipment else None),
+            duplicate_of_status=(duplicate_shipment.status if duplicate_shipment else None),
+        )
+
+
+@router.post("/shipments/extract-preview-text", response_model=ShipmentExtractPreviewResponse)
+@observe()
+async def extract_shipment_preview_text(
+    body: ShipmentTextExtractRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_inbound_booker),
+):
+    """Extraction preview from pasted order text (no file). LLM-only extraction."""
+    with propagate_attributes(
+        user_id=str(user.id),
+        metadata={"endpoint": "/api/shipments/extract-preview-text", "username": user.username},
+    ):
+        text = body.text.strip()
+        if not text:
+            raise HTTPException(400, "Lege tekst")
+        if len(text) > 50_000:
+            raise HTTPException(413, "Tekst te lang (max 50.000 tekens)")
+
+        # Hash normalized text so an accidental re-paste of the same order is
+        # flagged (soft warning), scoped per merchant via organization_id.
+        normalized_text = " ".join(text.split()).lower()
+        document_sha256 = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+        duplicate_shipment = _find_duplicate_shipment(db, user.organization_id, document_sha256)
+
+        try:
+            extracted = await extract_shipment_text(text)
+        except PromptUnavailableError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Tekst-extractie is niet beschikbaar: de vereiste Langfuse-prompt "
+                    "'extract-shipment-text' kon niet worden opgehaald."
+                ),
+            ) from exc
+
+        detected_type = extracted.get("document_type") or "unknown"
+        if body.document_type in {"pakbon", "invoice"}:
+            detected_type = body.document_type
+
+        lines = await _build_preview_lines(db, user, extracted, body.supplier_name)
+
+        return ShipmentExtractPreviewResponse(
+            supplier_name=(body.supplier_name.strip() or str(extracted.get("supplier_name", "") or "").strip()),
+            reference=str(extracted.get("reference", "") or ""),
+            document_type=detected_type,
+            lines=lines,
+            image_url="",
             raw_text=str(extracted.get("raw_text", "") or ""),
             document_sha256=document_sha256,
             duplicate_of_shipment_id=(duplicate_shipment.id if duplicate_shipment else None),
@@ -474,13 +544,7 @@ def create_shipment(
     if missing:
         raise HTTPException(400, f"SKU's niet gevonden: {missing}")
 
-    if user.is_platform_admin or user.role == "courier":
-        if not data.organization_id:
-            raise HTTPException(400, "organization_id is verplicht voor deze rol")
-        if not db.get(Organization, data.organization_id):
-            raise HTTPException(404, "Organisatie niet gevonden")
-        org_id = data.organization_id
-    elif user.organization_id:
+    if user.organization_id:
         org_id = user.organization_id
     else:
         raise HTTPException(400, "User has no organization")
@@ -641,22 +705,16 @@ def delete_supplier_mapping(
 @router.post("/shipments/confirm-line-match", response_model=SupplierMappingResponse)
 def confirm_line_match(
     body: ConfirmLineMatchRequest,
-    organization_id: int | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(require_inbound_booker),
 ):
-    org_id = _resolve_org_id_for_user(user, organization_id)
-    if (user.is_platform_admin or user.role == "courier") and not org_id:
-        raise HTTPException(400, "organization_id is verplicht voor deze rol")
+    org_id = user.organization_id
+    if not user.is_platform_admin and not org_id:
+        raise HTTPException(400, "User has no organization")
     sku = db.get(SKU, body.chosen_sku_id)
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
-    if user.is_platform_admin:
-        pass
-    elif user.role == "courier":
-        if sku.organization_id != org_id:
-            raise HTTPException(403, "Geen toegang tot deze SKU")
-    elif sku.organization_id != user.organization_id:
+    if not user.is_platform_admin and sku.organization_id != org_id:
         raise HTTPException(403, "Geen toegang tot deze SKU")
 
     normalized_supplier_name = _normalize_supplier_name(body.supplier_name)
