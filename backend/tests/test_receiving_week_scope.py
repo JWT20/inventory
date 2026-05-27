@@ -125,6 +125,40 @@ def test_week_scope_uses_delivery_day_caps_independently(db, sample_org):
     assert cap_remaining == 1
 
 
+def test_scope_matches_open_line_in_another_week(db, sample_org):
+    sku = _make_sku(db)
+    this_week_customer = _make_customer(db, sample_org, "ThisWeek")
+    next_week_customer = _make_customer(db, sample_org, "NextWeek")
+    this_week_order = _make_order(db, sample_org, "THIS", week="2026-W21")
+    next_week_order = _make_order(db, sample_org, "NEXT", week="2026-W22")
+    # SKU is only open in next week's order — old behavior would reject this.
+    next_week_line = _make_line(db, next_week_order, sku, next_week_customer, quantity=3)
+    _set_stock(db, sku, sample_org, 3)
+
+    selected, cap_remaining = _select_order_line_for_scope(db, this_week_order, sku.id)
+
+    assert selected.id == next_week_line.id
+    assert cap_remaining == 3
+
+
+def test_scope_prefers_earliest_week_fifo(db, sample_org):
+    sku = _make_sku(db)
+    early_customer = _make_customer(db, sample_org, "Early")
+    late_customer = _make_customer(db, sample_org, "Late")
+    early_order = _make_order(db, sample_org, "EARLY", week="2026-W21")
+    late_order = _make_order(db, sample_org, "LATE", week="2026-W22")
+    early_line = _make_line(db, early_order, sku, early_customer, quantity=8)
+    _make_line(db, late_order, sku, late_customer, quantity=8)
+    _set_stock(db, sku, sample_org, 10)
+
+    # Context order is the later week, yet FIFO routes the box to the earliest week.
+    selected, cap_remaining = _select_order_line_for_scope(db, late_order, sku.id)
+
+    assert selected.id == early_line.id
+    # Cap is computed per week independently, so it is not split with the later week.
+    assert cap_remaining == 8
+
+
 def test_confirm_books_exact_order_line_and_order_id(
     client, db, courier_token, courier_user, sample_org
 ):

@@ -477,7 +477,7 @@ function ScanStep({
   onBack: () => void;
 }) {
   const [scanning, setScanning] = useState(false);
-  const [weekProgress, setWeekProgress] = useState<{
+  const [openProgress, setOpenProgress] = useState<{
     openBoxes: number;
     openOrders: number;
   } | null>(null);
@@ -494,12 +494,13 @@ function ScanStep({
   useEffect(() => {
     let cancelled = false;
 
-    async function loadWeekProgress() {
+    async function loadOpenProgress() {
       try {
-        const weekOrders: Order[] = order.delivery_week
-          ? await api.listOrders(order.delivery_week)
+        // Scanning matches across all open weeks, so count every open order.
+        const allOrders: Order[] = order.delivery_week
+          ? await api.listOrders()
           : [order];
-        const openOrders = weekOrders
+        const openOrders = allOrders
           .filter((o) => o.status === "active")
           .map((o) => ({
             ...o,
@@ -508,14 +509,14 @@ function ScanStep({
           .filter((o) => o.remaining > 0);
 
         if (!cancelled) {
-          setWeekProgress({
+          setOpenProgress({
             openBoxes: openOrders.reduce((sum, o) => sum + o.remaining, 0),
             openOrders: openOrders.length,
           });
         }
       } catch {
         if (!cancelled) {
-          setWeekProgress({
+          setOpenProgress({
             openBoxes: Math.max(order.total_boxes - order.booked_boxes, 0),
             openOrders: Math.max(order.total_boxes - order.booked_boxes, 0) > 0 ? 1 : 0,
           });
@@ -523,7 +524,7 @@ function ScanStep({
       }
     }
 
-    loadWeekProgress();
+    loadOpenProgress();
     return () => {
       cancelled = true;
     };
@@ -613,11 +614,11 @@ function ScanStep({
       <>
         <Card className="p-3 mb-3">
           <p className="text-sm font-semibold">
-            Week {order.delivery_week || "onbekend"}
+            Alle open orders
           </p>
           <p className="text-xs text-muted-foreground">
-            {weekProgress
-              ? `${weekProgress.openBoxes} dozen open · ${weekProgress.openOrders} orders`
+            {openProgress
+              ? `${openProgress.openBoxes} dozen open · ${openProgress.openOrders} orders`
               : "Open orders laden..."}
           </p>
         </Card>
@@ -668,11 +669,11 @@ function ScanStep({
     <>
       <Card className="p-3 mb-3">
         <p className="text-sm font-semibold">
-          Week {order.delivery_week || "onbekend"}
+          Alle open orders
         </p>
         <p className="text-xs text-muted-foreground">
-          {weekProgress
-            ? `${weekProgress.openBoxes} dozen open · ${weekProgress.openOrders} orders`
+          {openProgress
+            ? `${openProgress.openBoxes} dozen open · ${openProgress.openOrders} orders`
             : "Open orders laden..."}
         </p>
       </Card>
