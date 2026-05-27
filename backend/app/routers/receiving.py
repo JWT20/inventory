@@ -55,9 +55,10 @@ def _open_scope_lines_query(db: Session, context_order: "Order", sku_id: int | N
     """Open active order lines across all open weeks, or the order itself as fallback.
 
     A scheduled order (with a delivery_week) opens up matching against every active
-    order line in the organization, regardless of week — the koerier can keep scanning
-    incoming boxes and each one is routed to whichever open order line matches.
-    An ad-hoc order (no delivery_week) stays scoped to itself.
+    scheduled order line in the organization, regardless of week — the koerier can keep
+    scanning incoming boxes and each one is routed to whichever open order line matches.
+    An ad-hoc order (no delivery_week) stays scoped to itself and is never swept into
+    weekly matching.
     """
     query = (
         db.query(OrderLine)
@@ -68,7 +69,10 @@ def _open_scope_lines_query(db: Session, context_order: "Order", sku_id: int | N
         )
     )
     if context_order.delivery_week:
-        query = query.filter(Order.organization_id == context_order.organization_id)
+        query = query.filter(
+            Order.organization_id == context_order.organization_id,
+            Order.delivery_week.isnot(None),
+        )
     else:
         query = query.filter(Order.id == context_order.id)
     if sku_id is not None:
@@ -108,11 +112,6 @@ def _cap_remaining_by_line(
             line for line in lines
             if line.order.delivery_week == week and line.delivery_day == delivery_day
         ]
-        if not week:
-            # Ad-hoc order line without a week: no weekly allocation cap applies.
-            for line in group_lines:
-                caps_by_line[line.id] = max(0, line.quantity - line.booked_count)
-            continue
         caps = compute_allocation(
             db,
             week,

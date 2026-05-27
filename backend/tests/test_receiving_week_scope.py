@@ -159,6 +159,25 @@ def test_scope_prefers_earliest_week_fifo(db, sample_org):
     assert cap_remaining == 8
 
 
+def test_scheduled_scan_skips_adhoc_null_week_orders(db, sample_org):
+    sku = _make_sku(db)
+    adhoc_customer = _make_customer(db, sample_org, "AdHoc")
+    weekly_customer = _make_customer(db, sample_org, "Weekly")
+    context_order = _make_order(db, sample_org, "CONTEXT", week="2026-W21")
+    adhoc_order = _make_order(db, sample_org, "ADHOC", week=None)
+    weekly_order = _make_order(db, sample_org, "WEEKLY", week="2026-W22")
+    # Context order does not carry the SKU; an ad-hoc (null-week) order does, and so
+    # does a real weekly order. The ad-hoc order must never be picked for a weekly scan.
+    _make_line(db, adhoc_order, sku, adhoc_customer, quantity=5)
+    weekly_line = _make_line(db, weekly_order, sku, weekly_customer, quantity=5)
+    _set_stock(db, sku, sample_org, 5)
+
+    selected, cap_remaining = _select_order_line_for_scope(db, context_order, sku.id)
+
+    assert selected.id == weekly_line.id
+    assert cap_remaining == 5
+
+
 def test_confirm_books_exact_order_line_and_order_id(
     client, db, courier_token, courier_user, sample_org
 ):
