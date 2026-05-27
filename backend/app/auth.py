@@ -307,6 +307,17 @@ def require_inbound_booker(user: User = Depends(current_active_user)) -> User:
     raise HTTPException(status.HTTP_403_FORBIDDEN, "Inbound booking access required")
 
 
+def require_merchant_inbound(user: User = Depends(current_active_user)) -> User:
+    """Inbound is per merchant: platform admin or org owner/member (NOT courier).
+
+    Couriers no longer participate in the inbound document flow; they have no
+    own organization, so they must not create, book or delete shipments.
+    """
+    if user.is_platform_admin or user.role in ("owner", "member"):
+        return user
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "Inbound access required")
+
+
 def require_can_create_orders(user: User = Depends(current_active_user)) -> User:
     """Must be platform admin, org owner/member, or customer."""
     if user.is_platform_admin:

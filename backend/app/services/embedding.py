@@ -14,7 +14,7 @@ import io
 from langfuse import observe, get_client as get_langfuse_client
 
 from app.config import settings
-from app.services.langfuse_client import get_prompt
+from app.services.langfuse_client import get_prompt, get_prompt_required
 from app.models import EMBEDDING_DIM
 
 logger = logging.getLogger(__name__)
@@ -171,14 +171,9 @@ def _get_client() -> genai.Client:
     return _client
 
 
-def optimize_for_vision(image_bytes: bytes, max_dimension: int | None = None) -> Image.Image:
-    """Downscale image so its longest side is at most ``max_dimension`` px.
-
-    Defaults to ``MAX_VISION_DIMENSION`` (suitable for box classification).
-    Document extraction passes a higher limit so small table digits stay legible.
-    """
+def _optimize_pil_for_vision(image: Image.Image, max_dimension: int | None = None) -> Image.Image:
+    """Downscale a PIL image so its longest side is at most ``max_dimension`` px."""
     limit = max_dimension or MAX_VISION_DIMENSION
-    image = Image.open(io.BytesIO(image_bytes))
     image = ImageOps.exif_transpose(image)
     w, h = image.size
     if max(w, h) > limit:
@@ -187,6 +182,15 @@ def optimize_for_vision(image_bytes: bytes, max_dimension: int | None = None) ->
         image = image.resize((new_w, new_h), Image.LANCZOS)
         logger.info("Resized image from %dx%d to %dx%d for vision (limit=%d)", w, h, new_w, new_h, limit)
     return image
+
+
+def optimize_for_vision(image_bytes: bytes, max_dimension: int | None = None) -> Image.Image:
+    """Downscale image so its longest side is at most ``max_dimension`` px.
+
+    Defaults to ``MAX_VISION_DIMENSION`` (suitable for box classification).
+    Document extraction passes a higher limit so small table digits stay legible.
+    """
+    return _optimize_pil_for_vision(Image.open(io.BytesIO(image_bytes)), max_dimension)
 
 
 @observe(as_type="generation")
@@ -244,6 +248,58 @@ async def _call_vision(
                 {"type": "text", "text": prompt},
             ]},
         )
+        langfuse.update_current_generation(
+            model=model,
+            input=langfuse_input,
+            output=response.text,
+        )
+    except Exception:
+        pass  # Langfuse not initialized or not in traced context
+
+    return response.text
+
+
+@observe(as_type="generation")
+async def _call_text(
+    prompt: str,
+    *,
+    model: str | None = None,
+    system_instruction: str | None = None,
+) -> str:
+    """Call Gemini with text-only input (no image). Returns raw response text."""
+    model = model or settings.gemini_vision_model
+    client = _get_client()
+    logger.info("Calling Gemini text model=%s", model)
+    t0 = time.perf_counter()
+
+    generate_kwargs: dict = {"model": model, "contents": [prompt]}
+    if system_instruction:
+        generate_kwargs["config"] = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+        )
+
+    async with _get_semaphore():
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                response = await client.aio.models.generate_content(**generate_kwargs)
+                break
+            except ClientError as e:
+                if e.code == 429 and attempt < MAX_RETRIES:
+                    delay = RETRY_BASE_DELAY * attempt
+                    logger.warning("Gemini rate limited (attempt %d/%d), retrying in %ds", attempt, MAX_RETRIES, delay)
+                    await asyncio.sleep(delay)
+                else:
+                    logger.exception("Gemini text API call failed (model=%s, attempt=%d)", model, attempt)
+                    raise
+
+    logger.info("[TIMING] gemini_text=%.0fms", (time.perf_counter() - t0) * 1000)
+
+    try:
+        langfuse = get_langfuse_client()
+        langfuse_input = []
+        if system_instruction:
+            langfuse_input.append({"role": "system", "content": system_instruction})
+        langfuse_input.append({"role": "user", "content": prompt})
         langfuse.update_current_generation(
             model=model,
             input=langfuse_input,
@@ -490,19 +546,31 @@ EXTRACT_SHIPMENT_USER_PROMPT = "\n".join([
 ])
 
 
-@observe()
-async def extract_shipment_document(image_bytes: bytes) -> dict:
-    """Extract structured shipment data from a pakbon/factuur photo."""
-    image = await asyncio.to_thread(
-        optimize_for_vision, image_bytes, settings.gemini_extraction_max_dimension
-    )
-    system_prompt = get_prompt("extract-shipment-document", fallback=EXTRACT_SHIPMENT_SYSTEM_DEFAULT)
-    raw_text = await _call_vision(
-        image,
-        EXTRACT_SHIPMENT_USER_PROMPT,
-        model=settings.gemini_extraction_model,
-        system_instruction=system_prompt,
-    )
+def _is_pdf(data: bytes) -> bool:
+    """Detect a PDF by its magic bytes (allowing a small leading offset)."""
+    return b"%PDF-" in data[:1024]
+
+
+def pdf_to_images(pdf_bytes: bytes) -> list[Image.Image]:
+    """Render every page of a PDF to a PIL image suitable for vision.
+
+    Uses a higher render scale so small table digits stay legible; the vision
+    optimizer downsizes afterwards if needed.
+    """
+    import fitz  # PyMuPDF
+
+    images: list[Image.Image] = []
+    # 2x zoom (~144 DPI) keeps packing-slip tables readable without huge payloads.
+    matrix = fitz.Matrix(2, 2)
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        for page in doc:
+            pix = page.get_pixmap(matrix=matrix)
+            images.append(Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB"))
+    return images
+
+
+def _parse_shipment_json(raw_text: str) -> dict:
+    """Parse the LLM JSON response into the normalized shipment dict."""
     cleaned = _strip_markdown_fences(raw_text)
     import json as _json
     try:
@@ -536,6 +604,87 @@ async def extract_shipment_document(image_bytes: bytes) -> dict:
             "raw_text": cleaned[:1000],
             "lines": [],
         }
+
+
+async def _extract_shipment_from_image(image: Image.Image, system_prompt: str) -> dict:
+    raw_text = await _call_vision(
+        image,
+        EXTRACT_SHIPMENT_USER_PROMPT,
+        model=settings.gemini_extraction_model,
+        system_instruction=system_prompt,
+    )
+    return _parse_shipment_json(raw_text)
+
+
+def _merge_shipment_results(pages: list[dict]) -> dict:
+    """Combine per-page extraction dicts: concatenate lines, take first non-empty header fields."""
+    merged: dict = {
+        "supplier_name": "",
+        "reference": "",
+        "document_type": "unknown",
+        "raw_text": "",
+        "lines": [],
+    }
+    raw_chunks: list[str] = []
+    for page in pages:
+        for field in ("supplier_name", "reference"):
+            if not merged[field] and page.get(field):
+                merged[field] = page[field]
+        page_type = page.get("document_type") or "unknown"
+        if merged["document_type"] == "unknown" and page_type != "unknown":
+            merged["document_type"] = page_type
+        if page.get("raw_text"):
+            raw_chunks.append(str(page["raw_text"]))
+        if isinstance(page.get("lines"), list):
+            merged["lines"].extend(page["lines"])
+    merged["raw_text"] = "\n".join(raw_chunks)[:2000]
+    return merged
+
+
+@observe()
+async def extract_shipment_document(file_bytes: bytes) -> dict:
+    """Extract structured shipment data from a pakbon/factuur image or PDF.
+
+    PDFs are rendered to one image per page; lines from all pages are merged.
+    """
+    system_prompt = get_prompt("extract-shipment-document", fallback=EXTRACT_SHIPMENT_SYSTEM_DEFAULT)
+
+    if _is_pdf(file_bytes):
+        pages = await asyncio.to_thread(pdf_to_images, file_bytes)
+        if not pages:
+            return _parse_shipment_json("")
+        optimized = [
+            await asyncio.to_thread(
+                _optimize_pil_for_vision, page, settings.gemini_extraction_max_dimension
+            )
+            for page in pages
+        ]
+        results = await asyncio.gather(
+            *(_extract_shipment_from_image(img, system_prompt) for img in optimized)
+        )
+        return _merge_shipment_results(list(results))
+
+    image = await asyncio.to_thread(
+        optimize_for_vision, file_bytes, settings.gemini_extraction_max_dimension
+    )
+    return await _extract_shipment_from_image(image, system_prompt)
+
+
+@observe()
+async def extract_shipment_text(text: str) -> dict:
+    """Extract structured shipment data from pasted order text (no vision).
+
+    The prompt is fetched from Langfuse with NO code fallback: if it cannot be
+    fetched, ``PromptUnavailableError`` propagates so the caller fails loudly.
+    """
+    system_prompt = get_prompt_required("extract-shipment-text")
+    prompt = f"{EXTRACT_SHIPMENT_USER_PROMPT}\n\nDocument text:\n{text}"
+    raw_text = await _call_text(
+        prompt,
+        model=settings.gemini_extraction_model,
+        system_instruction=system_prompt,
+    )
+    return _parse_shipment_json(raw_text)
 
 
 MATCH_SHIPMENT_ARTICLE_DEFAULT = """You are matching one inbound shipment line to an internal SKU catalog.

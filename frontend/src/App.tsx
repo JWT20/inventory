@@ -53,7 +53,7 @@ function Main() {
     {
       id: "inbound",
       label: "Inbound",
-      show: !isAdmin && user.role === "courier",
+      show: !isAdmin && (user.role === "owner" || user.role === "member"),
     },
     {
       id: "skus",

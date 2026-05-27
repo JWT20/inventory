@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "@/App";
 import { api, ApiError } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,11 +58,6 @@ interface SKUOption {
   active: boolean;
 }
 
-interface Organization {
-  id: number;
-  name: string;
-}
-
 interface ExtractPreview {
   supplier_name: string;
   reference: string;
@@ -94,7 +88,6 @@ function isDuplicatePakbonError(err: unknown): err is ApiError & { detail: Dupli
 }
 
 export function InboundPage() {
-  const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [confirmingInbound, setConfirmingInbound] = useState(false);
   const [preview, setPreview] = useState<ExtractPreview | null>(null);
@@ -103,39 +96,8 @@ export function InboundPage() {
   const [documentType, setDocumentType] = useState<"pakbon" | "invoice" | "unknown">("unknown");
   const [skuOptions, setSkuOptions] = useState<SKUOption[]>([]);
   const [selectedSkuByLine, setSelectedSkuByLine] = useState<Record<number, number>>({});
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [selectedOrgId, setSelectedOrgId] = useState<number | null>(null);
-
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-
-  useEffect(() => {
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 960 },
-          },
-        });
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-      } catch {
-        toast.error("Camera niet beschikbaar");
-      }
-    }
-    startCamera();
-
-    return () => {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-    };
-  }, []);
-
+  const [inputMode, setInputMode] = useState<"file" | "text">("file");
+  const [pasteText, setPasteText] = useState("");
 
   useEffect(() => {
     async function loadSkus() {
@@ -149,39 +111,23 @@ export function InboundPage() {
     void loadSkus();
   }, []);
 
-  const needsOrgSelector = !!user && (user.is_platform_admin || user.role === "courier");
+  function applyPreview(data: ExtractPreview) {
+    setPreview(data);
+    setSelectedLineIndex(null);
+    setSelectedSkuByLine({});
+    toast.success("Extractie voltooid");
+  }
 
-  useEffect(() => {
-    if (!needsOrgSelector) return;
-    async function loadOrgs() {
-      try {
-        const orgs = await api.listOrganizations();
-        setOrganizations((orgs || []) as Organization[]);
-      } catch {
-        // ignore
-      }
-    }
-    void loadOrgs();
-  }, [needsOrgSelector]);
-
-  async function extractFromBlob(blob: Blob) {
-    if (needsOrgSelector && !selectedOrgId) {
-      toast.error("Selecteer eerst een handelaar.");
-      return;
-    }
-
+  async function extractFromFile(file: File) {
     setLoading(true);
     try {
       const data = await api.extractShipmentPreview(
-        blob,
+        file,
         supplierName,
         documentType,
-        needsOrgSelector ? selectedOrgId : null,
+        file.name,
       );
-      setPreview(data);
-      setSelectedLineIndex(null);
-      setSelectedSkuByLine({});
-      toast.success("Extractie voltooid");
+      applyPreview(data);
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Extractie mislukt");
     } finally {
@@ -189,23 +135,21 @@ export function InboundPage() {
     }
   }
 
-  async function capturePhoto() {
-    if (!videoRef.current || !canvasRef.current) return;
-
-    const canvas = canvasRef.current;
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    canvas.getContext("2d")!.drawImage(videoRef.current, 0, 0);
-
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", 0.85),
-    );
-    if (!blob) return;
-    await extractFromBlob(blob);
-  }
-
-  async function uploadFallback(file: File) {
-    await extractFromBlob(file);
+  async function extractFromText() {
+    const text = pasteText.trim();
+    if (!text) {
+      toast.error("Plak eerst de besteltekst.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await api.extractShipmentPreviewText(text, supplierName, documentType);
+      applyPreview(data);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Extractie mislukt");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function confirmInbound() {
@@ -229,17 +173,11 @@ export function InboundPage() {
       return;
     }
 
-    if (needsOrgSelector && !selectedOrgId) {
-      toast.error("Selecteer een handelaar om de pakbon voor in te boeken.");
-      return;
-    }
-
     setConfirmingInbound(true);
     try {
       let created: { id: number };
       try {
         created = await api.createShipment({
-          organization_id: needsOrgSelector ? selectedOrgId : null,
           supplier_name: preview.supplier_name || null,
           reference: preview.reference || null,
           document_sha256: preview.document_sha256 ?? null,
@@ -262,7 +200,6 @@ export function InboundPage() {
             return;
           }
           created = await api.createShipment({
-            organization_id: needsOrgSelector ? selectedOrgId : null,
             supplier_name: preview.supplier_name || null,
             reference: preview.reference || null,
             document_sha256: preview.document_sha256 ?? null,
@@ -303,8 +240,6 @@ export function InboundPage() {
 
     if (!supplierNameForMapping || !supplierCodeForMapping) {
       persistenceSkippedReason = "leverancier of supplier code ontbreekt";
-    } else if (needsOrgSelector && !selectedOrgId) {
-      persistenceSkippedReason = "geen handelaar geselecteerd";
     } else {
       try {
         await api.confirmLineMatch({
@@ -312,7 +247,6 @@ export function InboundPage() {
           supplier_code: supplierCodeForMapping,
           chosen_sku_id: sku.id,
           persist_mapping: true,
-          organization_id: needsOrgSelector ? selectedOrgId : null,
         });
         mappingPersisted = true;
       } catch (err: unknown) {
@@ -350,16 +284,10 @@ export function InboundPage() {
       return;
     }
 
-    if (needsOrgSelector && !selectedOrgId) {
-      toast.error("Selecteer eerst een handelaar.");
-      return;
-    }
-
     try {
       const created = await api.createConceptProduct(
         supplierCode,
         line.description || undefined,
-        needsOrgSelector ? selectedOrgId : null,
       );
 
       const supplierNameForMapping = (preview.supplier_name || "").trim();
@@ -371,7 +299,6 @@ export function InboundPage() {
             supplier_code: supplierCode,
             chosen_sku_id: created.id,
             persist_mapping: true,
-            organization_id: needsOrgSelector ? selectedOrgId : null,
           });
           mappingPersisted = true;
         } catch (err: unknown) {
@@ -422,21 +349,6 @@ export function InboundPage() {
       <h2 className="text-xl font-bold">Inbound pakbon/factuur</h2>
 
       <Card className="p-3 space-y-3">
-        {needsOrgSelector && (
-          <Select
-            value={selectedOrgId ? String(selectedOrgId) : ""}
-            onValueChange={(v) => setSelectedOrgId(v ? Number(v) : null)}
-          >
-            <SelectTrigger className="text-sm">
-              <SelectValue placeholder="Selecteer handelaar..." />
-            </SelectTrigger>
-            <SelectContent>
-              {organizations.map((org) => (
-                <SelectItem key={org.id} value={String(org.id)}>{org.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
         <div className="grid grid-cols-2 gap-2">
           <Input
             className="text-sm"
@@ -459,31 +371,52 @@ export function InboundPage() {
           </Select>
         </div>
 
-        <div className="rounded-md overflow-hidden border border-border bg-black/5">
-          <video ref={videoRef} className="w-full max-h-[320px] object-cover" muted playsInline />
+        <div className="inline-flex rounded-md border border-border p-0.5 text-sm">
+          <button
+            type="button"
+            className={`px-3 py-1 rounded ${inputMode === "file" ? "bg-primary text-primary-foreground" : ""}`}
+            onClick={() => setInputMode("file")}
+          >
+            Bestand uploaden
+          </button>
+          <button
+            type="button"
+            className={`px-3 py-1 rounded ${inputMode === "text" ? "bg-primary text-primary-foreground" : ""}`}
+            onClick={() => setInputMode("text")}
+          >
+            Tekst plakken
+          </button>
         </div>
-        <canvas ref={canvasRef} className="hidden" />
 
-        <div className="flex gap-2">
-          <Button onClick={capturePhoto} disabled={loading} className="flex-1">
-            {loading ? "Bezig..." : "Maak foto"}
-          </Button>
-          <label className="flex-1">
+        {inputMode === "file" ? (
+          <label className="block">
             <input
               type="file"
               className="hidden"
-              accept="image/*"
+              accept="application/pdf,image/*"
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 e.target.value = "";
-                if (file) void uploadFallback(file);
+                if (file) void extractFromFile(file);
               }}
             />
-            <span className="inline-flex w-full items-center justify-center rounded-md border border-border py-2 text-sm font-medium">
-              Upload fallback
+            <span className="inline-flex w-full items-center justify-center rounded-md border border-border py-3 text-sm font-medium cursor-pointer">
+              {loading ? "Bezig..." : "Kies PDF of afbeelding"}
             </span>
           </label>
-        </div>
+        ) : (
+          <div className="space-y-2">
+            <textarea
+              className="w-full min-h-[160px] rounded-md border border-border bg-background p-2 text-sm font-mono"
+              placeholder={"Plak hier je bestelregels, bijv.:\n0009532  Vinho Verde Alvarinho 2024  6  € 7,31  € 43,86"}
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+            />
+            <Button onClick={extractFromText} disabled={loading} className="w-full">
+              {loading ? "Bezig..." : "Tekst verwerken"}
+            </Button>
+          </div>
+        )}
       </Card>
 
       {preview && (
@@ -509,9 +442,11 @@ export function InboundPage() {
               Auto-mapping: eerst op leverancier + supplier code (opgeslagen mappings), daarna op exacte SKU-code match.
             </p>
 
-            <div className="mt-3 border border-border rounded overflow-hidden">
-              <img src={preview.image_url} alt="Pakbon/factuur" className="w-full" />
-            </div>
+            {preview.image_url && (
+              <div className="mt-3 border border-border rounded overflow-hidden">
+                <img src={preview.image_url} alt="Pakbon/factuur" className="w-full" />
+              </div>
+            )}
             <div className="mt-3">
               <Button onClick={confirmInbound} disabled={confirmingInbound} className="w-full">
                 {confirmingInbound ? "Inbound boeken..." : "Confirm inbound"}
