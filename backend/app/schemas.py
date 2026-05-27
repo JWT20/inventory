@@ -359,6 +359,7 @@ class WeeklyPickPhotoResponse(BaseModel):
     image_url: str | None = None
     quantity: int
     booked_count: int
+    customers: list[str] = []
 
 
 class ManualOrderLineCreate(BaseModel):

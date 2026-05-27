@@ -169,6 +169,44 @@ class TestWeeklyPickPhotos:
         assert data[0]["order_line_id"] == open_line.id
         assert data[0]["image_url"] == "/api/thumbnails/320/reference_images/open.jpg"
 
+    def test_weekly_pick_photos_lists_open_customers_for_sku(
+        self, client, db, owner_user, owner_token, sample_org
+    ):
+        sku = SKU(sku_code="WINE-CUSTOMERS", name="Klantwijn")
+        cust_a = Customer(name="Bram", organization_id=sample_org.id)
+        cust_b = Customer(name="Anna", organization_id=sample_org.id)
+        cust_done = Customer(name="Cor", organization_id=sample_org.id)
+        db.add_all([sku, cust_a, cust_b, cust_done])
+        db.commit()
+
+        order = Order(
+            organization_id=sample_org.id,
+            created_by=owner_user.id,
+            reference="ORD-CUSTOMERS",
+            status="active",
+            delivery_week="2026-W21",
+        )
+        db.add(order)
+        db.commit()
+        db.add_all([
+            OrderLine(order_id=order.id, sku_id=sku.id, customer_id=cust_a.id, quantity=3, booked_count=1),
+            OrderLine(order_id=order.id, sku_id=sku.id, customer_id=cust_b.id, quantity=2, booked_count=0),
+            # Fully picked for this customer — must not appear.
+            OrderLine(order_id=order.id, sku_id=sku.id, customer_id=cust_done.id, quantity=2, booked_count=2),
+        ])
+        db.commit()
+
+        resp = client.get(
+            "/api/orders/weekly-pick-photos?week=2026-W21",
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        # Sorted case-insensitively, only customers with open boxes.
+        assert data[0]["customers"] == ["Anna", "Bram"]
+
 
 class TestCustomerSkuRestrictions:
     """Customers may only order SKUs already assigned to their linked customer."""
