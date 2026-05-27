@@ -258,7 +258,7 @@ class CustomerSKU(Base):
     sku: Mapped["SKU"] = relationship()
 
 
-VALID_ORDER_STATUSES = ("draft", "pending_images", "active", "completed", "cancelled")
+VALID_ORDER_STATUSES = ("draft", "pending_images", "active", "completed", "cancelled", "closed")
 
 
 class Order(Base):

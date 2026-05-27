@@ -34,6 +34,9 @@ from app.services.deadlines import get_order_deadline, get_next_deadline
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
 
+# Statuses a courier may view (matches the courier history list).
+COURIER_VIEWABLE_STATUSES = ("active", "completed", "cancelled", "closed")
+
 
 def _calc_effective_price(
     unit_price: float | None,
@@ -677,7 +680,7 @@ def get_order(
     if not user.is_platform_admin:
         if user.role == "customer" and order.created_by != user.id:
             raise HTTPException(403, "Geen toegang tot deze order")
-        elif user.role == "courier" and order.status != "active":
+        elif user.role == "courier" and order.status not in COURIER_VIEWABLE_STATUSES:
             raise HTTPException(403, "Geen toegang tot deze order")
         elif user.organization_id and order.organization_id != user.organization_id:
             if user.role != "courier":
@@ -1065,7 +1068,7 @@ def list_bookings(
     if not user.is_platform_admin:
         if user.role == "customer" and order.created_by != user.id:
             raise HTTPException(403, "Geen toegang tot deze order")
-        elif user.role == "courier" and order.status != "active":
+        elif user.role == "courier" and order.status not in COURIER_VIEWABLE_STATUSES:
             raise HTTPException(403, "Geen toegang tot deze order")
         elif user.organization_id and order.organization_id != user.organization_id:
             if user.role != "courier":

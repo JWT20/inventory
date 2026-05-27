@@ -104,6 +104,22 @@ def test_customer_cannot_close(client, db, customer_token, sample_org):
     assert order.status == "active"
 
 
+def test_courier_can_fetch_closed_order_detail_and_bookings(
+    client, db, courier_token, sample_org
+):
+    order, _line = _setup_partial_order(db, sample_org, ref="HIST")
+    client.post(f"/api/orders/{order.id}/close", headers=auth_header(courier_token))
+
+    detail = client.get(f"/api/orders/{order.id}", headers=auth_header(courier_token))
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "closed"
+
+    bookings = client.get(
+        f"/api/orders/{order.id}/bookings", headers=auth_header(courier_token)
+    )
+    assert bookings.status_code == 200
+
+
 def test_cannot_close_non_active_order(client, db, owner_token, sample_org):
     order, _line = _setup_partial_order(db, sample_org, ref="DONE", status="completed")
 
