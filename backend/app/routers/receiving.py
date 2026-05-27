@@ -48,11 +48,18 @@ _DELIVERY_DAY_SORT = {"wednesday": 0, "thursday": 1, "friday": 2}
 
 
 def _scope_label(context_order: "Order") -> str:
-    return "deze week" if context_order.delivery_week else "deze order"
+    return "de open orders" if context_order.delivery_week else "deze order"
 
 
 def _open_scope_lines_query(db: Session, context_order: "Order", sku_id: int | None = None):
-    """Open active order lines in the context order's week, or the order itself as fallback."""
+    """Open active order lines across all open weeks, or the order itself as fallback.
+
+    A scheduled order (with a delivery_week) opens up matching against every active
+    scheduled order line in the organization, regardless of week — the koerier can keep
+    scanning incoming boxes and each one is routed to whichever open order line matches.
+    An ad-hoc order (no delivery_week) stays scoped to itself and is never swept into
+    weekly matching.
+    """
     query = (
         db.query(OrderLine)
         .join(Order, OrderLine.order_id == Order.id)
@@ -63,8 +70,8 @@ def _open_scope_lines_query(db: Session, context_order: "Order", sku_id: int | N
     )
     if context_order.delivery_week:
         query = query.filter(
-            Order.delivery_week == context_order.delivery_week,
             Order.organization_id == context_order.organization_id,
+            Order.delivery_week.isnot(None),
         )
     else:
         query = query.filter(Order.id == context_order.id)
@@ -84,7 +91,11 @@ def _cap_remaining_by_line(
     sku_id: int,
     lines: list["OrderLine"],
 ) -> dict[int, int]:
-    """Return remaining bookable quantity per line, respecting caps per delivery day."""
+    """Return remaining bookable quantity per line, respecting caps per (week, day).
+
+    Caps are computed independently per delivery week so widening the scan scope
+    across weeks never lets one week's allocation eat into another's.
+    """
     if not context_order.delivery_week:
         return {
             line.id: max(0, line.quantity - line.booked_count)
@@ -92,18 +103,23 @@ def _cap_remaining_by_line(
         }
 
     caps_by_line: dict[int, int] = {}
-    days = sorted({line.delivery_day for line in lines}, key=lambda d: _DELIVERY_DAY_SORT.get(d, 9))
-    for delivery_day in days:
+    groups = sorted(
+        {(line.order.delivery_week, line.delivery_day) for line in lines},
+        key=lambda g: (g[0] or "", _DELIVERY_DAY_SORT.get(g[1], 9)),
+    )
+    for week, delivery_day in groups:
+        group_lines = [
+            line for line in lines
+            if line.order.delivery_week == week and line.delivery_day == delivery_day
+        ]
         caps = compute_allocation(
             db,
-            context_order.delivery_week,
+            week,
             sku_id,
             context_order.organization_id,
             delivery_day,
         )
-        for line in lines:
-            if line.delivery_day != delivery_day:
-                continue
+        for line in group_lines:
             cap_total = caps.get(line.id, line.booked_count)
             caps_by_line[line.id] = max(0, cap_total - line.booked_count)
     return caps_by_line
@@ -134,9 +150,10 @@ def _select_order_line_for_scope(
             f"Toewijzingslimiet bereikt voor deze SKU in {_scope_label(context_order)}",
         )
 
-    def sort_key(item: tuple["OrderLine", int]) -> tuple[int, int, int]:
+    def sort_key(item: tuple["OrderLine", int]) -> tuple[str, int, int, int]:
         line, _cap_remaining = item
         return (
+            line.order.delivery_week or "",
             0 if line.order_id == context_order.id else 1,
             _DELIVERY_DAY_SORT.get(line.delivery_day, 9),
             line.id,
@@ -431,12 +448,12 @@ async def book_box(
                 "Dit is geen doos of verpakking — scan een productdoos",
             )
 
-        # Match against open SKUs in the selected order's week scope.
+        # Match against open SKUs across all open orders (FIFO across weeks).
         scope_sku_ids = set(_scope_sku_ids(db, order))
         if not scope_sku_ids:
             raise HTTPException(
                 400,
-                f"Geen open orderregels in {_scope_label(order)}",
+                "Geen open orderregels gevonden",
             )
         candidates = find_best_matches(db, embedding, top_n=5, sku_ids=list(scope_sku_ids))
         t_match = time.perf_counter()
