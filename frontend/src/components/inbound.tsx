@@ -99,6 +99,7 @@ export function InboundPage() {
   const [inputMode, setInputMode] = useState<"file" | "text">("file");
   const [pasteText, setPasteText] = useState("");
   const [ignoredLines, setIgnoredLines] = useState<Set<number>>(new Set());
+  const [editingLines, setEditingLines] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     async function loadSkus() {
@@ -117,6 +118,7 @@ export function InboundPage() {
     setSelectedLineIndex(null);
     setSelectedSkuByLine({});
     setIgnoredLines(new Set());
+    setEditingLines(new Set());
     toast.success("Extractie voltooid");
   }
 
@@ -127,6 +129,70 @@ export function InboundPage() {
       else next.add(lineIndex);
       return next;
     });
+  }
+
+  function setEditing(lineIndex: number, open: boolean) {
+    setEditingLines((prev) => {
+      const next = new Set(prev);
+      if (open) next.add(lineIndex);
+      else next.delete(lineIndex);
+      return next;
+    });
+  }
+
+  function openEdit(lineIndex: number) {
+    if (!preview) return;
+    const current = preview.lines[lineIndex]?.matched_sku_id;
+    if (current) {
+      setSelectedSkuByLine((prev) => ({ ...prev, [lineIndex]: current }));
+    }
+    setEditing(lineIndex, true);
+  }
+
+  async function unlinkLine(lineIndex: number) {
+    if (!preview) return;
+    const line = preview.lines[lineIndex];
+    const supplierName = (preview.supplier_name || "").trim();
+    const supplierCode = (line.supplier_code || "").trim();
+
+    // Remove the stored supplier→SKU mapping so this code no longer auto-matches.
+    if (supplierName && supplierCode) {
+      try {
+        const mappings = (await api.listSupplierMappings(supplierName)) as {
+          id: number;
+          supplier_code: string;
+        }[];
+        const match = (mappings || []).find(
+          (m) => m.supplier_code.toUpperCase() === supplierCode.toUpperCase(),
+        );
+        if (match) await api.deleteSupplierMapping(match.id);
+      } catch (err: unknown) {
+        toast.error(
+          err instanceof Error
+            ? `Koppeling op scherm verwijderd, maar opgeslagen koppeling niet: ${err.message}`
+            : "Opgeslagen koppeling kon niet worden verwijderd",
+        );
+      }
+    }
+
+    setPreview((prev) => {
+      if (!prev) return prev;
+      const nextLines = [...prev.lines];
+      nextLines[lineIndex] = {
+        ...nextLines[lineIndex],
+        matched_sku_id: null,
+        matched_sku_code: null,
+        matched_sku_name: null,
+      };
+      return { ...prev, lines: nextLines };
+    });
+    setSelectedSkuByLine((prev) => {
+      const next = { ...prev };
+      delete next[lineIndex];
+      return next;
+    });
+    setEditing(lineIndex, false);
+    toast.success("Ontkoppeld — kies een nieuw SKU of zet de regel op niet boeken");
   }
 
   async function extractFromFile(file: File) {
@@ -287,6 +353,7 @@ export function InboundPage() {
       };
       return { ...prev, lines: nextLines };
     });
+    setEditing(lineIndex, false);
     if (mappingPersisted) {
       toast.success(`Gekoppeld aan ${sku.sku_code} (onthouden voor volgende pakbonnen)`);
     } else {
@@ -342,6 +409,7 @@ export function InboundPage() {
         };
         return { ...prev, lines: nextLines };
       });
+      setEditing(lineIndex, false);
       if (mappingPersisted) {
         toast.success(`Concept product ${created.sku_code} aangemaakt en gekoppeld`);
       } else if (!supplierNameForMapping) {
@@ -485,6 +553,7 @@ export function InboundPage() {
                   const reason = mismatchReason(line);
                   const unknownUnit = line.quantity_unit === "unknown";
                   const ignored = ignoredLines.has(idx);
+                  const editing = editingLines.has(idx);
                   const borderClass = selectedLineIndex === idx
                     ? "border-primary"
                     : ignored
@@ -561,12 +630,36 @@ export function InboundPage() {
                         Confidence: {(line.confidence * 100).toFixed(0)}%
                       </span>
                     </div>
-                    <p className="text-xs mt-1">
-                      {line.matched_sku_code
-                        ? `Match: ${line.matched_sku_code} - ${line.matched_sku_name}`
-                        : "Geen SKU-match"}
-                    </p>
-                    {!line.matched_sku_code && !ignored && (
+                    <div className="flex items-center gap-2 mt-1">
+                      <p className="text-xs">
+                        {line.matched_sku_code
+                          ? `Match: ${line.matched_sku_code} - ${line.matched_sku_name}`
+                          : "Geen SKU-match"}
+                      </p>
+                      {line.matched_sku_code && !ignored && !editing && (
+                        <div className="ml-auto flex gap-1" onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="h-6 text-xs"
+                            onClick={() => openEdit(idx)}
+                          >
+                            Wijzig koppeling
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="h-6 text-xs text-destructive"
+                            onClick={() => {
+                              void unlinkLine(idx);
+                            }}
+                          >
+                            Ontkoppel
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                    {(!line.matched_sku_code || editing) && !ignored && (
                       <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
                         <div className="flex gap-2">
                           <Select
@@ -608,6 +701,16 @@ export function InboundPage() {
                         >
                           Concept product
                         </Button>
+                        {editing && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="h-7 text-xs text-muted-foreground"
+                            onClick={() => setEditing(idx, false)}
+                          >
+                            Annuleer
+                          </Button>
+                        )}
                       </div>
                     )}
                     <div className="mt-2" onClick={(e) => e.stopPropagation()}>
