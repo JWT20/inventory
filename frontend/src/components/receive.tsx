@@ -386,7 +386,8 @@ function OrderSelectStep({
 
 /* ---------- This Week Overview ---------- */
 
-function ThisWeekStep({ week, onBack }: { week: string; onBack: () => void }) {
+function ThisWeekStep({ week: initialWeek, onBack }: { week: string; onBack: () => void }) {
+  const [week, setWeek] = useState(initialWeek);
   const [items, setItems] = useState<WeeklyPickPhoto[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -422,6 +423,24 @@ function ThisWeekStep({ week, onBack }: { week: string; onBack: () => void }) {
         </div>
         <Button variant="outline" size="sm" onClick={onBack}>
           Terug
+        </Button>
+      </div>
+
+      <div className="flex items-center justify-center gap-2 mb-4">
+        <Button variant="outline" size="sm" onClick={() => setWeek((w) => shiftWeek(w, -1))}>
+          &larr;
+        </Button>
+        <span className="text-sm font-medium min-w-[7rem] text-center">{week}</span>
+        <Button variant="outline" size="sm" onClick={() => setWeek((w) => shiftWeek(w, 1))}>
+          &rarr;
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setWeek(getISOWeek(new Date()))}
+          className="ml-2"
+        >
+          Vandaag
         </Button>
       </div>
 
