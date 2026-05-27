@@ -432,7 +432,10 @@ def weekly_pick_photos(
     query = (
         db.query(OrderLine)
         .join(Order, OrderLine.order_id == Order.id)
-        .options(selectinload(OrderLine.sku).selectinload(SKU.reference_images))
+        .options(
+            selectinload(OrderLine.sku).selectinload(SKU.reference_images),
+            selectinload(OrderLine.customer),
+        )
         .filter(
             Order.status == "active",
             OrderLine.booked_count < OrderLine.quantity,
