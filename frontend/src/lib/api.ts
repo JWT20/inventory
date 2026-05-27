@@ -304,6 +304,8 @@ export const api = {
   getOrder: (id: number) => request(`/orders/${id}`),
   activateOrder: (id: number) =>
     request(`/orders/${id}/activate`, { method: "POST" }),
+  closeOrder: (id: number) =>
+    request(`/orders/${id}/close`, { method: "POST" }),
   deleteOrder: (id: number) => request(`/orders/${id}`, { method: "DELETE" }),
   listBookings: (orderId: number) => request(`/orders/${orderId}/bookings`),
   weeklyPickPhotos: (week?: string) =>

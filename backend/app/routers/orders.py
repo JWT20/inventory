@@ -34,6 +34,9 @@ from app.services.deadlines import get_order_deadline, get_next_deadline
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
 
+# Statuses a courier may view (matches the courier history list).
+COURIER_VIEWABLE_STATUSES = ("active", "completed", "cancelled", "closed")
+
 
 def _calc_effective_price(
     unit_price: float | None,
@@ -322,7 +325,7 @@ def list_orders(
         pass  # See everything
     elif user.role == "courier":
         if include_history:
-            query = query.filter(Order.status.in_(("active", "completed", "cancelled")))
+            query = query.filter(Order.status.in_(("active", "completed", "cancelled", "closed")))
         else:
             query = query.filter(Order.status == "active")
     elif user.role == "customer":
@@ -677,7 +680,7 @@ def get_order(
     if not user.is_platform_admin:
         if user.role == "customer" and order.created_by != user.id:
             raise HTTPException(403, "Geen toegang tot deze order")
-        elif user.role == "courier" and order.status != "active":
+        elif user.role == "courier" and order.status not in COURIER_VIEWABLE_STATUSES:
             raise HTTPException(403, "Geen toegang tot deze order")
         elif user.organization_id and order.organization_id != user.organization_id:
             if user.role != "courier":
@@ -720,6 +723,56 @@ def activate_order(
     publish_event(
         "order_activated",
         details={"order_reference": order.reference},
+        user=user,
+        resource_type="order",
+        resource_id=order.id,
+    )
+
+    return _order_to_response(order, db)
+
+
+@router.post("/{order_id}/close", response_model=OrderResponse)
+def close_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Close an active order even if it is not fully picked.
+
+    Bookings that were already made stay intact; the remaining open lines are
+    simply no longer expected. A closed order drops out of the scan scope, so
+    couriers stop receiving matches for it. Closing is available to the courier
+    and to the owning organization (and platform admins).
+    """
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+
+    allowed = (
+        user.is_platform_admin
+        or user.role == "courier"
+        or (
+            user.role in ("owner", "member")
+            and order.organization_id == user.organization_id
+        )
+    )
+    if not allowed:
+        raise HTTPException(403, "Geen toegang om deze order te sluiten")
+
+    if order.status != "active":
+        raise HTTPException(400, f"Order kan niet gesloten worden (status: {order.status})")
+
+    order.status = "closed"
+    db.commit()
+    db.refresh(order)
+
+    publish_event(
+        "order_closed",
+        details={
+            "order_reference": order.reference,
+            "total_boxes": sum(l.quantity for l in order.lines),
+            "booked_boxes": sum(l.booked_count for l in order.lines),
+        },
         user=user,
         resource_type="order",
         resource_id=order.id,
@@ -797,7 +850,7 @@ def _get_editable_order(order_id: int, db: Session, user: User) -> Order:
 
 def _recompute_order_status(order: Order) -> None:
     """Recompute order status based on SKU images and booking progress."""
-    if order.status in ("completed", "cancelled"):
+    if order.status in ("completed", "cancelled", "closed"):
         return
     all_have_images = all(len(l.sku.reference_images) > 0 for l in order.lines)
     all_booked = all(l.booked_count >= l.quantity for l in order.lines)
@@ -1015,7 +1068,7 @@ def list_bookings(
     if not user.is_platform_admin:
         if user.role == "customer" and order.created_by != user.id:
             raise HTTPException(403, "Geen toegang tot deze order")
-        elif user.role == "courier" and order.status != "active":
+        elif user.role == "courier" and order.status not in COURIER_VIEWABLE_STATUSES:
             raise HTTPException(403, "Geen toegang tot deze order")
         elif user.organization_id and order.organization_id != user.organization_id:
             if user.role != "courier":
