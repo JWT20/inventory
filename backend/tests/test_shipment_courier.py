@@ -164,3 +164,46 @@ def test_owner_can_book_own_shipment(client, db, owner_token, owner_user):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "booked"
+
+
+def test_owner_can_read_own_shipment(client, db, owner_token, owner_user):
+    sku = SKU(sku_code="SKU-READ-1", name="Wine", organization_id=owner_user.organization_id)
+    db.add(sku)
+    db.flush()
+    shipment = _draft_shipment(db, owner_user.organization_id, sku.id, reference="PKB-READ-1")
+
+    resp = client.get(
+        f"/api/shipments/{shipment.id}",
+        headers=auth_header(owner_token),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["id"] == shipment.id
+
+
+def test_owner_cannot_read_other_org_shipment(client, db, owner_token):
+    other_org = Organization(name="Andere lees", slug="andere-lees-org")
+    db.add(other_org)
+    db.flush()
+    sku = SKU(sku_code="SKU-READ-OTHER", name="Wine", organization_id=other_org.id)
+    db.add(sku)
+    db.flush()
+    shipment = _draft_shipment(db, other_org.id, sku.id, reference="PKB-READ-OTHER")
+
+    resp = client.get(
+        f"/api/shipments/{shipment.id}",
+        headers=auth_header(owner_token),
+    )
+    assert resp.status_code == 404, resp.text
+
+
+def test_courier_cannot_read_shipment(client, db, courier_token, owner_user):
+    sku = SKU(sku_code="SKU-READ-COUR", name="Wine", organization_id=owner_user.organization_id)
+    db.add(sku)
+    db.flush()
+    shipment = _draft_shipment(db, owner_user.organization_id, sku.id, reference="PKB-READ-COUR")
+
+    resp = client.get(
+        f"/api/shipments/{shipment.id}",
+        headers=auth_header(courier_token),
+    )
+    assert resp.status_code == 404, resp.text
