@@ -98,6 +98,8 @@ export function InboundPage() {
   const [selectedSkuByLine, setSelectedSkuByLine] = useState<Record<number, number>>({});
   const [inputMode, setInputMode] = useState<"file" | "text">("file");
   const [pasteText, setPasteText] = useState("");
+  const [ignoredLines, setIgnoredLines] = useState<Set<number>>(new Set());
+  const [editingLines, setEditingLines] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     async function loadSkus() {
@@ -115,7 +117,82 @@ export function InboundPage() {
     setPreview(data);
     setSelectedLineIndex(null);
     setSelectedSkuByLine({});
+    setIgnoredLines(new Set());
+    setEditingLines(new Set());
     toast.success("Extractie voltooid");
+  }
+
+  function toggleIgnoreLine(lineIndex: number) {
+    setIgnoredLines((prev) => {
+      const next = new Set(prev);
+      if (next.has(lineIndex)) next.delete(lineIndex);
+      else next.add(lineIndex);
+      return next;
+    });
+  }
+
+  function setEditing(lineIndex: number, open: boolean) {
+    setEditingLines((prev) => {
+      const next = new Set(prev);
+      if (open) next.add(lineIndex);
+      else next.delete(lineIndex);
+      return next;
+    });
+  }
+
+  function openEdit(lineIndex: number) {
+    if (!preview) return;
+    const current = preview.lines[lineIndex]?.matched_sku_id;
+    if (current) {
+      setSelectedSkuByLine((prev) => ({ ...prev, [lineIndex]: current }));
+    }
+    setEditing(lineIndex, true);
+  }
+
+  async function unlinkLine(lineIndex: number) {
+    if (!preview) return;
+    const line = preview.lines[lineIndex];
+    const supplierName = (preview.supplier_name || "").trim();
+    const supplierCode = (line.supplier_code || "").trim();
+
+    // Remove the stored supplier→SKU mapping so this code no longer auto-matches.
+    if (supplierName && supplierCode) {
+      try {
+        const mappings = (await api.listSupplierMappings(supplierName)) as {
+          id: number;
+          supplier_code: string;
+        }[];
+        const match = (mappings || []).find(
+          (m) => m.supplier_code.toUpperCase() === supplierCode.toUpperCase(),
+        );
+        if (match) await api.deleteSupplierMapping(match.id);
+      } catch (err: unknown) {
+        toast.error(
+          err instanceof Error
+            ? `Koppeling op scherm verwijderd, maar opgeslagen koppeling niet: ${err.message}`
+            : "Opgeslagen koppeling kon niet worden verwijderd",
+        );
+      }
+    }
+
+    setPreview((prev) => {
+      if (!prev) return prev;
+      const nextLines = [...prev.lines];
+      nextLines[lineIndex] = {
+        ...nextLines[lineIndex],
+        matched_sku_id: null,
+        matched_sku_code: null,
+        matched_sku_name: null,
+      };
+      return { ...prev, lines: nextLines };
+    });
+    setSelectedSkuByLine((prev) => {
+      const next = { ...prev };
+      delete next[lineIndex];
+      return next;
+    });
+    setEditing(lineIndex, false);
+    toast.success("Ontkoppeld — kies een nieuw SKU of zet de regel op niet boeken");
   }
 
   async function extractFromFile(file: File) {
@@ -154,18 +231,28 @@ export function InboundPage() {
 
   async function confirmInbound() {
     if (!preview) return;
-    const lines = preview.lines
-      .filter((line) => line.matched_sku_id && line.quantity_boxes > 0)
-      .map((line) => ({
+    const active = preview.lines
+      .map((line, idx) => ({ line, idx }))
+      .filter(({ idx }) => !ignoredLines.has(idx));
+
+    const lines = active
+      .filter(({ line }) => line.matched_sku_id && line.quantity_boxes > 0)
+      .map(({ line }) => ({
         sku_id: line.matched_sku_id as number,
         quantity: line.quantity_boxes,
         supplier_code: line.supplier_code || null,
       }));
 
-    const unmapped = preview.lines.filter((line) => !line.matched_sku_id && line.quantity_boxes > 0);
-    if (unmapped.length > 0) {
-      const codes = unmapped.map((l) => l.supplier_code || "(geen code)").join(", ");
-      toast.error(`Nog geen SKU-match voor: ${codes}. Maak eerst SKU's aan bij deze regels.`);
+    // Every non-ignored line must be bookable (matched SKU + at least 1 box).
+    // Anything else needs an explicit decision: resolve it or mark "niet boeken".
+    const needsDecision = active.filter(
+      ({ line }) => !line.matched_sku_id || line.quantity_boxes <= 0,
+    );
+    if (needsDecision.length > 0) {
+      const codes = needsDecision.map(({ line }) => line.supplier_code || "(geen code)").join(", ");
+      toast.error(
+        `Nog niet boekbaar: ${codes}. Koppel een SKU en zet een aantal, of zet de regel op "niet boeken".`,
+      );
       return;
     }
     if (lines.length === 0) {
@@ -266,6 +353,7 @@ export function InboundPage() {
       };
       return { ...prev, lines: nextLines };
     });
+    setEditing(lineIndex, false);
     if (mappingPersisted) {
       toast.success(`Gekoppeld aan ${sku.sku_code} (onthouden voor volgende pakbonnen)`);
     } else {
@@ -321,6 +409,7 @@ export function InboundPage() {
         };
         return { ...prev, lines: nextLines };
       });
+      setEditing(lineIndex, false);
       if (mappingPersisted) {
         toast.success(`Concept product ${created.sku_code} aangemaakt en gekoppeld`);
       } else if (!supplierNameForMapping) {
@@ -463,19 +552,32 @@ export function InboundPage() {
                 {preview.lines.map((line, idx) => {
                   const reason = mismatchReason(line);
                   const unknownUnit = line.quantity_unit === "unknown";
+                  const ignored = ignoredLines.has(idx);
+                  const editing = editingLines.has(idx);
                   const borderClass = selectedLineIndex === idx
                     ? "border-primary"
-                    : reason
-                      ? "border-border border-l-2 border-l-amber-500"
-                      : "border-border";
+                    : ignored
+                      ? "border-border"
+                      : reason
+                        ? "border-border border-l-2 border-l-amber-500"
+                        : "border-border";
                   return (
                   <button
                     key={`${line.supplier_code}-${idx}`}
-                    className={`w-full text-left border rounded p-2 ${borderClass}`}
+                    className={`w-full text-left border rounded p-2 ${borderClass} ${ignored ? "opacity-60" : ""}`}
                     onClick={() => setSelectedLineIndex(idx)}
                   >
-                    <p className="text-sm font-medium">{line.supplier_code || "(geen code)"}</p>
-                    <p className="text-sm">{line.description || "-"}</p>
+                    <div className="flex items-center gap-2">
+                      <p className={`text-sm font-medium ${ignored ? "line-through" : ""}`}>
+                        {line.supplier_code || "(geen code)"}
+                      </p>
+                      {ignored && (
+                        <span className="text-xs rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
+                          wordt niet geboekt
+                        </span>
+                      )}
+                    </div>
+                    <p className={`text-sm ${ignored ? "line-through" : ""}`}>{line.description || "-"}</p>
                     <div className="grid grid-cols-2 gap-2 mt-2">
                       <div>
                         <p className="text-xs text-muted-foreground">Uitgelezen</p>
@@ -528,12 +630,36 @@ export function InboundPage() {
                         Confidence: {(line.confidence * 100).toFixed(0)}%
                       </span>
                     </div>
-                    <p className="text-xs mt-1">
-                      {line.matched_sku_code
-                        ? `Match: ${line.matched_sku_code} - ${line.matched_sku_name}`
-                        : "Geen SKU-match"}
-                    </p>
-                    {!line.matched_sku_code && (
+                    <div className="flex items-center gap-2 mt-1">
+                      <p className="text-xs">
+                        {line.matched_sku_code
+                          ? `Match: ${line.matched_sku_code} - ${line.matched_sku_name}`
+                          : "Geen SKU-match"}
+                      </p>
+                      {line.matched_sku_code && !ignored && !editing && (
+                        <div className="ml-auto flex gap-1" onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="h-6 text-xs"
+                            onClick={() => openEdit(idx)}
+                          >
+                            Wijzig koppeling
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="h-6 text-xs text-destructive"
+                            onClick={() => {
+                              void unlinkLine(idx);
+                            }}
+                          >
+                            Ontkoppel
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                    {(!line.matched_sku_code || editing) && !ignored && (
                       <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
                         <div className="flex gap-2">
                           <Select
@@ -575,8 +701,28 @@ export function InboundPage() {
                         >
                           Concept product
                         </Button>
+                        {editing && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="h-7 text-xs text-muted-foreground"
+                            onClick={() => setEditing(idx, false)}
+                          >
+                            Annuleer
+                          </Button>
+                        )}
                       </div>
                     )}
+                    <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-7 text-xs text-muted-foreground"
+                        onClick={() => toggleIgnoreLine(idx)}
+                      >
+                        {ignored ? "Wel boeken" : "Niet boeken"}
+                      </Button>
+                    </div>
                   </button>
                   );
                 })}
