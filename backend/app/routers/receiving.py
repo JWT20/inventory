@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy.orm import Session
 
-from app.auth import require_warehouse
+from app.auth import require_inbound_booker
 from app.config import settings
 from app.database import get_db
 from app.events import publish_event
@@ -233,7 +233,7 @@ def _read_image(file: UploadFile) -> bytes:
 
 
 router = APIRouter(
-    prefix="/receiving", tags=["receiving"], dependencies=[Depends(require_warehouse)]
+    prefix="/receiving", tags=["receiving"], dependencies=[Depends(require_inbound_booker)]
 )
 
 
@@ -242,7 +242,7 @@ router = APIRouter(
 async def identify_box(
     file: UploadFile,
     db: Session = Depends(get_db),
-    user: User = Depends(require_warehouse),
+    user: User = Depends(require_inbound_booker),
 ):
     """Scan a box and identify it against reference images.
 
@@ -395,7 +395,7 @@ async def book_box(
     file: UploadFile,
     order_id: int = Form(...),
     db: Session = Depends(get_db),
-    user: User = Depends(require_warehouse),
+    user: User = Depends(require_inbound_booker),
 ):
     """1 scan = 1 box = 1 booking.
 
@@ -641,7 +641,7 @@ async def book_box(
 def confirm_booking(
     body: ConfirmBookingRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_warehouse),
+    user: User = Depends(require_inbound_booker),
 ):
     """Confirm a booking that was flagged for human approval (low-quality description)."""
     try:
@@ -796,7 +796,7 @@ def confirm_booking(
 async def register_reference_and_book(
     body: RegisterReferenceRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_warehouse),
+    user: User = Depends(require_inbound_booker),
 ):
     """Register the most recent scan as a reference image for the picked SKU.
 
@@ -918,7 +918,7 @@ def book_more(
     quantity: int = Form(..., ge=1),
     scan_image_path: str = Form(""),
     db: Session = Depends(get_db),
-    user: User = Depends(require_warehouse),
+    user: User = Depends(require_inbound_booker),
 ):
     """Book additional identical boxes without re-scanning.
 
@@ -1065,7 +1065,7 @@ async def create_product_inline(
     description: str | None = Form(None),
     category: str | None = Form(None),
     db: Session = Depends(get_db),
-    user: User = Depends(require_warehouse),
+    user: User = Depends(require_inbound_booker),
 ):
     """Quick-create a new SKU with a reference image from the camera.
 
@@ -1140,7 +1140,7 @@ def create_concept_product(
     description: str | None = Form(None),
     organization_id: int | None = Form(None),
     db: Session = Depends(get_db),
-    user: User = Depends(require_warehouse),
+    user: User = Depends(require_inbound_booker),
 ):
     """Create an inactive concept product to be completed by merchant/admin."""
     code = supplier_code.strip().upper()
