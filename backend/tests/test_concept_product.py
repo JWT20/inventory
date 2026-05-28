@@ -239,18 +239,22 @@ class TestPermissions:
         resp = client.post("/api/receiving/concept-product", data={"supplier_code": "X"})
         assert resp.status_code == 401
 
-    def test_owner_cannot_create_concept(self, client, owner_token):
-        """Org owners are product managers, not warehouse workers."""
+    def test_owner_can_create_concept(self, client, owner_token):
+        """Org owners drive their own inbound flow."""
         resp = _post(client, owner_token, "OWNER-SKU")
-        assert resp.status_code == 403
+        assert resp.status_code == 201
 
-    def test_merchant_cannot_create_concept(self, client, merchant_token):
+    def test_merchant_can_create_concept(self, client, merchant_token):
         resp = _post(client, merchant_token, "MERCH-SKU")
-        assert resp.status_code == 403
+        assert resp.status_code == 201
 
     def test_courier_can_create_concept(self, client, courier_token):
         resp = _post(client, courier_token, "COURIER-SKU")
         assert resp.status_code == 201
+
+    def test_customer_cannot_create_concept(self, client, customer_token):
+        resp = _post(client, customer_token, "CUSTOMER-SKU")
+        assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------------------
