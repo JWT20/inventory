@@ -791,7 +791,7 @@ def list_shipments(
 def get_shipment(
     shipment_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     shipment = (
         db.query(InboundShipment)
@@ -800,6 +800,8 @@ def get_shipment(
         .first()
     )
     if not shipment:
+        raise HTTPException(404, "Pakbon niet gevonden")
+    if not user.is_platform_admin and shipment.organization_id != user.organization_id:
         raise HTTPException(404, "Pakbon niet gevonden")
     return _shipment_to_response(shipment)
 
