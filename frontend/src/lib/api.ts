@@ -390,6 +390,12 @@ export const api = {
       chosen_sku_id: data.chosen_sku_id,
       persist_mapping: data.persist_mapping ?? true,
     }),
+  listSupplierMappings: (supplierName?: string) => {
+    const qs = supplierName ? `?supplier_name=${encodeURIComponent(supplierName)}` : "";
+    return request(`/supplier-mappings${qs}`);
+  },
+  deleteSupplierMapping: (mappingId: number) =>
+    request(`/supplier-mappings/${mappingId}`, { method: "DELETE" }),
   updateDefaultPrice: (skuId: number, defaultPrice: number | null) =>
     json(`/skus/${skuId}/price`, "PUT", { default_price: defaultPrice }),
   updateCustomerPrice: (customerId: number, skuId: number, unitPrice: number | null) =>
