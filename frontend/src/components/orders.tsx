@@ -1302,7 +1302,7 @@ function OrderDetailDialog({
                         />
                       </>
                     )}
-                    {!line.has_image && !canManage && (
+                    {!line.has_image && !isCustomer && (
                       <p className="text-xs text-amber-400">Geen beeld</p>
                     )}
                   </div>
