@@ -1084,6 +1084,7 @@ function OrderDetailDialog({
   const isAdmin = user?.is_platform_admin;
   const isOwner = user?.role === "owner";
   const canManage = isAdmin || isOwner;
+  const isCustomer = user?.role === "customer";
 
   const skusWithoutImages = order.lines.filter((l) => !l.has_image);
   const canActivate =
@@ -1195,12 +1196,14 @@ function OrderDetailDialog({
         <DialogHeader>
           <DialogTitle>
             Order {order.reference}
-            <Badge
-              variant={STATUS_VARIANT[order.status] ?? "inactive"}
-              className="ml-2"
-            >
-              {STATUS_LABELS[order.status] ?? order.status}
-            </Badge>
+            {!isCustomer && (
+              <Badge
+                variant={STATUS_VARIANT[order.status] ?? "inactive"}
+                className="ml-2"
+              >
+                {STATUS_LABELS[order.status] ?? order.status}
+              </Badge>
+            )}
           </DialogTitle>
         </DialogHeader>
 
@@ -1209,9 +1212,11 @@ function OrderDetailDialog({
             {order.organization_name}
             {order.created_by_name && ` — ${order.created_by_name}`}
           </p>
-          <p className="text-sm text-muted-foreground">
-            Voortgang: {order.booked_boxes}/{order.total_boxes} dozen geboekt
-          </p>
+          {!isCustomer && (
+            <p className="text-sm text-muted-foreground">
+              Voortgang: {order.booked_boxes}/{order.total_boxes} dozen geboekt
+            </p>
+          )}
 
           <div>
             <Label className="mb-1 block text-sm">Opmerking</Label>
@@ -1267,7 +1272,9 @@ function OrderDetailDialog({
                   <div className="text-right flex items-center gap-2">
                     <div>
                       <p>
-                        {line.booked_count}/{line.quantity} dozen
+                        {isCustomer
+                          ? `${line.quantity} ${line.quantity === 1 ? "doos" : "dozen"}`
+                          : `${line.booked_count}/${line.quantity} dozen`}
                       </p>
                       {line.show_prices && line.effective_price != null && (
                         <p className="text-xs text-muted-foreground">
@@ -1277,7 +1284,7 @@ function OrderDetailDialog({
                             : "—"}
                         </p>
                       )}
-                      {!line.show_prices && (
+                      {!line.show_prices && !isCustomer && (
                         <p className="text-xs text-muted-foreground">
                           Prijs verborgen
                         </p>
@@ -1336,7 +1343,7 @@ function OrderDetailDialog({
               <span className="font-semibold">{money.format(order.visible_total)}</span>
             </div>
           )}
-          {order.hidden_lines_count > 0 && (
+          {order.hidden_lines_count > 0 && !isCustomer && (
             <p className="text-xs text-muted-foreground">
               {order.hidden_lines_count} orderregel(s) hebben verborgen prijzen.
             </p>

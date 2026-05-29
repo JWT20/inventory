@@ -24,6 +24,8 @@ from app.schemas import (
     OrderResponse,
     OrderUpdate,
     WeeklyPickPhotoResponse,
+    WeeklySummaryCustomer,
+    WeeklySummaryCustomerLine,
     WeeklySummaryCustomerOrder,
     WeeklySummaryResponse,
     WeeklySummarySupplier,
@@ -499,13 +501,98 @@ def weekly_pick_photos(
 
 
 
+def _build_customer_response(
+    week: str,
+    deadline_dt: datetime.datetime,
+    deadline_extended: bool,
+    enriched: list[dict],
+) -> WeeklySummaryResponse:
+    """Pivot enriched lines into Customer -> SKU lines for invoicing."""
+    # customer_id (or None) keyed; name kept alongside for display + sort
+    customer_groups: dict[tuple[int | None, str], dict[int, dict]] = defaultdict(dict)
+
+    for e in enriched:
+        key = (e["customer_id"], e["customer_name"])
+        per_sku = customer_groups[key]
+        sku_id = e["sku"].id
+        existing = per_sku.get(sku_id)
+        if existing is None:
+            per_sku[sku_id] = {
+                "sku": e["sku"],
+                "quantity": e["quantity"],
+                "effective_price": e["effective_price"],
+                "remarks": e["remarks"],
+            }
+        else:
+            existing["quantity"] += e["quantity"]
+            if e["remarks"] and e["remarks"] not in existing["remarks"]:
+                existing["remarks"] = (
+                    f"{existing['remarks']}; {e['remarks']}"
+                    if existing["remarks"]
+                    else e["remarks"]
+                )
+
+    customers_out: list[WeeklySummaryCustomer] = []
+    grand_total_qty = 0
+    grand_total_val = 0.0
+
+    for (cust_id, cust_name), sku_map in sorted(
+        customer_groups.items(), key=lambda x: x[0][1].lower()
+    ):
+        lines_out: list[WeeklySummaryCustomerLine] = []
+        cust_qty = 0
+        cust_val = 0.0
+        for sku_id, agg in sorted(
+            sku_map.items(), key=lambda kv: kv[1]["sku"].name.lower()
+        ):
+            qty = agg["quantity"]
+            ep = agg["effective_price"]
+            lt = round(ep * qty, 2) if ep is not None else None
+            lines_out.append(WeeklySummaryCustomerLine(
+                sku_id=sku_id,
+                sku_code=agg["sku"].sku_code,
+                sku_name=agg["sku"].name,
+                quantity=qty,
+                effective_price=ep,
+                line_total=lt,
+                remarks=agg["remarks"],
+            ))
+            cust_qty += qty
+            if lt is not None:
+                cust_val += lt
+
+        customers_out.append(WeeklySummaryCustomer(
+            customer_id=cust_id,
+            customer_name=cust_name,
+            lines=lines_out,
+            customer_total_quantity=cust_qty,
+            customer_total_value=round(cust_val, 2) if cust_val else None,
+        ))
+        grand_total_qty += cust_qty
+        grand_total_val += cust_val
+
+    return WeeklySummaryResponse(
+        week=week,
+        deadline=deadline_dt.isoformat(),
+        deadline_extended=deadline_extended,
+        group_by="customer",
+        suppliers=[],
+        customers=customers_out,
+        grand_total_quantity=grand_total_qty,
+        grand_total_value=round(grand_total_val, 2) if grand_total_val else None,
+    )
+
+
 @router.get("/weekly-summary", response_model=WeeklySummaryResponse)
 def weekly_order_summary(
     week: str = Query(None, description="ISO week, bijv. '2026-W15'. Standaard: huidige week."),
+    group_by: str = Query("supplier", description="Groepering: 'supplier' of 'customer'."),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Weekly order summary grouped by supplier, then by wine, showing customer orders with prices."""
+    """Weekly order summary grouped by supplier or by customer (for invoicing)."""
+    if group_by not in ("supplier", "customer"):
+        raise HTTPException(400, "group_by moet 'supplier' of 'customer' zijn")
     if not user.is_platform_admin and not user.organization_id:
         raise HTTPException(400, "Gebruiker heeft geen organisatie")
 
@@ -550,7 +637,9 @@ def weekly_order_summary(
             week=week,
             deadline=deadline_dt.isoformat(),
             deadline_extended=deadline_extended,
+            group_by=group_by,
             suppliers=[],
+            customers=[],
             grand_total_quantity=0,
             grand_total_value=0,
         )
@@ -574,9 +663,8 @@ def weekly_order_summary(
             if (lk.customer_id, lk.sku_id) in customer_sku_keys
         }
 
-    # Group: supplier -> sku -> list of (customer_name, quantity, effective_price)
-    supplier_groups: dict[tuple[int | None, str], dict[int, list]] = defaultdict(lambda: defaultdict(list))
-
+    # Enrich each line with supplier + price info (shared by both groupings).
+    enriched: list[dict] = []
     for line in lines:
         sku = line.sku
         supplier_id = sku.supplier_id
@@ -589,14 +677,28 @@ def weekly_order_summary(
         discount_value = float(link.discount_value) if link and link.discount_value is not None else None
         effective_price = _calc_effective_price(unit_price, discount_type, discount_value, default_price)
 
-        supplier_groups[(supplier_id, supplier_name)][sku.id].append({
+        enriched.append({
+            "supplier_id": supplier_id,
+            "supplier_name": supplier_name,
+            "customer_id": line.customer_id,
             "customer_name": line.customer_name,
+            "sku": sku,
             "quantity": line.quantity,
             "effective_price": effective_price,
-            "sku": sku,
             "default_price": default_price,
             "remarks": line.order.remarks or "",
         })
+
+    if group_by == "customer":
+        return _build_customer_response(
+            week, deadline_dt, deadline_extended, enriched,
+        )
+
+    # Group: supplier -> sku -> list of (customer_name, quantity, effective_price)
+    supplier_groups: dict[tuple[int | None, str], dict[int, list]] = defaultdict(lambda: defaultdict(list))
+
+    for e in enriched:
+        supplier_groups[(e["supplier_id"], e["supplier_name"])][e["sku"].id].append(e)
 
     # Build response
     suppliers_out: list[WeeklySummarySupplier] = []
@@ -672,7 +774,9 @@ def weekly_order_summary(
         week=week,
         deadline=deadline_dt.isoformat(),
         deadline_extended=deadline_extended,
+        group_by="supplier",
         suppliers=suppliers_out,
+        customers=[],
         grand_total_quantity=grand_total_qty,
         grand_total_value=round(grand_total_val, 2) if grand_total_val else None,
     )

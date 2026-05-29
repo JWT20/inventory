@@ -733,11 +733,31 @@ class WeeklySummarySupplier(BaseModel):
     supplier_total_value: float | None = None
 
 
+class WeeklySummaryCustomerLine(BaseModel):
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    quantity: int
+    effective_price: float | None = None
+    line_total: float | None = None
+    remarks: str = ""
+
+
+class WeeklySummaryCustomer(BaseModel):
+    customer_id: int | None = None
+    customer_name: str
+    lines: list[WeeklySummaryCustomerLine] = []
+    customer_total_quantity: int = 0
+    customer_total_value: float | None = None
+
+
 class WeeklySummaryResponse(BaseModel):
     week: str
     deadline: str
     deadline_extended: bool = False
+    group_by: Literal["supplier", "customer"] = "supplier"
     suppliers: list[WeeklySummarySupplier] = []
+    customers: list[WeeklySummaryCustomer] = []
     grand_total_quantity: int = 0
     grand_total_value: float | None = None
 
