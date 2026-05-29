@@ -333,9 +333,12 @@ def list_orders(
         pass  # See everything
     elif user.role == "courier":
         if include_history:
-            query = query.filter(Order.status.in_(("active", "completed", "cancelled", "closed")))
+            query = query.filter(Order.status.in_((
+                "draft", "pending_images", "active",
+                "completed", "cancelled", "closed",
+            )))
         else:
-            query = query.filter(Order.status == "active")
+            query = query.filter(Order.status.in_(("draft", "pending_images", "active")))
     elif user.role == "customer":
         query = query.filter(Order.created_by == user.id)
     elif user.organization_id:

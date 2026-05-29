@@ -154,6 +154,7 @@ export function OrdersPage() {
   const [showOverdue, setShowOverdue] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showUpcoming, setShowUpcoming] = useState(false);
+  const [showPending, setShowPending] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -281,6 +282,12 @@ export function OrdersPage() {
     order.status === "closed" ||
     remainingBoxes(order) === 0;
 
+  const isPendingOrder = (order: Order) =>
+    order.status === "draft" || order.status === "pending_images";
+
+  const missingImageCount = (order: Order) =>
+    order.lines.filter((l) => !l.has_image).length;
+
   type WeekGroup = { week: string; label: string; range: string; orders: Order[] };
 
   const buildWeekGroups = (sourceOrders: Order[]): WeekGroup[] => {
@@ -302,18 +309,26 @@ export function OrdersPage() {
   };
 
   // For customers: split by week (current/future vs past), ignore status entirely
-  // and hide cancelled orders. For everyone else: keep the open/history split.
+  // and hide cancelled orders. For everyone else: keep the open/history split,
+  // and pull pending (draft/pending_images) orders out into their own bucket.
   const visibleOrders = isCustomer
     ? orders.filter((o) => o.status !== "cancelled")
     : orders;
   const orderWeek = (o: Order) => o.delivery_week || getISOWeek(o.created_at);
 
+  const pendingOrders = isCustomer ? [] : visibleOrders.filter(isPendingOrder);
+  const pendingGroups = buildWeekGroups(pendingOrders);
+
+  const nonPendingOrders = isCustomer
+    ? visibleOrders
+    : visibleOrders.filter((o) => !isPendingOrder(o));
+
   const openSourceOrders = isCustomer
-    ? visibleOrders.filter((o) => orderWeek(o) >= currentWeek)
-    : visibleOrders.filter(isOpenWorkOrder);
+    ? nonPendingOrders.filter((o) => orderWeek(o) >= currentWeek)
+    : nonPendingOrders.filter(isOpenWorkOrder);
   const historySourceOrders = isCustomer
-    ? visibleOrders.filter((o) => orderWeek(o) < currentWeek)
-    : visibleOrders.filter(isHistoryOrder);
+    ? nonPendingOrders.filter((o) => orderWeek(o) < currentWeek)
+    : nonPendingOrders.filter(isHistoryOrder);
 
   const openGroups = buildWeekGroups(openSourceOrders);
   const historyOrders = historySourceOrders
@@ -371,6 +386,11 @@ export function OrdersPage() {
           ? `${o.lines.length} product${o.lines.length !== 1 ? "en" : ""}`
           : `${o.customer_name ?? "—"} · ${o.lines.length} product${o.lines.length !== 1 ? "en" : ""}`}
       </p>
+      {!isCustomer && isPendingOrder(o) && missingImageCount(o) > 0 && (
+        <p className="text-xs text-amber-500">
+          {missingImageCount(o)} foto{missingImageCount(o) === 1 ? "" : "'s"} ontbreken
+        </p>
+      )}
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <span>
           {isCustomer
@@ -560,6 +580,16 @@ export function OrdersPage() {
                 Geen orders voor deze week
               </p>
             )}
+
+            {!isCustomer && pendingOrders.length > 0 &&
+              renderCollapsedGroup(
+                "Wacht op foto's",
+                `${pendingOrders.length} order${pendingOrders.length === 1 ? "" : "s"}`,
+                showPending,
+                () => setShowPending((value) => !value),
+                pendingGroups.map((group) => renderWeekGroup(group, true)),
+                "overdue",
+              )}
 
             {overdueGroups.length > 0 &&
               renderCollapsedGroup(
