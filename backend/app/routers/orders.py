@@ -189,6 +189,18 @@ def _customer_assigned_sku_ids(db: Session, customer_id: int) -> set[int]:
     return {r[0] for r in rows}
 
 
+def _customer_can_view_order(user: User, order: Order) -> bool:
+    """A customer-role user may view an order they created themselves
+    or any order with at least one line linked to their customer_id."""
+    if user.role != "customer":
+        return True
+    if order.created_by == user.id:
+        return True
+    if user.customer_id and any(l.customer_id == user.customer_id for l in order.lines):
+        return True
+    return False
+
+
 def _resolve_organization_id(user: User, body_org_id: int | None, db: Session) -> int:
     """Determine the organization_id for an order based on user context."""
     if user.is_platform_admin:
@@ -340,7 +352,15 @@ def list_orders(
         else:
             query = query.filter(Order.status.in_(("draft", "pending_images", "active")))
     elif user.role == "customer":
-        query = query.filter(Order.created_by == user.id)
+        if not user.customer_id:
+            return []
+        query = query.filter(
+            Order.id.in_(
+                db.query(OrderLine.order_id).filter(
+                    OrderLine.customer_id == user.customer_id
+                )
+            )
+        )
     elif user.organization_id:
         query = query.filter(Order.organization_id == user.organization_id)
     else:
@@ -803,7 +823,7 @@ def get_order(
 
     # Access control
     if not user.is_platform_admin:
-        if user.role == "customer" and order.created_by != user.id:
+        if user.role == "customer" and not _customer_can_view_order(user, order):
             raise HTTPException(403, "Geen toegang tot deze order")
         elif user.role == "courier" and order.status not in COURIER_VIEWABLE_STATUSES:
             raise HTTPException(403, "Geen toegang tot deze order")
@@ -1191,7 +1211,7 @@ def list_bookings(
 
     # Access control: same rules as get_order
     if not user.is_platform_admin:
-        if user.role == "customer" and order.created_by != user.id:
+        if user.role == "customer" and not _customer_can_view_order(user, order):
             raise HTTPException(403, "Geen toegang tot deze order")
         elif user.role == "courier" and order.status not in COURIER_VIEWABLE_STATUSES:
             raise HTTPException(403, "Geen toegang tot deze order")
