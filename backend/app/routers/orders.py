@@ -158,6 +158,7 @@ def _order_to_response(order: Order, db: Session) -> OrderResponse:
         created_by_name=order.creator.username if order.creator else "",
         created_at=order.created_at,
         updated_at=order.updated_at,
+        customer_name=order.lines[0].customer_name if order.lines else None,
         lines=lines,
         total_boxes=sum(l.quantity for l in order.lines),
         booked_boxes=sum(l.booked_count for l in order.lines),
@@ -251,6 +252,11 @@ def create_order(
         line_quantities[key] = line_quantities.get(key, 0) + line.quantity
         if line.delivery_day is not None:
             customer_delivery_days[line.customer_id] = line.delivery_day
+
+    # Enforce 1 order = 1 customer
+    distinct_customer_ids = {cid for cid, _ in line_quantities.keys()}
+    if len(distinct_customer_ids) > 1:
+        raise HTTPException(400, "Een order kan maar voor één klant zijn")
 
     sku_cache: dict[int, SKU] = {}
     customer_cache: dict[int, Customer] = {}
