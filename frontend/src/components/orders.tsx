@@ -93,6 +93,7 @@ interface Order {
   delivery_week: string | null;
   organization_name: string;
   created_by_name: string;
+  customer_name: string | null;
   created_at: string;
   lines: OrderLine[];
   total_boxes: number;
@@ -366,9 +367,9 @@ export function OrdersPage() {
         )}
       </div>
       <p className="text-sm text-muted-foreground">
-        {o.organization_name || o.created_by_name} &middot;{" "}
-        {o.lines.length} product
-        {o.lines.length !== 1 ? "en" : ""}
+        {isCustomer
+          ? `${o.lines.length} product${o.lines.length !== 1 ? "en" : ""}`
+          : `${o.customer_name ?? "—"} · ${o.lines.length} product${o.lines.length !== 1 ? "en" : ""}`}
       </p>
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <span>
@@ -429,10 +430,9 @@ export function OrdersPage() {
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium">{order.reference}</p>
               <p className="truncate text-xs text-muted-foreground">
-                {order.organization_name || order.created_by_name} &middot;{" "}
                 {isCustomer
                   ? `${order.total_boxes} ${order.total_boxes === 1 ? "doos" : "dozen"}`
-                  : `${order.booked_boxes}/${order.total_boxes} dozen`}
+                  : `${order.customer_name ?? "—"} · ${order.booked_boxes}/${order.total_boxes} dozen`}
               </p>
             </div>
             {!isCustomer && (
@@ -627,13 +627,9 @@ function ManualOrderDialog({
   const { user } = useAuth();
   const [allSkus, setAllSkus] = useState<SKUOption[]>([]);
   const [allCustomers, setAllCustomers] = useState<CustomerOption[]>([]);
-  const [selectedCustomerIds, setSelectedCustomerIds] = useState<number[]>([]);
-  const [customerLines, setCustomerLines] = useState<
-    Record<number, CustomerSkuLine[]>
-  >({});
-  const [customerDeliveryDays, setCustomerDeliveryDays] = useState<
-    Record<number, string>
-  >({});
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
+  const [currentLines, setCurrentLines] = useState<CustomerSkuLine[]>([]);
+  const [currentDeliveryDay, setCurrentDeliveryDay] = useState<string>("thursday");
   const [submitting, setSubmitting] = useState(false);
   const [customerSearch, setCustomerSearch] = useState("");
   const [newCustomerName, setNewCustomerName] = useState("");
@@ -642,86 +638,55 @@ function ManualOrderDialog({
 
   const isLinkedCustomer = user?.role === "customer" && !!user?.customer_id;
 
+  function selectCustomer(customer: CustomerOption) {
+    setSelectedCustomerId(customer.id);
+    const lines: CustomerSkuLine[] = (customer.sku_ids || []).map((skuId) => ({
+      sku_id: skuId,
+      checked: false,
+      quantity: 1,
+    }));
+    setCurrentLines(lines);
+    setCurrentDeliveryDay(customer.delivery_day || "thursday");
+  }
+
   useEffect(() => {
     if (!open) return;
     api.listSKUs().then((s: SKUOption[]) => setAllSkus(s));
     api.listCustomers().then((c: CustomerOption[]) => {
       setAllCustomers(c);
-      // Auto-select linked customer for customer-role users
       if (isLinkedCustomer && user.customer_id) {
         const linked = c.find((cust) => cust.id === user.customer_id);
-        if (linked) {
-          setSelectedCustomerIds([linked.id]);
-          const lines: CustomerSkuLine[] = (linked.sku_ids || []).map(
-            (skuId) => ({ sku_id: skuId, checked: false, quantity: 1 }),
-          );
-          setCustomerLines({ [linked.id]: lines });
-          setCustomerDeliveryDays({ [linked.id]: linked.delivery_day || "thursday" });
-        }
+        if (linked) selectCustomer(linked);
       }
     });
   }, [open]);
 
-  function toggleCustomer(customerId: number) {
-    if (selectedCustomerIds.includes(customerId)) {
-      setSelectedCustomerIds(
-        selectedCustomerIds.filter((id) => id !== customerId),
-      );
-      return;
-    }
-    setSelectedCustomerIds([...selectedCustomerIds, customerId]);
-    if (!customerLines[customerId]) {
-      const customer = allCustomers.find((c) => c.id === customerId);
-      const lines: CustomerSkuLine[] = (customer?.sku_ids || []).map(
-        (skuId) => ({
-          sku_id: skuId,
-          checked: false,
-          quantity: 1,
-        }),
-      );
-      setCustomerLines((prev) => ({ ...prev, [customerId]: lines }));
-    }
-    if (!customerDeliveryDays[customerId]) {
-      const customer = allCustomers.find((c) => c.id === customerId);
-      setCustomerDeliveryDays((prev) => ({
-        ...prev,
-        [customerId]: customer?.delivery_day || "thursday",
-      }));
-    }
-  }
-
-  function toggleSkuLine(customerId: number, skuId: number) {
-    setCustomerLines((prev) => {
-      const lines = [...(prev[customerId] || [])];
+  function toggleSkuLine(skuId: number) {
+    setCurrentLines((prev) => {
+      const lines = [...prev];
       const idx = lines.findIndex((l) => l.sku_id === skuId);
       if (idx >= 0) {
         lines[idx] = { ...lines[idx], checked: !lines[idx].checked };
       }
-      return { ...prev, [customerId]: lines };
+      return lines;
     });
   }
 
-  function updateSkuQuantity(
-    customerId: number,
-    skuId: number,
-    qty: number,
-  ) {
-    setCustomerLines((prev) => {
-      const lines = [...(prev[customerId] || [])];
+  function updateSkuQuantity(skuId: number, qty: number) {
+    setCurrentLines((prev) => {
+      const lines = [...prev];
       const idx = lines.findIndex((l) => l.sku_id === skuId);
       if (idx >= 0) {
         lines[idx] = { ...lines[idx], quantity: qty, checked: true };
       }
-      return { ...prev, [customerId]: lines };
+      return lines;
     });
   }
 
-  function addExtraSku(customerId: number, skuId: number) {
-    setCustomerLines((prev) => {
-      const lines = [...(prev[customerId] || [])];
-      if (lines.some((l) => l.sku_id === skuId)) return prev;
-      lines.push({ sku_id: skuId, checked: true, quantity: 1 });
-      return { ...prev, [customerId]: lines };
+  function addExtraSku(skuId: number) {
+    setCurrentLines((prev) => {
+      if (prev.some((l) => l.sku_id === skuId)) return prev;
+      return [...prev, { sku_id: skuId, checked: true, quantity: 1 }];
     });
   }
 
@@ -732,7 +697,7 @@ function ManualOrderDialog({
       const created = await api.createCustomer({ name: newCustomerName.trim(), organization_id: user?.organization_id });
       setAllCustomers((prev) => [...prev, created]);
       setNewCustomerName("");
-      toggleCustomer(created.id);
+      selectCustomer(created);
     } catch (err: unknown) {
       toast.error(
         err instanceof Error ? err.message : "Klant aanmaken mislukt",
@@ -743,26 +708,18 @@ function ManualOrderDialog({
   }
 
   async function submit() {
-    const orderLines: {
-      customer_id: number;
-      sku_id: number;
-      quantity: number;
-      delivery_day: string;
-    }[] = [];
-    for (const customerId of selectedCustomerIds) {
-      const deliveryDay = customerDeliveryDays[customerId] || "thursday";
-      const lines = customerLines[customerId] || [];
-      for (const line of lines) {
-        if (line.checked && line.quantity > 0) {
-          orderLines.push({
-            customer_id: customerId,
-            sku_id: line.sku_id,
-            quantity: line.quantity,
-            delivery_day: deliveryDay,
-          });
-        }
-      }
+    if (selectedCustomerId === null) {
+      toast.error("Kies een klant");
+      return;
     }
+    const orderLines = currentLines
+      .filter((line) => line.checked && line.quantity > 0)
+      .map((line) => ({
+        customer_id: selectedCustomerId,
+        sku_id: line.sku_id,
+        quantity: line.quantity,
+        delivery_day: currentDeliveryDay,
+      }));
     if (orderLines.length === 0) {
       toast.error("Selecteer minimaal één product met aantal");
       return;
@@ -777,9 +734,9 @@ function ManualOrderDialog({
       toast.success("Order aangemaakt");
       onCreated();
       onClose();
-      setSelectedCustomerIds([]);
-      setCustomerLines({});
-      setCustomerDeliveryDays({});
+      setSelectedCustomerId(null);
+      setCurrentLines([]);
+      setCurrentDeliveryDay("thursday");
       setCustomerSearch("");
       setRemarks("");
     } catch (err: unknown) {
@@ -811,7 +768,7 @@ function ManualOrderDialog({
             </div>
           ) : (
           <div>
-            <Label className="mb-1 block text-sm">Klanten</Label>
+            <Label className="mb-1 block text-sm">Klant</Label>
             <div className="flex gap-2 mb-2">
               <Input
                 placeholder="Zoek klant..."
@@ -826,20 +783,22 @@ function ManualOrderDialog({
                 </p>
               ) : (
                 filteredCustomers.map((c) => (
-                  <label
+                  <button
+                    type="button"
                     key={c.id}
-                    className="flex items-center gap-2 px-2 py-1.5 hover:bg-muted cursor-pointer text-sm"
+                    onClick={() => selectCustomer(c)}
+                    className={`flex w-full items-center gap-2 px-2 py-1.5 text-sm text-left ${
+                      selectedCustomerId === c.id
+                        ? "bg-primary/10"
+                        : "hover:bg-muted"
+                    }`}
                   >
-                    <Checkbox
-                      checked={selectedCustomerIds.includes(c.id)}
-                      onCheckedChange={() => toggleCustomer(c.id)}
-                    />
                     <span>{c.name}</span>
                     <span className="text-xs text-muted-foreground ml-auto">
                       {c.sku_ids.length} product
                       {c.sku_ids.length !== 1 ? "en" : ""}
                     </span>
-                  </label>
+                  </button>
                 ))
               )}
             </div>
@@ -865,22 +824,18 @@ function ManualOrderDialog({
           </div>
           )}
 
-          {/* Per-customer SKU selection */}
-          {selectedCustomerIds.map((customerId) => {
-            const customer = allCustomers.find((c) => c.id === customerId);
+          {/* SKU selection for the selected customer */}
+          {(() => {
+            if (selectedCustomerId === null) return null;
+            const customer = allCustomers.find((c) => c.id === selectedCustomerId);
             if (!customer) return null;
-            const lines = customerLines[customerId] || [];
-            const chosenDay = customerDeliveryDays[customerId] || customer.delivery_day || "thursday";
-
             return (
-              <div key={customerId} className="border border-border rounded-lg">
+              <div className="border border-border rounded-lg">
                 <div className="px-3 py-2 bg-muted rounded-t-lg flex items-center justify-between gap-2">
                   <span className="font-medium text-sm">{customer.name}</span>
                   <Select
-                    value={chosenDay}
-                    onValueChange={(v) =>
-                      setCustomerDeliveryDays((prev) => ({ ...prev, [customerId]: v }))
-                    }
+                    value={currentDeliveryDay}
+                    onValueChange={(v) => setCurrentDeliveryDay(v)}
                   >
                     <SelectTrigger className="h-7 w-[130px] text-xs">
                       <SelectValue />
@@ -893,12 +848,12 @@ function ManualOrderDialog({
                   </Select>
                 </div>
                 <div className="p-3 space-y-1">
-                  {lines.length === 0 ? (
+                  {currentLines.length === 0 ? (
                     <p className="text-xs text-muted-foreground">
                       Geen bekende producten — voeg hieronder toe
                     </p>
                   ) : (
-                    lines.map((line) => {
+                    currentLines.map((line) => {
                       const sku = allSkus.find((s) => s.id === line.sku_id);
                       if (!sku) return null;
                       return (
@@ -908,9 +863,7 @@ function ManualOrderDialog({
                         >
                           <Checkbox
                             checked={line.checked}
-                            onCheckedChange={() =>
-                              toggleSkuLine(customerId, line.sku_id)
-                            }
+                            onCheckedChange={() => toggleSkuLine(line.sku_id)}
                           />
                           <span
                             className="text-sm flex-1 truncate"
@@ -922,7 +875,7 @@ function ManualOrderDialog({
                             value={line.quantity}
                             disabled={!line.checked}
                             onChange={(qty) =>
-                              updateSkuQuantity(customerId, line.sku_id, qty)
+                              updateSkuQuantity(line.sku_id, qty)
                             }
                           />
                         </div>
@@ -935,7 +888,7 @@ function ManualOrderDialog({
                       <Select
                         value=""
                         onValueChange={(v) => {
-                          if (v) addExtraSku(customerId, Number(v));
+                          if (v) addExtraSku(Number(v));
                         }}
                       >
                         <SelectTrigger className="h-9 text-sm">
@@ -944,7 +897,7 @@ function ManualOrderDialog({
                         <SelectContent>
                           {allSkus
                             .filter(
-                              (s) => !lines.some((l) => l.sku_id === s.id),
+                              (s) => !currentLines.some((l) => l.sku_id === s.id),
                             )
                             .map((s) => (
                               <SelectItem key={s.id} value={String(s.id)}>
@@ -958,7 +911,7 @@ function ManualOrderDialog({
                 </div>
               </div>
             );
-          })}
+          })()}
 
           <div>
             <Label className="mb-1 block text-sm">Opmerking</Label>
@@ -974,7 +927,7 @@ function ManualOrderDialog({
           <Button
             className="w-full"
             onClick={submit}
-            disabled={submitting || selectedCustomerIds.length === 0}
+            disabled={submitting || selectedCustomerId === null}
           >
             {submitting ? "Aanmaken..." : "Order aanmaken"}
           </Button>
@@ -1209,8 +1162,9 @@ function OrderDetailDialog({
 
         <DialogBody className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            {order.organization_name}
-            {order.created_by_name && ` — ${order.created_by_name}`}
+            {isCustomer
+              ? `${order.organization_name}${order.created_by_name ? ` — ${order.created_by_name}` : ""}`
+              : (order.customer_name ?? "—")}
           </p>
           {!isCustomer && (
             <p className="text-sm text-muted-foreground">
@@ -1261,8 +1215,7 @@ function OrderDetailDialog({
                   <div>
                     <p className="font-medium">{line.sku_name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {line.sku_code} &middot; Klant:{" "}
-                      {line.customer_name || line.klant}
+                      {line.sku_code}
                       {" "}&middot;{" "}
                       <Badge variant="secondary" className="text-xs px-1 py-0">
                         {DELIVERY_DAY_LABELS[line.delivery_day] ?? line.delivery_day}

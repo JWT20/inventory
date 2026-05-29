@@ -343,6 +343,7 @@ class OrderResponse(BaseModel):
     created_by_name: str = ""
     created_at: datetime
     updated_at: datetime
+    customer_name: str | None = None
     lines: list[OrderLineResponse] = []
     total_boxes: int = 0
     booked_boxes: int = 0

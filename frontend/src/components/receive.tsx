@@ -22,7 +22,7 @@ interface Order {
   status: string;
   delivery_week?: string | null;
   organization_id?: number | null;
-  merchant_name: string;
+  customer_name: string | null;
   total_boxes: number;
   booked_boxes: number;
   lines?: OrderLine[];
@@ -265,7 +265,7 @@ function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (order: Ord
         </div>
       </div>
       <p className="text-sm text-muted-foreground">
-        {o.merchant_name}
+        {o.customer_name ?? "—"}
       </p>
       <p className="text-sm text-muted-foreground">
         {o.booked_boxes}/{o.total_boxes} dozen geboekt
