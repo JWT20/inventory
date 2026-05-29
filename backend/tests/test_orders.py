@@ -77,32 +77,67 @@ class TestCreateOrder:
         ])
         db.commit()
 
-        resp = client.post(
+        hidden_resp = client.post(
             "/api/orders",
             json={
                 "organization_id": sample_org.id,
                 "lines": [
                     {"customer_id": hidden_customer.id, "sku_id": sku.id, "quantity": 2},
+                ],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert hidden_resp.status_code == 200
+        hidden_data = hidden_resp.json()
+        hidden_line = hidden_data["lines"][0]
+        assert hidden_line["customer_id"] == hidden_customer.id
+        assert hidden_line["show_prices"] is False
+        assert hidden_line["effective_price"] is None
+        assert hidden_line["line_total"] is None
+        assert hidden_data["visible_total"] is None
+        assert hidden_data["hidden_lines_count"] == 1
+
+        visible_resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [
                     {"customer_id": visible_customer.id, "sku_id": sku.id, "quantity": 3},
                 ],
             },
             headers=auth_header(owner_token),
         )
-        assert resp.status_code == 200
-        data = resp.json()
-        hidden_line = next(l for l in data["lines"] if l["customer_id"] == hidden_customer.id)
-        visible_line = next(l for l in data["lines"] if l["customer_id"] == visible_customer.id)
-
-        assert hidden_line["show_prices"] is False
-        assert hidden_line["effective_price"] is None
-        assert hidden_line["line_total"] is None
-
+        assert visible_resp.status_code == 200
+        visible_data = visible_resp.json()
+        visible_line = visible_data["lines"][0]
+        assert visible_line["customer_id"] == visible_customer.id
         assert visible_line["show_prices"] is True
         assert visible_line["effective_price"] == 11.0
         assert visible_line["line_total"] == 33.0
+        assert visible_data["visible_total"] == 33.0
+        assert visible_data["hidden_lines_count"] == 0
 
-        assert data["visible_total"] == 33.0
-        assert data["hidden_lines_count"] == 1
+    def test_order_rejects_multiple_customers(
+        self, client, db, owner_token, sample_org
+    ):
+        a = Customer(name="klant A", organization_id=sample_org.id)
+        b = Customer(name="klant B", organization_id=sample_org.id)
+        sku = SKU(sku_code="WINE-MULTI", name="Multi klant wijn")
+        db.add_all([a, b, sku])
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [
+                    {"customer_id": a.id, "sku_id": sku.id, "quantity": 1},
+                    {"customer_id": b.id, "sku_id": sku.id, "quantity": 1},
+                ],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 400
 
 
 class TestWeeklyPickPhotos:
