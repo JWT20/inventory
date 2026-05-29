@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -39,14 +40,38 @@ interface SupplierGroup {
   supplier_total_value: number | null;
 }
 
+interface CustomerLine {
+  sku_id: number;
+  sku_code: string;
+  sku_name: string;
+  quantity: number;
+  effective_price: number | null;
+  line_total: number | null;
+  remarks: string;
+}
+
+interface CustomerGroup {
+  customer_id: number | null;
+  customer_name: string;
+  lines: CustomerLine[];
+  customer_total_quantity: number;
+  customer_total_value: number | null;
+}
+
+type GroupBy = "supplier" | "customer";
+
 interface WeeklySummary {
   week: string;
   deadline: string;
   deadline_extended: boolean;
+  group_by: GroupBy;
   suppliers: SupplierGroup[];
+  customers: CustomerGroup[];
   grand_total_quantity: number;
   grand_total_value: number | null;
 }
+
+const GROUP_BY_STORAGE_KEY = "weekly-summary:group-by";
 
 function getISOWeek(date: Date): string {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
@@ -72,7 +97,16 @@ function formatPrice(v: number | null): string {
 }
 
 export function WeeklySummaryPage() {
+  const { user } = useAuth();
   const [week, setWeek] = useState(() => getISOWeek(new Date()));
+  const [groupBy, setGroupBy] = useState<GroupBy>(() => {
+    const stored = typeof localStorage !== "undefined"
+      ? localStorage.getItem(GROUP_BY_STORAGE_KEY)
+      : null;
+    if (stored === "supplier" || stored === "customer") return stored;
+    // Default: per-customer for merchants (owner/member), per-supplier otherwise
+    return user?.role === "owner" || user?.role === "member" ? "customer" : "supplier";
+  });
   const [data, setData] = useState<WeeklySummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -80,7 +114,7 @@ export function WeeklySummaryPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await api.weeklyOrderSummary(week);
+      const result = await api.weeklyOrderSummary(week, groupBy);
       setData(result);
       setCollapsed({});
     } catch (err: unknown) {
@@ -88,11 +122,20 @@ export function WeeklySummaryPage() {
     } finally {
       setLoading(false);
     }
-  }, [week]);
+  }, [week, groupBy]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  const changeGroupBy = (next: GroupBy) => {
+    setGroupBy(next);
+    try {
+      localStorage.setItem(GROUP_BY_STORAGE_KEY, next);
+    } catch {
+      // ignore storage failures
+    }
+  };
 
   const toggleCollapse = (key: string) => {
     setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -122,6 +165,31 @@ export function WeeklySummaryPage() {
         </Button>
       </div>
 
+      <div className="inline-flex rounded-md border border-border overflow-hidden mb-4 text-sm">
+        <button
+          type="button"
+          onClick={() => changeGroupBy("supplier")}
+          className={`px-3 py-1.5 transition-colors ${
+            groupBy === "supplier"
+              ? "bg-primary text-primary-foreground"
+              : "bg-background hover:bg-muted"
+          }`}
+        >
+          Per leverancier
+        </button>
+        <button
+          type="button"
+          onClick={() => changeGroupBy("customer")}
+          className={`px-3 py-1.5 transition-colors border-l border-border ${
+            groupBy === "customer"
+              ? "bg-primary text-primary-foreground"
+              : "bg-background hover:bg-muted"
+          }`}
+        >
+          Per klant
+        </button>
+      </div>
+
       {loading && (
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -139,13 +207,101 @@ export function WeeklySummaryPage() {
         </div>
       )}
 
-      {!loading && data && data.suppliers.length === 0 && (
+      {!loading && data && data.suppliers.length === 0 && data.customers.length === 0 && (
         <p className="text-center text-muted-foreground py-10">
           Geen bestellingen in deze week
         </p>
       )}
 
-      {!loading && data && data.suppliers.length > 0 && (
+      {!loading && data && data.group_by === "customer" && data.customers.length > 0 && (
+        <div className="space-y-4">
+          {data.customers.map((cust) => {
+            const key = `c-${cust.customer_id ?? "none"}`;
+            const isCollapsed = collapsed[key];
+            return (
+              <Card key={key} className="overflow-hidden">
+                <button
+                  className="w-full px-4 py-3 flex justify-between items-center text-left hover:bg-muted/50 transition-colors"
+                  onClick={() => toggleCollapse(key)}
+                >
+                  <div>
+                    <span className="font-semibold">{cust.customer_name}</span>
+                    <span className="ml-2 text-sm text-muted-foreground">
+                      {cust.customer_total_quantity} dozen
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {cust.customer_total_value != null && (
+                      <span className="text-sm font-medium">
+                        {formatPrice(cust.customer_total_value)}
+                      </span>
+                    )}
+                    <span className="text-muted-foreground text-xs">
+                      {isCollapsed ? "▶" : "▼"}
+                    </span>
+                  </div>
+                </button>
+
+                {!isCollapsed && (
+                  <div className="border-t border-border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="border-border/50">
+                          <TableHead className="h-8 text-xs">Wijn</TableHead>
+                          <TableHead className="h-8 text-xs text-right">Aantal dozen</TableHead>
+                          <TableHead className="h-8 text-xs text-right">Prijs</TableHead>
+                          <TableHead className="h-8 text-xs text-right">Totaal</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {cust.lines.map((line) => (
+                          <TableRow key={line.sku_id} className="border-border/50">
+                            <TableCell className="py-1.5">
+                              <div className="text-sm">{line.sku_name}</div>
+                              <div className="text-xs text-muted-foreground">{line.sku_code}</div>
+                              {line.remarks && (
+                                <p className="text-xs text-muted-foreground italic mt-0.5">{line.remarks}</p>
+                              )}
+                            </TableCell>
+                            <TableCell className="py-1.5 text-right">{line.quantity}x</TableCell>
+                            <TableCell className="py-1.5 text-right text-muted-foreground">
+                              {formatPrice(line.effective_price)}
+                            </TableCell>
+                            <TableCell className="py-1.5 text-right font-medium">
+                              {formatPrice(line.line_total)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </Card>
+            );
+          })}
+
+          <Card className="p-4">
+            <div className="flex justify-between items-center font-semibold">
+              <span>Totaal</span>
+              <div className="flex items-center gap-4">
+                <span>{data.grand_total_quantity} dozen</span>
+                {data.grand_total_value != null && (
+                  <span>{formatPrice(data.grand_total_value)}</span>
+                )}
+              </div>
+            </div>
+          </Card>
+
+          {data.deadline && (
+            <p className="text-xs text-muted-foreground text-center">
+              Deadline: {new Date(data.deadline).toLocaleDateString("nl-NL", { weekday: "long", day: "numeric", month: "long" })} om {new Date(data.deadline).toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" })}
+              {data.deadline_extended && " (verlengd i.v.m. feestdag)"}
+            </p>
+          )}
+        </div>
+      )}
+
+      {!loading && data && data.group_by === "supplier" && data.suppliers.length > 0 && (
         <div className="space-y-4">
           {data.suppliers.map((supplier) => {
             const key = String(supplier.supplier_id ?? "none");

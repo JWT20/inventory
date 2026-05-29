@@ -310,8 +310,13 @@ export const api = {
   listBookings: (orderId: number) => request(`/orders/${orderId}/bookings`),
   weeklyPickPhotos: (week?: string) =>
     request(`/orders/weekly-pick-photos${week ? `?week=${week}` : ""}`),
-  weeklyOrderSummary: (week?: string) =>
-    request(`/orders/weekly-summary${week ? `?week=${week}` : ""}`),
+  weeklyOrderSummary: (week?: string, groupBy?: "supplier" | "customer") => {
+    const params = new URLSearchParams();
+    if (week) params.set("week", week);
+    if (groupBy) params.set("group_by", groupBy);
+    const qs = params.toString();
+    return request(`/orders/weekly-summary${qs ? `?${qs}` : ""}`);
+  },
   getDeadline: (week?: string) =>
     request(`/orders/deadline${week ? `?week=${week}` : ""}`),
 
