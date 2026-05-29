@@ -1311,7 +1311,7 @@ function OrderDetailDialog({
             </div>
           </div>
 
-          {skusWithoutImages.length > 0 && (
+          {skusWithoutImages.length > 0 && canManage && (
             <div className="p-3 bg-amber-600/20 border border-amber-600 rounded-lg">
               <p className="text-sm text-amber-400">
                 {skusWithoutImages.length} SKU('s) zonder referentiebeeld.
