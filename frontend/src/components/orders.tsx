@@ -176,6 +176,8 @@ export function OrdersPage() {
     load();
   }, [load]);
 
+  const isCustomer = user?.role === "customer";
+
   // Who can create orders?
   const canCreate =
     user &&
@@ -298,15 +300,30 @@ export function OrdersPage() {
       }));
   };
 
-  const openGroups = buildWeekGroups(orders.filter(isOpenWorkOrder));
-  const historyOrders = orders
-    .filter(isHistoryOrder)
+  // For customers: split by week (current/future vs past), ignore status entirely
+  // and hide cancelled orders. For everyone else: keep the open/history split.
+  const visibleOrders = isCustomer
+    ? orders.filter((o) => o.status !== "cancelled")
+    : orders;
+  const orderWeek = (o: Order) => o.delivery_week || getISOWeek(o.created_at);
+
+  const openSourceOrders = isCustomer
+    ? visibleOrders.filter((o) => orderWeek(o) >= currentWeek)
+    : visibleOrders.filter(isOpenWorkOrder);
+  const historySourceOrders = isCustomer
+    ? visibleOrders.filter((o) => orderWeek(o) < currentWeek)
+    : visibleOrders.filter(isHistoryOrder);
+
+  const openGroups = buildWeekGroups(openSourceOrders);
+  const historyOrders = historySourceOrders
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .slice(0, 50);
   const historyGroups = buildWeekGroups(historyOrders);
 
   const currentGroup = openGroups.find((group) => group.week === currentWeek);
-  const overdueGroups = openGroups.filter((group) => group.week < currentWeek);
+  const overdueGroups = isCustomer
+    ? []
+    : openGroups.filter((group) => group.week < currentWeek);
   const upcomingGroups = openGroups
     .filter((group) => group.week > currentWeek)
     .sort((a, b) => a.week.localeCompare(b.week));
@@ -342,9 +359,11 @@ export function OrdersPage() {
     >
       <div className="flex justify-between items-center mb-1">
         <span className="font-semibold">{o.reference}</span>
-        <Badge variant={STATUS_VARIANT[o.status] ?? "inactive"}>
-          {STATUS_LABELS[o.status] ?? o.status}
-        </Badge>
+        {!isCustomer && (
+          <Badge variant={STATUS_VARIANT[o.status] ?? "inactive"}>
+            {STATUS_LABELS[o.status] ?? o.status}
+          </Badge>
+        )}
       </div>
       <p className="text-sm text-muted-foreground">
         {o.organization_name || o.created_by_name} &middot;{" "}
@@ -352,7 +371,11 @@ export function OrdersPage() {
         {o.lines.length !== 1 ? "en" : ""}
       </p>
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <span>{o.booked_boxes}/{o.total_boxes} dozen geboekt</span>
+        <span>
+          {isCustomer
+            ? `${o.total_boxes} ${o.total_boxes === 1 ? "doos" : "dozen"}`
+            : `${o.booked_boxes}/${o.total_boxes} dozen geboekt`}
+        </span>
         <span className="ml-auto flex gap-1">
           {getOrderDeliveryDays(o).map((day) => (
             <Badge key={day} variant="secondary" className="text-xs px-1.5 py-0">
@@ -407,12 +430,16 @@ export function OrdersPage() {
               <p className="truncate text-sm font-medium">{order.reference}</p>
               <p className="truncate text-xs text-muted-foreground">
                 {order.organization_name || order.created_by_name} &middot;{" "}
-                {order.booked_boxes}/{order.total_boxes} dozen
+                {isCustomer
+                  ? `${order.total_boxes} ${order.total_boxes === 1 ? "doos" : "dozen"}`
+                  : `${order.booked_boxes}/${order.total_boxes} dozen`}
               </p>
             </div>
-            <Badge variant={STATUS_VARIANT[order.status] ?? "inactive"}>
-              {STATUS_LABELS[order.status] ?? order.status}
-            </Badge>
+            {!isCustomer && (
+              <Badge variant={STATUS_VARIANT[order.status] ?? "inactive"}>
+                {STATUS_LABELS[order.status] ?? order.status}
+              </Badge>
+            )}
           </button>
         ))}
       </div>
@@ -514,9 +541,13 @@ export function OrdersPage() {
                 Week {currentWeek.split("-W")[1]}
               </p>
               <p className="text-xs text-muted-foreground">
-                {weekStats(currentGroup?.orders ?? []).openBoxes} dozen open &middot;{" "}
-                {weekStats(currentGroup?.orders ?? []).openOrders} orders
-                {currentGroup ? ` · levering ${currentGroup.range}` : ""}
+                {isCustomer
+                  ? `${currentGroup?.orders.length ?? 0} order${
+                      (currentGroup?.orders.length ?? 0) === 1 ? "" : "s"
+                    }${currentGroup ? ` · levering ${currentGroup.range}` : ""}`
+                  : `${weekStats(currentGroup?.orders ?? []).openBoxes} dozen open · ${
+                      weekStats(currentGroup?.orders ?? []).openOrders
+                    } orders${currentGroup ? ` · levering ${currentGroup.range}` : ""}`}
               </p>
             </div>
 
@@ -555,9 +586,11 @@ export function OrdersPage() {
             {upcomingGroups.length > 0 &&
               renderCollapsedGroup(
                 "Volgende weken",
-                `${groupStats(upcomingGroups).openBoxes} dozen open · ${
-                  groupStats(upcomingGroups).openOrders
-                } orders`,
+                isCustomer
+                  ? `${upcomingGroups.reduce((n, g) => n + g.orders.length, 0)} orders`
+                  : `${groupStats(upcomingGroups).openBoxes} dozen open · ${
+                      groupStats(upcomingGroups).openOrders
+                    } orders`,
                 showUpcoming,
                 () => setShowUpcoming((value) => !value),
                 upcomingGroups.map((group) => renderWeekGroup(group, true)),
