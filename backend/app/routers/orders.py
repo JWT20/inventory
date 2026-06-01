@@ -904,7 +904,7 @@ def close_order(
     if not allowed:
         raise HTTPException(403, "Geen toegang om deze order te sluiten")
 
-    if order.status != "active":
+    if order.status not in ("active", "pending_images"):
         raise HTTPException(400, f"Order kan niet gesloten worden (status: {order.status})")
 
     order.status = "closed"

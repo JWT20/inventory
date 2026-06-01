@@ -1075,7 +1075,7 @@ function OrderDetailDialog({
     skusWithoutImages.length === 0 &&
     canManage;
   const canClose =
-    order.status === "active" &&
+    (order.status === "active" || order.status === "pending_images") &&
     (canManage || user?.role === "member" || user?.role === "courier");
 
   async function activate() {
