@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 10  # seconds
 MAX_VISION_DIMENSION = 1024  # px – downscale before sending to Gemini
+MAX_UPLOAD_DIMENSION = 2048  # px – cap stored reference images (bounds file size)
 
 _client: genai.Client | None = None
 
@@ -180,12 +181,16 @@ class UnsupportedImageError(ValueError):
     """Raised when uploaded bytes cannot be decoded as an image."""
 
 
-def normalize_upload_to_jpeg(image_bytes: bytes) -> bytes:
+def normalize_upload_to_jpeg(
+    image_bytes: bytes, max_dimension: int = MAX_UPLOAD_DIMENSION
+) -> bytes:
     """Decode arbitrary uploaded image bytes and re-encode as upright JPEG.
 
     Handles HEIC/HEIF (iPhone) and other Pillow-supported formats, bakes in
-    EXIF orientation, and guarantees the stored bytes are a real JPEG so the
-    ``.jpg`` storage key is honest and downstream decoding always succeeds.
+    EXIF orientation, downscales to ``max_dimension`` on the longest side, and
+    guarantees the stored bytes are a real JPEG so the ``.jpg`` storage key is
+    honest and downstream decoding always succeeds. The downscale also keeps
+    the output size bounded (a HEIC can expand on decode).
 
     Raises ``UnsupportedImageError`` if the bytes are not a decodable image.
     """
@@ -194,7 +199,7 @@ def normalize_upload_to_jpeg(image_bytes: bytes) -> bytes:
         image.load()
     except (UnidentifiedImageError, OSError) as exc:
         raise UnsupportedImageError(str(exc)) from exc
-    image = ImageOps.exif_transpose(image)
+    image = _optimize_pil_for_vision(image, max_dimension)  # exif_transpose + downscale
     if image.mode not in ("RGB", "L"):
         image = image.convert("RGB")
     buf = io.BytesIO()

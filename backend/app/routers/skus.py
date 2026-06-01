@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import logging
 import uuid
@@ -53,6 +54,10 @@ DUPLICATE_SIMILARITY_THRESHOLD = 0.90
 WINE_CHECK_FAILED = "wine_check_failed"
 DUPLICATE_CHECK_FAILED = "duplicate_check_failed"
 PROCESSING_FAILED = "processing_failed"
+
+# Max accepted upload size, enforced on both the raw upload and the normalized
+# JPEG (a HEIC can expand when decoded).
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 # Postgres advisory-lock key serializing the duplicate-detection window across
 # concurrent background tasks. Arbitrary 32-bit constant ('WINE' = 0x57494E45).
@@ -502,20 +507,25 @@ async def upload_reference_image(
     if not sku:
         raise HTTPException(404, "SKU not found")
 
-    image_bytes = file.file.read()
-    if len(image_bytes) > 10 * 1024 * 1024:
+    image_bytes = await file.read()
+    if len(image_bytes) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
 
     # Normalize uploads (incl. iPhone HEIC) to a real, upright JPEG so the
     # ``.jpg`` key is honest and downstream vision decoding always succeeds.
+    # Pillow decode/encode is CPU-bound, so run it off the event loop to avoid
+    # stalling concurrent requests on large phone photos.
     try:
-        image_bytes = normalize_upload_to_jpeg(image_bytes)
+        image_bytes = await asyncio.to_thread(normalize_upload_to_jpeg, image_bytes)
     except UnsupportedImageError:
         raise HTTPException(
             415,
             "Niet-ondersteund of beschadigd afbeeldingsbestand. "
             "Gebruik een JPG, PNG of HEIC.",
         )
+    # A valid HEIC can decode into a larger JPEG; enforce the cap on the result.
+    if len(image_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
 
     image_key = f"reference_images/{sku_id}/{uuid.uuid4().hex}.jpg"
     storage.save(image_key, image_bytes)

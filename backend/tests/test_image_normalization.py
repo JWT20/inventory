@@ -35,3 +35,13 @@ def test_jpeg_passthrough_stays_decodable():
 def test_garbage_bytes_raise_unsupported():
     with pytest.raises(UnsupportedImageError):
         normalize_upload_to_jpeg(b"this is definitely not an image")
+
+
+def test_large_image_is_downscaled_to_cap():
+    """Oversized uploads are downscaled so the stored JPEG stays bounded."""
+    buf = io.BytesIO()
+    Image.new("RGB", (5000, 3000), (200, 100, 50)).save(buf, format="JPEG")
+    out = normalize_upload_to_jpeg(buf.getvalue(), max_dimension=2048)
+    w, h = Image.open(io.BytesIO(out)).size
+    assert max(w, h) == 2048
+    assert (w, h) == (2048, 1228)  # aspect ratio preserved
