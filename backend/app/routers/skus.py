@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import logging
 import uuid
@@ -34,11 +35,14 @@ from app.schemas import (
 from langfuse import observe
 
 from app.services.embedding import (
+    UnsupportedImageError,
     assess_description_quality,
     classify_and_describe,
     describe_and_embed,
     generate_embedding,
+    normalize_upload_to_jpeg,
 )
+from PIL import UnidentifiedImageError
 from app.services.product_status import recompute_active
 from app.services.storage import storage
 
@@ -50,6 +54,10 @@ DUPLICATE_SIMILARITY_THRESHOLD = 0.90
 WINE_CHECK_FAILED = "wine_check_failed"
 DUPLICATE_CHECK_FAILED = "duplicate_check_failed"
 PROCESSING_FAILED = "processing_failed"
+
+# Max accepted upload size, enforced on both the raw upload and the normalized
+# JPEG (a HEIC can expand when decoded).
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 # Postgres advisory-lock key serializing the duplicate-detection window across
 # concurrent background tasks. Arbitrary 32-bit constant ('WINE' = 0x57494E45).
@@ -103,6 +111,21 @@ def _clear_processing_error(image: ReferenceImage) -> None:
     image.processing_error_code = None
     image.processing_error_message = None
     image.duplicate_sku_id = None
+
+
+def _friendly_processing_error(exc: Exception) -> str:
+    """Map a processing exception to a user-facing, diagnosable message.
+
+    Known categories get a clean Dutch message; anything unexpected keeps the
+    friendly retry text but appends the exception type so the cause is visible
+    in the DB/UI without scraping container logs (which rotate on deploy).
+    """
+    if isinstance(exc, (UnidentifiedImageError, UnsupportedImageError)):
+        return (
+            "Niet-ondersteund of beschadigd afbeeldingsbestand. "
+            "Gebruik een JPG, PNG of HEIC."
+        )
+    return f"Beeldanalyse is mislukt ({type(exc).__name__}). Probeer het opnieuw."
 
 
 def _set_processing_failure(
@@ -211,7 +234,7 @@ async def _process_reference_image(
         _clear_processing_error(image)
         recompute_active(sku, db)
         db.commit()
-    except Exception:
+    except Exception as exc:
         logger.exception("Reference image processing failed for image %s", image_id)
         db.rollback()
         image = db.get(ReferenceImage, image_id)
@@ -220,7 +243,7 @@ async def _process_reference_image(
             _set_processing_failure(
                 image,
                 code=PROCESSING_FAILED,
-                message="Beeldanalyse is mislukt. Probeer het opnieuw.",
+                message=_friendly_processing_error(exc),
             )
             if sku is not None:
                 recompute_active(sku, db)
@@ -484,8 +507,24 @@ async def upload_reference_image(
     if not sku:
         raise HTTPException(404, "SKU not found")
 
-    image_bytes = file.file.read()
-    if len(image_bytes) > 10 * 1024 * 1024:
+    image_bytes = await file.read()
+    if len(image_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
+
+    # Normalize uploads (incl. iPhone HEIC) to a real, upright JPEG so the
+    # ``.jpg`` key is honest and downstream vision decoding always succeeds.
+    # Pillow decode/encode is CPU-bound, so run it off the event loop to avoid
+    # stalling concurrent requests on large phone photos.
+    try:
+        image_bytes = await asyncio.to_thread(normalize_upload_to_jpeg, image_bytes)
+    except UnsupportedImageError:
+        raise HTTPException(
+            415,
+            "Niet-ondersteund of beschadigd afbeeldingsbestand. "
+            "Gebruik een JPG, PNG of HEIC.",
+        )
+    # A valid HEIC can decode into a larger JPEG; enforce the cap on the result.
+    if len(image_bytes) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Afbeelding te groot (max 10 MB)")
 
     image_key = f"reference_images/{sku_id}/{uuid.uuid4().hex}.jpg"
