@@ -120,6 +120,37 @@ def test_courier_can_fetch_closed_order_detail_and_bookings(
     assert bookings.status_code == 200
 
 
+def test_owner_can_close_pending_images_order(client, db, owner_token, sample_org):
+    order, _line = _setup_partial_order(
+        db, sample_org, ref="PENDIMG", status="pending_images"
+    )
+
+    resp = client.post(
+        f"/api/orders/{order.id}/close",
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "closed"
+    db.refresh(order)
+    assert order.status == "closed"
+
+
+def test_courier_can_close_pending_images_order(client, db, courier_token, sample_org):
+    order, _line = _setup_partial_order(
+        db, sample_org, ref="PENDIMGC", status="pending_images"
+    )
+
+    resp = client.post(
+        f"/api/orders/{order.id}/close",
+        headers=auth_header(courier_token),
+    )
+
+    assert resp.status_code == 200
+    db.refresh(order)
+    assert order.status == "closed"
+
+
 def test_cannot_close_non_active_order(client, db, owner_token, sample_org):
     order, _line = _setup_partial_order(db, sample_org, ref="DONE", status="completed")
 
