@@ -56,10 +56,10 @@ services:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
-      interval: 10s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
 
   pinot:
     image: apachepinot/pinot:1.1.0
