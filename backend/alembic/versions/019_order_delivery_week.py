@@ -5,7 +5,7 @@ Revises: 018
 Create Date: 2026-04-09
 
 Store which delivery week an order belongs to (e.g. '2026-W16').
-Orders placed after Monday 08:00 deadline belong to the next week.
+Orders placed after Tuesday 12:00 deadline belong to the next week.
 """
 from typing import Sequence, Union
 

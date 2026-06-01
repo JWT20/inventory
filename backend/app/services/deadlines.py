@@ -11,8 +11,8 @@ NL_HOLIDAYS = holidays.Netherlands()
 def get_order_deadline(week: str) -> tuple[datetime.datetime, bool]:
     """Calculate the order deadline for a given ISO week.
 
-    Default deadline: Monday 08:00 Europe/Amsterdam.
-    If Monday is a public holiday, shift forward one day at a time
+    Default deadline: Tuesday 12:00 Europe/Amsterdam.
+    If Tuesday is a public holiday, shift forward one day at a time
     until a non-holiday weekday is found.
 
     Args:
@@ -21,8 +21,8 @@ def get_order_deadline(week: str) -> tuple[datetime.datetime, bool]:
     Returns:
         Tuple of (deadline_datetime, was_extended).
     """
-    monday = datetime.datetime.strptime(week + "-1", "%G-W%V-%u").date()
-    deadline_date = monday
+    tuesday = datetime.datetime.strptime(week + "-2", "%G-W%V-%u").date()
+    deadline_date = tuesday
     extended = False
 
     while deadline_date in NL_HOLIDAYS:
@@ -30,7 +30,7 @@ def get_order_deadline(week: str) -> tuple[datetime.datetime, bool]:
         extended = True
 
     deadline_dt = datetime.datetime.combine(
-        deadline_date, datetime.time(8, 0)
+        deadline_date, datetime.time(12, 0)
     )
     return deadline_dt, extended
 
