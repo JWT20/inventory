@@ -97,7 +97,17 @@ class TestAssessDescriptionQuality:
 # Helpers
 # ---------------------------------------------------------------------------
 
-FAKE_IMAGE = b"\xff\xd8\xff\xe0" + b"\x00" * 100  # minimal JPEG-like bytes
+def _make_jpeg_bytes() -> bytes:
+    """A real, decodable JPEG. Uploads are now decoded/transcoded on receipt,
+    so the test payload must be a valid image."""
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (32, 32), (128, 128, 128)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+FAKE_IMAGE = _make_jpeg_bytes()
 
 FAKE_EMBEDDING = [0.1] * 3072
 

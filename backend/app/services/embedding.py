@@ -8,8 +8,13 @@ import base64
 from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
+from pillow_heif import register_heif_opener
 import io
+
+# Teach Pillow to decode HEIC/HEIF (the default iPhone camera format). Without
+# this, Image.open() raises UnidentifiedImageError on Apple photos.
+register_heif_opener()
 
 from langfuse import observe, get_client as get_langfuse_client
 
@@ -169,6 +174,32 @@ def _get_client() -> genai.Client:
     if _client is None:
         _client = genai.Client(api_key=settings.gemini_api_key)
     return _client
+
+
+class UnsupportedImageError(ValueError):
+    """Raised when uploaded bytes cannot be decoded as an image."""
+
+
+def normalize_upload_to_jpeg(image_bytes: bytes) -> bytes:
+    """Decode arbitrary uploaded image bytes and re-encode as upright JPEG.
+
+    Handles HEIC/HEIF (iPhone) and other Pillow-supported formats, bakes in
+    EXIF orientation, and guarantees the stored bytes are a real JPEG so the
+    ``.jpg`` storage key is honest and downstream decoding always succeeds.
+
+    Raises ``UnsupportedImageError`` if the bytes are not a decodable image.
+    """
+    try:
+        image = Image.open(io.BytesIO(image_bytes))
+        image.load()
+    except (UnidentifiedImageError, OSError) as exc:
+        raise UnsupportedImageError(str(exc)) from exc
+    image = ImageOps.exif_transpose(image)
+    if image.mode not in ("RGB", "L"):
+        image = image.convert("RGB")
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=90)
+    return buf.getvalue()
 
 
 def _optimize_pil_for_vision(image: Image.Image, max_dimension: int | None = None) -> Image.Image:
