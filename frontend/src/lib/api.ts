@@ -31,7 +31,7 @@ function getRefreshToken(): string | null {
   return localStorage.getItem("refresh_token");
 }
 
-let refreshPromise: Promise<string> | null = null;
+let refreshPromise: Promise<string | null> | null = null;
 
 async function tryRefresh(): Promise<string | null> {
   const rt = getRefreshToken();
