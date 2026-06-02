@@ -1,0 +1,124 @@
+# Local development stack — STANDALONE, not used in production.
+#
+#   make dev           # db + backend + frontend, hot reload
+#   make dev-events    # also start Kafka + Pinot (heavy, optional)
+#
+# This file is intentionally separate from docker-compose.yml (which is
+# prod-shaped: journald logging, mem limits, baked images). It is only ever
+# loaded via `-f docker-compose.dev.yml`, so it can never leak into a deploy.
+# All secrets here are throwaway dev dummies.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    env_file: .env.dev
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - dev_pgdata:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wijnpick"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    env_file:
+      - .env.dev
+      - path: .env.dev.local   # optional: real GEMINI_API_KEY etc, gitignored
+        required: false
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./backend:/app          # live code → uvicorn --reload picks up edits
+      - dev_uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/api/health\")'"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  frontend:
+    image: node:22-slim
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      VITE_API_PROXY: http://backend:8000   # Vite dev-server proxies /api here
+    ports:
+      - "127.0.0.1:5173:5173"
+    volumes:
+      - ./frontend:/app
+      - dev_node_modules:/app/node_modules  # keep container's node_modules (correct arch)
+    depends_on:
+      - backend
+
+  # --- Optional analytics stack (profile: events) ----------------------------
+  # Off by default — heavy (~4GB). Backend runs fine with KAFKA empty.
+  kafka:
+    image: apache/kafka:3.7.0
+    profiles: ["events"]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      CLUSTER_ID: warehouse-events-cluster-01
+    volumes:
+      - dev_kafka:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec ': </dev/tcp/localhost/9092'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  pinot:
+    image: apachepinot/pinot:1.1.0
+    profiles: ["events"]
+    command: QuickStart -type EMPTY
+    environment:
+      JAVA_OPTS: -Xms1g -Xmx2g
+    ports:
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - dev_pinot:/opt/pinot/data
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 60s
+
+  pinot-init:
+    image: curlimages/curl:latest
+    profiles: ["events"]
+    depends_on:
+      pinot:
+        condition: service_healthy
+    volumes:
+      - ./pinot:/pinot-config:ro
+    entrypoint: ["/bin/sh", "/pinot-config/init.sh"]
+    restart: "no"
+
+volumes:
+  dev_pgdata:
+  dev_uploads:
+  dev_node_modules:
+  dev_kafka:
+  dev_pinot:
