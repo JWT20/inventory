@@ -30,6 +30,11 @@ services:
       - .env.dev
       - path: .env.dev.local   # optional: real GEMINI_API_KEY etc, gitignored
         required: false
+    environment:
+      # Overrides the empty value in .env.dev. Stays empty for `make dev`
+      # (events off); `make dev-events` exports kafka:9092 so the producer
+      # actually publishes to the Kafka/Pinot it just started.
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:

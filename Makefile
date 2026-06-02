@@ -18,7 +18,7 @@ dev: ## Start db + backend + frontend with hot reload
 	@echo "  Tip: 'make seed' for sample data, 'make logs' to watch."
 
 dev-events: ## Start dev stack + Kafka + Pinot (heavy, ~4GB)
-	$(COMPOSE) --profile events up -d --build
+	KAFKA_BOOTSTRAP_SERVERS=kafka:9092 $(COMPOSE) --profile events up -d --build
 
 down: ## Stop the dev stack (keeps data)
 	$(COMPOSE) down
