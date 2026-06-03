@@ -1,6 +1,6 @@
 """Tests for inventory merchant scope and reserved quantity behavior."""
 
-from app.models import Customer, CustomerSKU, InventoryBalance, SKU
+from app.models import Customer, CustomerSKU, InventoryBalance, ReferenceImage, SKU
 from tests.conftest import auth_header
 
 
@@ -66,6 +66,36 @@ class TestInventoryScope:
         assert data[0]["quantity_reserved"] == 3
         assert data[0]["quantity_available"] == 5
         assert len(data[0]["customer_prices"]) == 1
+
+    def test_inventory_overview_returns_done_thumbnail(
+        self, client, db, admin_token, sample_org
+    ):
+        sku = _make_stock(db, sample_org, on_hand=8, reserved=3)
+        db.add_all(
+            [
+                ReferenceImage(
+                    sku_id=sku.id,
+                    image_path="reference_images/pending.jpg",
+                    processing_status="pending",
+                ),
+                ReferenceImage(
+                    sku_id=sku.id,
+                    image_path="reference_images/done.jpg",
+                    processing_status="done",
+                ),
+            ]
+        )
+        db.commit()
+
+        resp = client.get(
+            f"/api/inventory/overview?organization_id={sample_org.id}",
+            headers=auth_header(admin_token),
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()[0]["image_url"] == (
+            "/api/thumbnails/112/reference_images/done.jpg"
+        )
 
     def test_courier_inventory_overview_hides_prices(
         self, client, db, courier_token, sample_org

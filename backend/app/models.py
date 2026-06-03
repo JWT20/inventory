@@ -123,6 +123,9 @@ class Supplier(Base):
 
 class SKU(Base):
     __tablename__ = "skus"
+    __table_args__ = (
+        Index("ix_skus_org_active_name", "organization_id", "active", "name"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku_code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
@@ -177,7 +180,10 @@ class SKU(Base):
 
 class SKUAttribute(Base):
     __tablename__ = "sku_attributes"
-    __table_args__ = (UniqueConstraint("sku_id", "key"),)
+    __table_args__ = (
+        UniqueConstraint("sku_id", "key"),
+        Index("ix_sku_attributes_key_value_sku_id", "key", "value", "sku_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="CASCADE"))
@@ -189,6 +195,14 @@ class SKUAttribute(Base):
 
 class ReferenceImage(Base):
     __tablename__ = "reference_images"
+    __table_args__ = (
+        Index(
+            "ix_reference_images_sku_status_created",
+            "sku_id",
+            "processing_status",
+            "created_at",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="CASCADE"))
@@ -240,7 +254,10 @@ class Customer(Base):
 
 class CustomerSKU(Base):
     __tablename__ = "customer_skus"
-    __table_args__ = (UniqueConstraint("customer_id", "sku_id"),)
+    __table_args__ = (
+        UniqueConstraint("customer_id", "sku_id"),
+        Index("ix_customer_skus_sku_id", "sku_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"))

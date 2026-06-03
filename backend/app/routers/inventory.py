@@ -7,7 +7,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.auth import (
     get_current_user,
@@ -961,8 +961,7 @@ def inventory_overview(
             & (InventoryBalance.organization_id == org_id),
         )
         .options(
-            joinedload(SKU.attributes),
-            joinedload(SKU.reference_images),
+            selectinload(SKU.attributes),
         )
         .filter(SKU.active.is_(True))
         .filter(SKU.organization_id == org_id)
@@ -1000,6 +999,22 @@ def inventory_overview(
 
     # Batch-load customer prices for all SKUs in result
     sku_ids = [sku.id for sku, _ in rows]
+    image_urls_by_sku: dict[int, str] = {}
+    if sku_ids:
+        image_rows = (
+            db.query(ReferenceImage.sku_id, ReferenceImage.image_path)
+            .filter(ReferenceImage.sku_id.in_(sku_ids))
+            .filter(ReferenceImage.processing_status == "done")
+            .order_by(
+                ReferenceImage.sku_id,
+                ReferenceImage.created_at,
+                ReferenceImage.id,
+            )
+            .all()
+        )
+        for sku_id, image_path in image_rows:
+            image_urls_by_sku.setdefault(sku_id, f"/api/thumbnails/112/{image_path}")
+
     can_view_prices = user.role != "courier"
     customer_prices_rows = (
         db.query(CustomerSKU, Customer.name)
@@ -1033,12 +1048,6 @@ def inventory_overview(
 
     result = []
     for sku, balance in rows:
-        first_image = next(
-            (img for img in sku.reference_images if img.processing_status == "done"),
-            None,
-        )
-        image_url = f"/api/thumbnails/112/{first_image.image_path}" if first_image else None
-
         result.append(
             InventoryOverviewItem(
                 sku_id=sku.id,
@@ -1054,7 +1063,7 @@ def inventory_overview(
                 quantity_reserved=balance.quantity_reserved if balance else 0,
                 quantity_available=balance.quantity_available if balance else 0,
                 last_movement_at=balance.last_movement_at if balance else None,
-                image_url=image_url,
+                image_url=image_urls_by_sku.get(sku.id),
                 customer_prices=prices_by_sku.get(sku.id, []),
             )
         )
