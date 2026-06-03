@@ -5,10 +5,12 @@ Idempotent: safe to run repeatedly. Run inside the dev backend container:
     make seed
     # or: docker compose -f docker-compose.dev.yml exec backend python -m scripts.seed_dev
 
-Creates a dev organization, a handful of SKUs, and one customer linked to
-them, so the UI has something to show. Never run this against production.
+Creates a dev organization, a handful of SKUs, one customer linked to them,
+and a login per role (owner / member / courier / customer) so every part of
+the UI is reachable. Never run this against production.
 """
 
+from app.auth import hash_password
 from app.database import SessionLocal
 from app.models import Customer, CustomerSKU, Organization, SKU, User
 
@@ -17,6 +19,14 @@ SAMPLE_SKUS = [
     ("DOMA-BLAN-WIT-750", "Domaine Blanc", "Chardonnay, wit, 750ml"),
     ("PROS-BRUT-SPA-750", "Prosecco Brut", "Mousserend, 750ml"),
     ("RIOJ-RESE-ROO-750", "Rioja Reserva", "Tempranillo, rood, 750ml"),
+]
+
+# (username, password, role, needs_org, is_customer)
+SAMPLE_USERS = [
+    ("owner", "devowner", "owner", True, False),
+    ("member", "devmember", "member", True, False),
+    ("koerier", "devkoerier", "courier", False, False),
+    ("klant", "devklant", "customer", True, True),
 ]
 
 
@@ -66,10 +76,34 @@ def main() -> None:
                 db.add(CustomerSKU(customer_id=customer.id, sku_id=sku.id))
         db.commit()
 
+        # One login per role so the scan / warehouse / customer views are all
+        # reachable (the platform admin only sees the admin pages).
+        created_users = []
+        for username, password, role, needs_org, is_customer in SAMPLE_USERS:
+            if db.query(User).filter_by(username=username).first() is not None:
+                continue
+            db.add(
+                User(
+                    username=username,
+                    email=f"{username}@local",
+                    hashed_password=hash_password(password),
+                    role=role,
+                    organization_id=org.id if needs_org else None,
+                    customer_id=customer.id if is_customer else None,
+                    is_verified=True,
+                )
+            )
+            created_users.append(f"{username}/{password} ({role})")
+        db.commit()
+
         print(
             f"Seeded dev data: org '{org.name}' (id={org.id}), "
             f"{len(SAMPLE_SKUS)} SKUs, customer '{customer.name}'."
         )
+        if created_users:
+            print("Created logins: " + ", ".join(created_users))
+        else:
+            print("Role logins already existed (owner/member/koerier/klant).")
     finally:
         db.close()
 
