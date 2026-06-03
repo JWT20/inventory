@@ -1,6 +1,6 @@
 """Tests for the read-only SKU distribution (verdeel-lijst) endpoint."""
 
-from app.models import Customer, InventoryBalance, Order, OrderLine, SKU
+from app.models import Customer, InventoryBalance, Order, OrderLine, Organization, SKU
 from tests.conftest import auth_header
 
 
@@ -143,6 +143,58 @@ def test_distribution_adhoc_order_scoped_to_itself(
 
     assert body["scope"] == "deze order"
     assert [line["customer_name"] for line in body["lines"]] == ["AdHoc"]
+
+
+def test_distribution_scoped_to_context_week(client, db, courier_token, sample_org):
+    sku = _make_sku(db)
+    this_week = _make_customer(db, sample_org, "ThisWeek")
+    next_week = _make_customer(db, sample_org, "NextWeek")
+    context_order = _make_order(db, sample_org, "CTX", week="2026-W21")
+    other_order = _make_order(db, sample_org, "NEXT", week="2026-W22")
+    _make_line(db, context_order, sku, this_week, quantity=3)
+    _make_line(db, other_order, sku, next_week, quantity=3)
+    _set_stock(db, sku, sample_org, 10)
+    db.commit()
+
+    resp = _get(client, courier_token, context_order.id, sku.id)
+    assert resp.status_code == 200
+    # Only the context week's customer is listed; next week's order is excluded.
+    assert [line["customer_name"] for line in resp.json()["lines"]] == ["ThisWeek"]
+
+
+def test_distribution_total_remaining_bounded_by_stock(client, db, courier_token, sample_org):
+    sku = _make_sku(db)
+    wed_cust = _make_customer(db, sample_org, "Wed")
+    thu_cust = _make_customer(db, sample_org, "Thu")
+    context_order = _make_order(db, sample_org, "WED", week="2026-W21")
+    thu_order = _make_order(db, sample_org, "THU", week="2026-W21")
+    _make_line(db, context_order, sku, wed_cust, quantity=5, delivery_day="wednesday")
+    _make_line(db, thu_order, sku, thu_cust, quantity=5, delivery_day="thursday")
+    _set_stock(db, sku, sample_org, 4)  # one shared pool across both days
+    db.commit()
+
+    resp = _get(client, courier_token, context_order.id, sku.id)
+    assert resp.status_code == 200
+    body = resp.json()
+    # Each day caps independently against the same 4 boxes, so raw caps sum to 8;
+    # the headline total must be bounded by the 4 boxes physically on hand.
+    assert body["total_remaining"] == 4
+
+
+def test_distribution_rejects_other_org_for_owner(client, db, owner_token, sample_org):
+    other_org = Organization(name="Andere Wijnhandel", slug="andere")
+    db.add(other_org)
+    db.flush()
+    sku = _make_sku(db)
+    cust = _make_customer(db, other_org, "Foreign")
+    other_order = _make_order(db, other_org, "FOREIGN")
+    _make_line(db, other_order, sku, cust, quantity=3)
+    _set_stock(db, sku, other_org, 5)
+    db.commit()
+
+    # owner_token belongs to sample_org, not other_org.
+    resp = _get(client, owner_token, other_order.id, sku.id)
+    assert resp.status_code == 403
 
 
 def test_distribution_unknown_order_returns_404(client, courier_token):

@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, Form, HTTPException, Response, UploadFile
 from sqlalchemy.exc import IntegrityError
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, contains_eager, joinedload
 
 from app.auth import require_inbound_booker
 from app.config import settings
@@ -421,11 +421,28 @@ def sku_distribution(
     context_order = db.get(Order, order_id)
     if not context_order:
         raise HTTPException(404, "Order niet gevonden")
+    # Owners/members may only read their own organization's orders. Platform admins
+    # and couriers serve across organizations, so they are unrestricted — same guard
+    # the concept-product endpoint applies.
+    if (
+        user.role in ("owner", "member")
+        and context_order.organization_id != user.organization_id
+    ):
+        raise HTTPException(403, "Geen toegang tot deze organisatie")
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
 
-    lines = _open_scope_lines_query(db, context_order, sku_id, include_complete=True).all()
+    # Scope to the context order's own delivery week: the koerier is distributing
+    # this week's boxes, not every future week's open orders. Eager-load customer and
+    # order to avoid an N+1 over the result set.
+    query = _open_scope_lines_query(db, context_order, sku_id, include_complete=True)
+    if context_order.delivery_week:
+        query = query.filter(Order.delivery_week == context_order.delivery_week)
+    lines = query.options(
+        contains_eager(OrderLine.order),
+        joinedload(OrderLine.customer),
+    ).all()
     cap_remaining = _cap_remaining_by_line(db, context_order, sku_id, lines)
 
     dist_lines = [
@@ -454,12 +471,28 @@ def sku_distribution(
         )
     )
 
+    # Per-(week, day) caps are each computed against the same shared stock, so their
+    # sum can exceed what physically exists. Bound the headline total by available
+    # stock so it never promises more boxes than are on hand.
+    total_remaining = sum(d.remaining_quantity for d in dist_lines)
+    if context_order.delivery_week:
+        balance = (
+            db.query(InventoryBalance)
+            .filter(
+                InventoryBalance.sku_id == sku_id,
+                InventoryBalance.organization_id == context_order.organization_id,
+            )
+            .first()
+        )
+        available = balance.quantity_available if balance else 0
+        total_remaining = min(total_remaining, available)
+
     return SKUDistributionResponse(
         sku_id=sku.id,
         sku_code=sku.sku_code,
         sku_name=sku.name,
         scope=_scope_label(context_order),
-        total_remaining=sum(d.remaining_quantity for d in dist_lines),
+        total_remaining=total_remaining,
         lines=dist_lines,
     )
 
