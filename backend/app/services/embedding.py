@@ -229,6 +229,38 @@ def optimize_for_vision(image_bytes: bytes, max_dimension: int | None = None) ->
     return _optimize_pil_for_vision(Image.open(io.BytesIO(image_bytes)), max_dimension)
 
 
+def _usage_details_from_gemini(response) -> dict[str, int]:
+    """Map a Gemini ``usage_metadata`` block to Langfuse ``usage_details``.
+
+    Returns an empty dict when the response carries no usage metadata (e.g.
+    embedding responses), so callers can pass ``usage_details=... or None``.
+
+    Note: ``total_token_count`` is intentionally omitted. Langfuse computes cost
+    per usage-key, so sending ``total`` alongside ``input``/``output`` risks
+    double-counting if a ``total`` price is defined.
+    """
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return {}
+
+    details: dict[str, int] = {}
+
+    if getattr(usage, "prompt_token_count", None) is not None:
+        details["input"] = usage.prompt_token_count
+
+    if getattr(usage, "candidates_token_count", None) is not None:
+        details["output"] = usage.candidates_token_count
+
+    # Only useful if the Langfuse model price definition prices these usage types.
+    if getattr(usage, "cached_content_token_count", None) is not None:
+        details["cached_input"] = usage.cached_content_token_count
+
+    if getattr(usage, "thoughts_token_count", None) is not None:
+        details["reasoning"] = usage.thoughts_token_count
+
+    return details
+
+
 @observe(as_type="generation")
 async def _call_vision(
     image: Image.Image,
@@ -288,6 +320,7 @@ async def _call_vision(
             model=model,
             input=langfuse_input,
             output=response.text,
+            usage_details=_usage_details_from_gemini(response) or None,
         )
     except Exception:
         pass  # Langfuse not initialized or not in traced context
@@ -340,6 +373,7 @@ async def _call_text(
             model=model,
             input=langfuse_input,
             output=response.text,
+            usage_details=_usage_details_from_gemini(response) or None,
         )
     except Exception:
         pass  # Langfuse not initialized or not in traced context
@@ -429,10 +463,15 @@ async def generate_embedding(text: str) -> list[float]:
 
     try:
         langfuse = get_langfuse_client()
+        # Kept as a "generation" observation so Langfuse reliably prices it.
+        # Gemini embedding responses usually carry no usage_metadata, so this is
+        # often empty (embedding cost then stays zero unless you add your own
+        # token estimate). We pass it when present rather than guessing.
         langfuse.update_current_generation(
             model=settings.gemini_embedding_model,
             input=text,
             metadata={"output_dimensionality": EMBEDDING_DIM},
+            usage_details=_usage_details_from_gemini(result) or None,
         )
     except Exception:
         pass  # Langfuse not initialized or not in traced context
