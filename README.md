@@ -65,6 +65,41 @@ docker compose up -d
 - Docker and Docker Compose
 - A Google Gemini API key (for vision and embedding)
 
+## Local Development
+
+The `docker compose up` above is the production-shaped stack. For day-to-day
+development there is a separate, lightweight stack with hot reload and
+throwaway data — no real secrets, no Gemini bill, no Kafka/Pinot by default.
+
+```bash
+make dev      # db + backend (auto-reload) + frontend (Vite HMR)
+make seed     # load a sample org, SKUs and a customer to click around
+```
+
+Then open:
+
+- Frontend → http://localhost:5173
+- Backend  → http://localhost:8000 (API docs at `/docs`)
+- Login    → `admin` / `devadmin`
+
+Edit Python and the backend reloads; edit React and the browser hot-reloads.
+Common commands (`make help` lists them all):
+
+| Command | What it does |
+|---------|--------------|
+| `make dev` | Start db + backend + frontend (hot reload) |
+| `make dev-events` | Also start Kafka + Pinot (heavy, ~4GB) |
+| `make seed` | Load sample dev data |
+| `make reset` | Wipe throwaway data and start fresh |
+| `make test` | Run backend tests |
+| `make logs` | Tail logs |
+| `make down` | Stop the dev stack |
+
+Dev configuration lives in `.env.dev` (committed, dummy values only) and
+`docker-compose.dev.yml`. To enable real AI features locally, put your real
+key in `.env.dev.local` (gitignored) as `GEMINI_API_KEY=...`. None of these
+dev files are ever deployed to production.
+
 ## Environment Variables
 
 | Variable | Description | Default |

@@ -10,8 +10,13 @@ export default defineConfig({
     },
   },
   server: {
+    host: true,
+    // In the dev container, file events don't propagate without polling.
+    watch: process.env.VITE_API_PROXY ? { usePolling: true } : undefined,
     proxy: {
-      "/api": "http://localhost:8000",
+      // Defaults to localhost for host-based dev; the dev container sets
+      // VITE_API_PROXY=http://backend:8000 to reach the backend service.
+      "/api": process.env.VITE_API_PROXY ?? "http://localhost:8000",
     },
   },
 });

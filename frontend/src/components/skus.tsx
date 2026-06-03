@@ -364,7 +364,7 @@ function SKUDialog({
         toast.success("SKU aangemaakt");
       }
 
-      if (stagedFiles.length > 0) {
+      if (skuId && stagedFiles.length > 0) {
         await uploadImages(skuId, stagedFiles, false);
       }
 
