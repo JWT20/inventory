@@ -73,14 +73,24 @@ throwaway data — no real secrets, no Gemini bill, no Kafka/Pinot by default.
 
 ```bash
 make dev      # db + backend (auto-reload) + frontend (Vite HMR)
-make seed     # load a sample org, SKUs and a customer to click around
+make seed     # sample org, SKUs, a customer, and a login per role
 ```
 
 Then open:
 
 - Frontend → http://localhost:5173
 - Backend  → http://localhost:8000 (API docs at `/docs`)
-- Login    → `admin` / `devadmin`
+
+`make seed` creates one login per role so every view is reachable (the
+platform admin only sees the admin pages):
+
+| Login | Role | Sees |
+|-------|------|------|
+| `admin` / `devadmin` | platform admin | accounts / admin pages |
+| `owner` / `devowner` | owner | products, orders, warehouse |
+| `member` / `devmember` | member | products, orders, warehouse |
+| `koerier` / `devkoerier` | courier | Scan & Boek |
+| `klant` / `devklant` | customer | customer ordering view |
 
 Edit Python and the backend reloads; edit React and the browser hot-reloads.
 Common commands (`make help` lists them all):
