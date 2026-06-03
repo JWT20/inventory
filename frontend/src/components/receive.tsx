@@ -74,6 +74,29 @@ interface AlternativeMatch {
   confirmation_token: string;
 }
 
+interface DistributionLine {
+  order_id: number;
+  order_line_id: number;
+  customer_name: string;
+  rolcontainer: string;
+  delivery_day: string;
+  delivery_week?: string | null;
+  ordered_quantity: number;
+  booked_count: number;
+  remaining_quantity: number;
+  is_complete: boolean;
+  is_context_order: boolean;
+}
+
+interface DistributionResult {
+  sku_id: number;
+  sku_code: string;
+  sku_name: string;
+  scope: string;
+  total_remaining: number;
+  lines: DistributionLine[];
+}
+
 interface ConfirmationData {
   needs_confirmation: true;
   confirmation_token: string;
@@ -752,6 +775,78 @@ function ScanStep({
 
 /* ---------- Step 3: Result / Rolcontainer Assignment ---------- */
 
+/* ---------- Verdeel-lijst: which customers this SKU still needs to go to ---------- */
+
+function DistributionPanel({ orderId, skuId }: { orderId: number; skuId: number }) {
+  const [data, setData] = useState<DistributionResult | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setFailed(false);
+    api
+      .getDistribution(orderId, skuId)
+      .then((res: DistributionResult) => { if (active) setData(res); })
+      .catch(() => { if (active) setFailed(true); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [orderId, skuId]);
+
+  if (loading) {
+    return (
+      <Card className="p-4 mb-4">
+        <Skeleton className="h-5 w-44 mb-3" />
+        <Skeleton className="h-4 w-full mb-2" />
+        <Skeleton className="h-4 w-3/4" />
+      </Card>
+    );
+  }
+
+  // Hide silently on failure, or when this SKU only goes to the one customer we
+  // just booked — there is nothing extra to distribute. Read-only: never blocks.
+  if (failed || !data || data.lines.length <= 1) return null;
+
+  return (
+    <Card className="p-4 mb-4">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-sm font-semibold">Deze SKU ook nog naar</p>
+        <Badge variant="secondary" className="shrink-0">
+          nog {data.total_remaining} te verdelen
+        </Badge>
+      </div>
+      <ul className="space-y-2">
+        {data.lines.map((line) => (
+          <li
+            key={line.order_line_id}
+            className={`flex items-center justify-between gap-2 text-sm ${line.is_context_order ? "opacity-50" : ""}`}
+          >
+            <div className="min-w-0">
+              <p className="font-medium truncate">
+                {line.customer_name}
+                {line.is_context_order && (
+                  <span className="text-muted-foreground font-normal"> (deze doos)</span>
+                )}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {DELIVERY_DAY_LABELS[line.delivery_day] ?? line.delivery_day}
+                {" · besteld "}{line.ordered_quantity}
+                {" · gescand "}{line.booked_count}
+              </p>
+            </div>
+            {line.is_complete ? (
+              <Badge variant="secondary" className="shrink-0">✓ klaar</Badge>
+            ) : (
+              <Badge className="shrink-0">nog {line.remaining_quantity}</Badge>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
 function ResultStep({
   booking,
   order,
@@ -902,6 +997,11 @@ function ResultStep({
             {bookingMore ? "Boeken..." : `${moreQuantity}× extra boeken`}
           </Button>
         </Card>
+      )}
+
+      {/* Read-only verdeel-lijst: which other customers this SKU still needs to go to */}
+      {booking.sku_id != null && (
+        <DistributionPanel orderId={order.id} skuId={booking.sku_id} />
       )}
 
       <div className="flex flex-col gap-3">

@@ -365,6 +365,10 @@ export const api = {
     return request("/receiving/book/more", { method: "POST", body: form });
   },
 
+  // Receiving - read-only verdeel-lijst: which customers this SKU still needs to go to
+  getDistribution: (orderId: number, skuId: number) =>
+    request(`/receiving/distribution?order_id=${orderId}&sku_id=${skuId}`),
+
   registerReferenceAndBook: (registerToken: string, skuId: number) =>
     request("/receiving/register-reference", {
       method: "POST",
