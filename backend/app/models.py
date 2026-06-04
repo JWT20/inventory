@@ -526,6 +526,28 @@ class InventoryBalance(Base):
         return max(self.quantity_on_hand - self.quantity_reserved, 0)
 
 
+class CourierBillingRate(Base):
+    """Configurable per-box billing rate for couriers (single row, id=1).
+
+    Amounts are stored in whole cents to avoid float rounding:
+    - charge_cents: what the courier invoices the customer per scanned box
+    - platform_cents: the platform owner's share per box (courier remits this)
+    - courier_cents: the courier's net share per box
+
+    By convention charge_cents == platform_cents + courier_cents, but this is
+    not enforced so the split can be tuned independently.
+    """
+    __tablename__ = "courier_billing_rates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    charge_cents: Mapped[int] = mapped_column(Integer, default=50, server_default="50")
+    platform_cents: Mapped[int] = mapped_column(Integer, default=17, server_default="17")
+    courier_cents: Mapped[int] = mapped_column(Integer, default=33, server_default="33")
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class StockMovement(Base):
     __tablename__ = "stock_movements"
 

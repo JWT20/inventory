@@ -773,3 +773,21 @@ class DeadlineResponse(BaseModel):
     delivery_friday: str = ""
     customer_delivery_day: str | None = None
     customer_delivery_date: str | None = None
+
+
+class CourierEarningsCustomer(BaseModel):
+    customer_name: str
+    boxes: int
+    charge_amount: float  # boxes * charge per box (te factureren aan deze klant)
+
+
+class CourierEarningsResponse(BaseModel):
+    month: str  # "YYYY-MM"
+    charge_cents: int
+    platform_cents: int
+    courier_cents: int
+    total_boxes: int
+    total_charge: float  # te factureren (dozen * charge_cents)
+    total_platform: float  # afdracht aan platform (dozen * platform_cents)
+    total_courier: float  # netto voor koerier (dozen * courier_cents)
+    customers: list[CourierEarningsCustomer] = []

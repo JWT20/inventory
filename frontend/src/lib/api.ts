@@ -302,6 +302,8 @@ export const api = {
     return request(`/orders${query ? `?${query}` : ""}`);
   },
   getOrder: (id: number) => request(`/orders/${id}`),
+  courierEarnings: (month?: string) =>
+    request(`/courier/earnings${month ? `?month=${month}` : ""}`),
   activateOrder: (id: number) =>
     request(`/orders/${id}/activate`, { method: "POST" }),
   closeOrder: (id: number) =>

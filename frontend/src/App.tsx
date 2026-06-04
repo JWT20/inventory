@@ -10,12 +10,13 @@ import { CustomersPage } from "@/components/customers";
 import { InventoryPage } from "@/components/inventory";
 import { InboundPage } from "@/components/inbound";
 import { WeeklySummaryPage } from "@/components/weekly-summary";
+import { CourierEarningsPage } from "@/components/courier-earnings";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { LogOut } from "lucide-react";
 
 export { toast };
 
-type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "customers" | "suppliers" | "accounts" | "weekly";
+type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "customers" | "suppliers" | "accounts" | "weekly" | "facturatie";
 
 const JURJEN_ORG_SLUG = "jurjen";
 
@@ -54,6 +55,11 @@ function Main() {
       id: "inbound",
       label: "Inbound",
       show: !isAdmin && (user.role === "owner" || user.role === "member"),
+    },
+    {
+      id: "facturatie",
+      label: "Facturatie",
+      show: !isAdmin && user.role === "courier",
     },
     {
       id: "skus",
@@ -124,6 +130,7 @@ function Main() {
             {t.id === "skus" && <SKUsPage />}
             {t.id === "inventory" && <InventoryPage />}
             {t.id === "weekly" && <WeeklySummaryPage />}
+            {t.id === "facturatie" && <CourierEarningsPage />}
             {t.id === "customers" && <CustomersPage />}
             {t.id === "suppliers" && <SuppliersPage />}
             {t.id === "accounts" && <AccountsPage />}
