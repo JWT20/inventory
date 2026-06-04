@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -27,6 +27,7 @@ from app.models import (
     InventoryBalance,
     ReferenceImage,
     Organization,
+    Supplier,
     SupplierSKUMapping,
     StockMovement,
     User,
@@ -973,7 +974,22 @@ def inventory_overview(
         )
 
     if search:
-        query = query.filter(SKU.name.ilike(f"%{search}%"))
+        like = f"%{search}%"
+        # Match on product name OR the name of the supplier (leverancier) the
+        # wine is sourced from, so typing a supplier name lists all its wines.
+        supplier_subq = (
+            db.query(Supplier.id)
+            .filter(
+                Supplier.organization_id == org_id,
+                Supplier.name.ilike(like),
+            )
+        )
+        query = query.filter(
+            or_(
+                SKU.name.ilike(like),
+                SKU.supplier_id.in_(supplier_subq),
+            )
+        )
 
     if wijntype:
         query = query.filter(
