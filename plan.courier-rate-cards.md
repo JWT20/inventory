@@ -2,7 +2,16 @@
 
 Replaces the single-row `courier_billing_rates` config with a scalable
 per-courier / per-customer / per-service tariff layer, plus a deterministic
-resolver. Settlement (locking + payout) is explicitly deferred to phase 2.
+resolver, and a frozen settlement/payout layer.
+
+> **Status: implemented (phase 1 + phase 2).** Decisions taken at build time:
+> 1. The old `courier_billing_rates` row is migrated into a global catch-all
+>    rate card and the table is dropped (migration 028).
+> 2. Unique scope index uses `postgresql_nulls_not_distinct` (Postgres 16 in
+>    prod); SQLite tests rely on the application-level overlap guard.
+> 3. `organization_id` is a full precedence dimension on the rate card.
+> 4. `scope` + `rate_card_id` are snapshotted on settlement lines (admin view);
+>    the courier earnings response stays clean (no split, no card internals).
 
 ## Why
 

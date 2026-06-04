@@ -11,12 +11,13 @@ import { InventoryPage } from "@/components/inventory";
 import { InboundPage } from "@/components/inbound";
 import { WeeklySummaryPage } from "@/components/weekly-summary";
 import { CourierEarningsPage } from "@/components/courier-earnings";
+import { CourierBillingAdminPage } from "@/components/courier-billing-admin";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { LogOut } from "lucide-react";
 
 export { toast };
 
-type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "customers" | "suppliers" | "accounts" | "weekly" | "facturatie";
+type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "customers" | "suppliers" | "accounts" | "weekly" | "facturatie" | "courier-billing";
 
 const JURJEN_ORG_SLUG = "jurjen";
 
@@ -91,6 +92,11 @@ function Main() {
       label: "Beheer",
       show: isAdmin,
     },
+    {
+      id: "courier-billing",
+      label: "Koeriers",
+      show: isAdmin,
+    },
   ];
 
   const visibleTabs = tabs.filter((t) => t.show);
@@ -134,6 +140,7 @@ function Main() {
             {t.id === "customers" && <CustomersPage />}
             {t.id === "suppliers" && <SuppliersPage />}
             {t.id === "accounts" && <AccountsPage />}
+            {t.id === "courier-billing" && <CourierBillingAdminPage />}
           </TabsContent>
         ))}
       </main>

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from typing import Literal
 
@@ -173,6 +173,17 @@ class SKUCreate(BaseModel):
     attributes: dict[str, str] = {}
     active: bool = True
     supplier_id: int | None = None
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, v: str) -> str:
+        from app.models import VALID_SKU_CATEGORIES
+
+        if v not in VALID_SKU_CATEGORIES:
+            raise ValueError(
+                f"Ongeldige categorie '{v}', kies uit: {', '.join(VALID_SKU_CATEGORIES)}"
+            )
+        return v
 
     @field_validator("attributes")
     @classmethod
@@ -775,17 +786,129 @@ class DeadlineResponse(BaseModel):
     customer_delivery_date: str | None = None
 
 
-class CourierEarningsCustomer(BaseModel):
+class CourierEarningsGroup(BaseModel):
     customer_id: int | None  # None for free-text 'klant' lines
     organization_id: int | None  # disambiguates same-named customers across orgs
     customer_name: str
-    boxes: int
-    charge_amount: float  # boxes * charge per box (te factureren aan deze klant)
+    service_type: str
+    unit_type: str
+    units: int
+    charge_amount: float  # units * resolved charge per unit (te factureren)
 
 
 class CourierEarningsResponse(BaseModel):
     month: str  # "YYYY-MM"
+    total_units: int
+    total_charge: float  # te factureren (som van de groepen)
+    groups: list[CourierEarningsGroup] = []
+
+
+# --- Courier rate cards (admin) ---
+class RateCardBase(BaseModel):
+    courier_id: int | None = None  # None = alle koeriers
+    customer_id: int | None = None  # None = alle klanten (binnen scope)
+    organization_id: int | None = None  # None = alle organisaties
+    service_type: str | None = None  # None = alle diensten
+    unit_type: str = "box"
+    charge_cents: int = Field(ge=0)
+    platform_cents: int = Field(ge=0)
+    courier_cents: int = Field(ge=0)
+    effective_from: date
+    effective_until: date | None = None
+
+    @field_validator("service_type")
+    @classmethod
+    def _valid_service(cls, v):
+        from app.models import VALID_SERVICE_TYPES
+
+        if v is not None and v not in VALID_SERVICE_TYPES:
+            raise ValueError(f"Ongeldig service_type: {v}")
+        return v
+
+    @field_validator("unit_type")
+    @classmethod
+    def _valid_unit(cls, v):
+        from app.models import VALID_UNIT_TYPES
+
+        if v not in VALID_UNIT_TYPES:
+            raise ValueError(f"Ongeldig unit_type: {v}")
+        return v
+
+    @field_validator("courier_cents")
+    @classmethod
+    def _split_adds_up(cls, v, info):
+        charge = info.data.get("charge_cents")
+        platform = info.data.get("platform_cents")
+        if charge is not None and platform is not None and platform + v != charge:
+            raise ValueError(
+                "charge_cents moet gelijk zijn aan platform_cents + courier_cents"
+            )
+        return v
+
+    @field_validator("effective_until")
+    @classmethod
+    def _until_after_from(cls, v, info):
+        start = info.data.get("effective_from")
+        if v is not None and start is not None and v <= start:
+            raise ValueError("effective_until moet na effective_from liggen")
+        return v
+
+
+class RateCardCreate(RateCardBase):
+    pass
+
+
+class RateCardUpdate(RateCardBase):
+    pass
+
+
+class RateCardResponse(RateCardBase):
+    id: int
+    courier_name: str | None = None
+    customer_name: str | None = None
+    organization_name: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+# --- Courier settlements (admin) ---
+class SettlementCreate(BaseModel):
+    courier_id: int
+    month: str  # "YYYY-MM"
+
+
+class SettlementLineResponse(BaseModel):
+    id: int
+    customer_id: int | None
+    customer_name: str
+    service_type: str
+    unit_type: str
+    units: int
+    rate_card_id: int | None
+    scope: str
     charge_cents: int
-    total_boxes: int
-    total_charge: float  # te factureren (dozen * charge_cents)
-    customers: list[CourierEarningsCustomer] = []
+    platform_cents: int
+    courier_cents: int
+    line_charge_cents: int
+    line_platform_cents: int
+    line_courier_cents: int
+
+    model_config = {"from_attributes": True}
+
+
+class SettlementResponse(BaseModel):
+    id: int
+    courier_id: int
+    courier_name: str | None = None
+    period_month: str
+    status: str
+    total_units: int
+    total_charge_cents: int
+    total_platform_cents: int
+    total_courier_cents: int
+    created_at: datetime
+    approved_at: datetime | None = None
+    paid_at: datetime | None = None
+    lines: list[SettlementLineResponse] = []
+
+    model_config = {"from_attributes": True}

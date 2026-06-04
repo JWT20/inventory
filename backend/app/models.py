@@ -4,6 +4,7 @@ import json
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -29,6 +30,21 @@ VALID_SHIPMENT_STATUSES = ("draft", "booked")
 VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count")
 VALID_DISCOUNT_TYPES = ("percentage", "fixed")
 VALID_DELIVERY_DAYS = ("wednesday", "thursday", "friday")
+
+# Product categories are locked down because courier billing depends on them:
+# a stray 'boek'/'Book' typo must not silently fall through to the wrong rate.
+VALID_SKU_CATEGORIES = ("wine", "book", "other")
+# Each category maps to a (service_type, unit_type) used by the rate resolver.
+CATEGORY_SERVICE_MAP = {
+    "wine": ("wine_pick", "box"),
+    "book": ("book_pick", "item"),
+    "other": ("general_pick", "item"),
+}
+# Safe catch-all when a SKU has no / an unknown category.
+DEFAULT_SERVICE_UNIT = ("general_pick", "item")
+VALID_SERVICE_TYPES = ("wine_pick", "book_pick", "general_pick")
+VALID_UNIT_TYPES = ("box", "item")
+VALID_SETTLEMENT_STATUSES = ("draft", "approved", "paid")
 
 
 class Organization(Base):
@@ -526,26 +542,129 @@ class InventoryBalance(Base):
         return max(self.quantity_on_hand - self.quantity_reserved, 0)
 
 
-class CourierBillingRate(Base):
-    """Configurable per-box billing rate for couriers (single row, id=1).
+class CourierRateCard(Base):
+    """A tariff for a courier, scoped by any combination of courier / customer /
+    organization / service type, effective over a date range.
 
-    Amounts are stored in whole cents to avoid float rounding:
-    - charge_cents: what the courier invoices the customer per scanned box
-    - platform_cents: the platform owner's share per box (courier remits this)
-    - courier_cents: the courier's net share per box
-
-    By convention charge_cents == platform_cents + courier_cents, but this is
-    not enforced so the split can be tuned independently.
+    Scope fields are nullable; NULL means "applies to all" on that dimension.
+    The resolver picks the most specific matching card (see services/
+    rate_resolver.py). Amounts are whole cents; by convention
+    charge_cents == platform_cents + courier_cents (validated in the API).
     """
-    __tablename__ = "courier_billing_rates"
+    __tablename__ = "courier_rate_cards"
+    __table_args__ = (
+        Index(
+            "uq_courier_rate_cards_scope",
+            "courier_id",
+            "customer_id",
+            "organization_id",
+            "service_type",
+            "effective_from",
+            unique=True,
+            # Postgres 15+: treat NULLs as equal so duplicate "default" cards
+            # (all-NULL scope) collide. Ignored by SQLite (tests rely on the
+            # application-level guard instead).
+            postgresql_nulls_not_distinct=True,
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    charge_cents: Mapped[int] = mapped_column(Integer, default=50, server_default="50")
-    platform_cents: Mapped[int] = mapped_column(Integer, default=17, server_default="17")
-    courier_cents: Mapped[int] = mapped_column(Integer, default=33, server_default="33")
+    courier_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+    customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id", ondelete="CASCADE"), nullable=True
+    )
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True
+    )
+    service_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    unit_type: Mapped[str] = mapped_column(String(20), default="box")
+    charge_cents: Mapped[int] = mapped_column(Integer)
+    platform_cents: Mapped[int] = mapped_column(Integer)
+    courier_cents: Mapped[int] = mapped_column(Integer)
+    effective_from: Mapped[datetime.date] = mapped_column(Date)
+    effective_until: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+    courier: Mapped["User | None"] = relationship(foreign_keys=[courier_id])
+    customer: Mapped["Customer | None"] = relationship()
+    organization: Mapped["Organization | None"] = relationship()
+
+
+class CourierSettlement(Base):
+    """A frozen billing run for one courier over one month.
+
+    Creating a settlement snapshots the resolved tariff per billed group into
+    CourierSettlementLine rows, so later rate-card edits never change history.
+    """
+    __tablename__ = "courier_settlements"
+    __table_args__ = (
+        UniqueConstraint("courier_id", "period_month", name="uq_settlement_courier_month"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    courier_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    period_month: Mapped[str] = mapped_column(String(7))  # "YYYY-MM"
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    total_units: Mapped[int] = mapped_column(Integer, default=0)
+    total_charge_cents: Mapped[int] = mapped_column(Integer, default=0)
+    total_platform_cents: Mapped[int] = mapped_column(Integer, default=0)
+    total_courier_cents: Mapped[int] = mapped_column(Integer, default=0)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    approved_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    paid_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    courier: Mapped["User"] = relationship(foreign_keys=[courier_id])
+    lines: Mapped[list["CourierSettlementLine"]] = relationship(
+        back_populates="settlement", cascade="all, delete-orphan"
+    )
+
+
+class CourierSettlementLine(Base):
+    """One billed group inside a settlement, with the tariff snapshotted.
+
+    Identity (customer name, scope, rate card) and amounts are copied in so the
+    line is a permanent record independent of the live rate cards.
+    """
+    __tablename__ = "courier_settlement_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    settlement_id: Mapped[int] = mapped_column(
+        ForeignKey("courier_settlements.id", ondelete="CASCADE")
+    )
+    customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id", ondelete="SET NULL"), nullable=True
+    )
+    customer_name: Mapped[str] = mapped_column(String(255))
+    service_type: Mapped[str] = mapped_column(String(30))
+    unit_type: Mapped[str] = mapped_column(String(20))
+    units: Mapped[int] = mapped_column(Integer)
+    # Snapshot of which rate card applied and why (for billing disputes).
+    rate_card_id: Mapped[int | None] = mapped_column(
+        ForeignKey("courier_rate_cards.id", ondelete="SET NULL"), nullable=True
+    )
+    scope: Mapped[str] = mapped_column(String(30))
+    # Per-unit cents at settlement time.
+    charge_cents: Mapped[int] = mapped_column(Integer)
+    platform_cents: Mapped[int] = mapped_column(Integer)
+    courier_cents: Mapped[int] = mapped_column(Integer)
+    # Line totals (units * per-unit), snapshotted.
+    line_charge_cents: Mapped[int] = mapped_column(Integer)
+    line_platform_cents: Mapped[int] = mapped_column(Integer)
+    line_courier_cents: Mapped[int] = mapped_column(Integer)
+
+    settlement: Mapped["CourierSettlement"] = relationship(back_populates="lines")
 
 
 class StockMovement(Base):

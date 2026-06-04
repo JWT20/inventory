@@ -304,6 +304,31 @@ export const api = {
   getOrder: (id: number) => request(`/orders/${id}`),
   courierEarnings: (month?: string) =>
     request(`/courier/earnings${month ? `?month=${month}` : ""}`),
+
+  // Courier billing (admin)
+  listRateCards: () => request("/courier/rate-cards"),
+  createRateCard: (data: Record<string, unknown>) =>
+    json("/courier/rate-cards", "POST", data),
+  updateRateCard: (id: number, data: Record<string, unknown>) =>
+    json(`/courier/rate-cards/${id}`, "PATCH", data),
+  deleteRateCard: (id: number) =>
+    request(`/courier/rate-cards/${id}`, { method: "DELETE" }),
+  listSettlements: (courierId?: number, month?: string) => {
+    const p = new URLSearchParams();
+    if (courierId != null) p.set("courier_id", String(courierId));
+    if (month) p.set("month", month);
+    const qs = p.toString();
+    return request(`/courier/settlements${qs ? `?${qs}` : ""}`);
+  },
+  getSettlement: (id: number) => request(`/courier/settlements/${id}`),
+  createSettlement: (courierId: number, month: string) =>
+    json("/courier/settlements", "POST", { courier_id: courierId, month }),
+  approveSettlement: (id: number) =>
+    request(`/courier/settlements/${id}/approve`, { method: "POST" }),
+  paySettlement: (id: number) =>
+    request(`/courier/settlements/${id}/pay`, { method: "POST" }),
+  deleteSettlement: (id: number) =>
+    request(`/courier/settlements/${id}`, { method: "DELETE" }),
   activateOrder: (id: number) =>
     request(`/orders/${id}/activate`, { method: "POST" }),
   closeOrder: (id: number) =>

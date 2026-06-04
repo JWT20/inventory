@@ -13,26 +13,33 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-interface EarningsCustomer {
+interface EarningsGroup {
   customer_id: number | null;
   organization_id: number | null;
   customer_name: string;
-  boxes: number;
+  service_type: string;
+  unit_type: string;
+  units: number;
   charge_amount: number;
 }
 
 interface Earnings {
   month: string;
-  charge_cents: number;
-  total_boxes: number;
+  total_units: number;
   total_charge: number;
-  customers: EarningsCustomer[];
+  groups: EarningsGroup[];
 }
 
 const MONTH_NAMES = [
   "januari", "februari", "maart", "april", "mei", "juni",
   "juli", "augustus", "september", "oktober", "november", "december",
 ];
+
+const SERVICE_LABELS: Record<string, string> = {
+  wine_pick: "Wijn",
+  book_pick: "Boeken",
+  general_pick: "Overig",
+};
 
 function currentMonth(): string {
   const now = new Date();
@@ -52,10 +59,6 @@ function monthLabel(month: string): string {
 
 function euro(v: number): string {
   return `€ ${v.toFixed(2)}`;
-}
-
-function cents(v: number): string {
-  return `€ ${(v / 100).toFixed(2)}`;
 }
 
 export function CourierEarningsPage() {
@@ -111,14 +114,14 @@ export function CourierEarningsPage() {
         <>
           <Card className="p-4 mb-4">
             <p className="text-sm text-muted-foreground">
-              Te factureren ({data.total_boxes} dozen &times; {cents(data.charge_cents)})
+              Te factureren ({data.total_units} stuks)
             </p>
             <p className="text-3xl font-bold">{euro(data.total_charge)}</p>
           </Card>
 
-          {data.customers.length === 0 ? (
+          {data.groups.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              Geen gescande dozen in {monthLabel(month)}.
+              Geen verwerkte regels in {monthLabel(month)}.
             </p>
           ) : (
             <Card className="p-0 overflow-hidden">
@@ -126,27 +129,32 @@ export function CourierEarningsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Klant</TableHead>
-                    <TableHead className="text-right">Dozen</TableHead>
+                    <TableHead>Soort</TableHead>
+                    <TableHead className="text-right">Aantal</TableHead>
                     <TableHead className="text-right">Te factureren</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {data.customers.map((c) => (
+                  {data.groups.map((g) => (
                     <TableRow
                       key={
-                        c.customer_id != null
-                          ? `c-${c.customer_id}`
-                          : `k-${c.organization_id ?? "x"}-${c.customer_name}`
+                        (g.customer_id != null
+                          ? `c-${g.customer_id}`
+                          : `k-${g.organization_id ?? "x"}-${g.customer_name}`) +
+                        `-${g.service_type}`
                       }
                     >
-                      <TableCell className="font-medium">{c.customer_name}</TableCell>
-                      <TableCell className="text-right">{c.boxes}</TableCell>
-                      <TableCell className="text-right">{euro(c.charge_amount)}</TableCell>
+                      <TableCell className="font-medium">{g.customer_name}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {SERVICE_LABELS[g.service_type] ?? g.service_type}
+                      </TableCell>
+                      <TableCell className="text-right">{g.units}</TableCell>
+                      <TableCell className="text-right">{euro(g.charge_amount)}</TableCell>
                     </TableRow>
                   ))}
                   <TableRow className="font-bold border-t-2">
-                    <TableCell>Totaal</TableCell>
-                    <TableCell className="text-right">{data.total_boxes}</TableCell>
+                    <TableCell colSpan={2}>Totaal</TableCell>
+                    <TableCell className="text-right">{data.total_units}</TableCell>
                     <TableCell className="text-right">{euro(data.total_charge)}</TableCell>
                   </TableRow>
                 </TableBody>
