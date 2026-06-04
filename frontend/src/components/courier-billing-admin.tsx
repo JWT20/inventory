@@ -356,7 +356,19 @@ function SettlementsSection({ couriers }: { couriers: NamedUser[] }) {
       toast.success("Afrekening aangemaakt");
       load();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Aanmaken mislukt");
+      const msg = err instanceof Error ? err.message : "Aanmaken mislukt";
+      // Some units have no tariff — offer to settle them at €0 explicitly.
+      if (msg.includes("Geen tarief") && confirm(`${msg}\n\nToch afrekenen (deze stuks op € 0)?`)) {
+        try {
+          await api.createSettlement(Number(courierId), month, true);
+          toast.success("Afrekening aangemaakt (incl. ongetarifeerde stuks)");
+          load();
+        } catch (e: unknown) {
+          toast.error(e instanceof Error ? e.message : "Aanmaken mislukt");
+        }
+      } else {
+        toast.error(msg);
+      }
     } finally {
       setBusy(false);
     }

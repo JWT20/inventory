@@ -102,8 +102,15 @@ def resolve_rate(
     organization_id: int | None,
     service_type: str,
     on_date: datetime.date,
+    default_unit: str = "box",
 ) -> ResolvedRate | None:
-    """Pick the most specific matching card, or None if nothing matches."""
+    """Pick the most specific matching card, or None if nothing matches.
+
+    ``default_unit`` is the booking's natural unit (from the product category).
+    A service-specific card carries its own unit, but a service-agnostic
+    catch-all card must not impose its single unit on every service — e.g. the
+    global 'box' default must still bill a book as an 'item'.
+    """
     candidates = [
         c for c in cards
         if _matches(
@@ -128,13 +135,14 @@ def resolve_rate(
             c.id,
         ),
     )
+    unit = best.unit_type if best.service_type is not None else default_unit
     return ResolvedRate(
         rate_card_id=best.id,
         scope=_scope_name(best),
         charge_cents=best.charge_cents,
         platform_cents=best.platform_cents,
         courier_cents=best.courier_cents,
-        unit_type=best.unit_type,
+        unit_type=unit,
     )
 
 

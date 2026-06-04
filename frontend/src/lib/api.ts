@@ -321,8 +321,8 @@ export const api = {
     return request(`/courier/settlements${qs ? `?${qs}` : ""}`);
   },
   getSettlement: (id: number) => request(`/courier/settlements/${id}`),
-  createSettlement: (courierId: number, month: string) =>
-    json("/courier/settlements", "POST", { courier_id: courierId, month }),
+  createSettlement: (courierId: number, month: string, allowUnrated = false) =>
+    json("/courier/settlements", "POST", { courier_id: courierId, month, allow_unrated: allowUnrated }),
   approveSettlement: (id: number) =>
     request(`/courier/settlements/${id}/approve`, { method: "POST" }),
   paySettlement: (id: number) =>

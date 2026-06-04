@@ -58,6 +58,29 @@ def _rate_card_response(db: Session, card: CourierRateCard) -> RateCardResponse:
     )
 
 
+def _validate_scope(db: Session, data) -> None:
+    """Reject cards whose scope fields can never match a real booking:
+    a non-courier courier_id, an unknown customer/org, or a customer that
+    does not belong to the given organization."""
+    if data.courier_id is not None:
+        u = db.get(User, data.courier_id)
+        if not u or u.role != "courier":
+            raise HTTPException(422, "courier_id verwijst niet naar een koerier")
+    customer = None
+    if data.customer_id is not None:
+        customer = db.get(Customer, data.customer_id)
+        if not customer:
+            raise HTTPException(422, "Onbekende klant")
+    if data.organization_id is not None:
+        if not db.get(Organization, data.organization_id):
+            raise HTTPException(422, "Onbekende organisatie")
+    if customer is not None and data.organization_id is not None:
+        if customer.organization_id != data.organization_id:
+            raise HTTPException(
+                422, "Klant hoort niet bij de opgegeven organisatie"
+            )
+
+
 def _assert_no_overlap(db: Session, data, exclude_id: int | None = None) -> None:
     """Reject a card whose date range overlaps an existing same-scope card."""
     same_scope = (
@@ -103,6 +126,7 @@ def create_rate_card(
     db: Session = Depends(get_db),
     user: User = Depends(require_admin),
 ):
+    _validate_scope(db, data)
     _assert_no_overlap(db, data)
     card = CourierRateCard(
         courier_id=data.courier_id,
@@ -132,6 +156,7 @@ def update_rate_card(
     card = db.get(CourierRateCard, card_id)
     if not card:
         raise HTTPException(404, "Tariefkaart niet gevonden")
+    _validate_scope(db, data)
     _assert_no_overlap(db, data, exclude_id=card_id)
     card.courier_id = data.courier_id
     card.customer_id = data.customer_id
@@ -213,6 +238,17 @@ def create_settlement(
         )
 
     groups = compute_courier_groups(db, data.courier_id, start, end)
+
+    # Refuse to freeze money against units that have no matching tariff (they
+    # would be billed at zero). The admin can override deliberately.
+    unrated = [g for g in groups if g.rate_card_id is None]
+    if unrated and not data.allow_unrated:
+        names = ", ".join(sorted({f"{g.customer_name} ({g.service_type})" for g in unrated}))
+        raise HTTPException(
+            422,
+            f"Geen tarief gevonden voor: {names}. Voeg een tariefkaart toe of zet "
+            "allow_unrated aan om toch af te rekenen.",
+        )
 
     settlement = CourierSettlement(
         courier_id=data.courier_id,

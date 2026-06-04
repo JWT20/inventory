@@ -90,6 +90,22 @@ def test_effective_dates_filter():
     assert june.charge_cents == 70  # effective_until is exclusive
 
 
+def test_catchall_card_uses_category_unit():
+    # Global 'box' default must bill a book booking as an 'item'.
+    cards = [_card(1, unit="box")]  # service None
+    r = resolve_rate(cards, courier_id=7, customer_id=None, organization_id=None,
+                     service_type="book_pick", on_date=D(2026, 5, 1), default_unit="item")
+    assert r.scope == "global_default"
+    assert r.unit_type == "item"
+
+
+def test_service_card_keeps_its_own_unit():
+    cards = [_card(1, service="book_pick", unit="item")]
+    r = resolve_rate(cards, courier_id=7, customer_id=None, organization_id=None,
+                     service_type="book_pick", on_date=D(2026, 5, 1), default_unit="box")
+    assert r.unit_type == "item"
+
+
 def test_no_match_returns_none():
     cards = [_card(1, courier=99)]
     r = resolve_rate(cards, courier_id=7, customer_id=None, organization_id=None,

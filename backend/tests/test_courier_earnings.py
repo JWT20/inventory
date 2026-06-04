@@ -156,6 +156,18 @@ def test_earnings_book_vs_wine_service(client, db, courier_user, courier_token):
     assert by_service["book_pick"]["unit_type"] == "item"
 
 
+def test_book_falls_back_to_global_card_as_item(client, db, courier_user, courier_token):
+    _global_card(db)  # unit box, service-agnostic
+    _seed_bookings(db, courier_user.id, customer_name="Shop", sku_code="B1",
+                   count=3, when=datetime.datetime(2026, 5, 12, 9, 0), category="book")
+    body = client.get("/api/courier/earnings?month=2026-05",
+                      headers=auth_header(courier_token)).json()
+    g = body["groups"][0]
+    assert g["service_type"] == "book_pick"
+    assert g["unit_type"] == "item"  # not the card's 'box'
+    assert g["charge_amount"] == 1.5  # still 3 * 0.50
+
+
 def test_earnings_separates_same_name_across_orgs(client, db, courier_user, courier_token):
     _global_card(db)
     _seed_bookings(db, courier_user.id, customer_name="Vino", sku_code="O1",

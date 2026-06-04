@@ -79,6 +79,7 @@ def compute_courier_groups(
             organization_id=organization_id,
             service_type=service_type,
             on_date=on_date,
+            default_unit=_unit,
         )
         if resolved is None:
             # No tariff configured — surface the units at zero so the gap is

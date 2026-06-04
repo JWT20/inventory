@@ -875,6 +875,9 @@ class RateCardResponse(RateCardBase):
 class SettlementCreate(BaseModel):
     courier_id: int
     month: str  # "YYYY-MM"
+    # Settling units that have no matching rate card (billed at 0) is blocked by
+    # default; the admin must explicitly opt in.
+    allow_unrated: bool = False
 
 
 class SettlementLineResponse(BaseModel):

@@ -98,6 +98,24 @@ def test_rate_card_requires_admin(client, courier_token):
     assert resp.status_code == 403
 
 
+def test_rate_card_rejects_non_courier(client, admin_token, owner_user):
+    resp = client.post("/api/courier/rate-cards",
+                       json=_card_body(courier_id=owner_user.id),
+                       headers=auth_header(admin_token))
+    assert resp.status_code == 422
+
+
+def test_rate_card_rejects_customer_org_mismatch(client, db, admin_token, sample_org):
+    cust = Customer(name="X", organization_id=sample_org.id)
+    db.add(cust)
+    db.commit()
+    resp = client.post("/api/courier/rate-cards",
+                       json=_card_body(customer_id=cust.id,
+                                       organization_id=sample_org.id + 999),
+                       headers=auth_header(admin_token))
+    assert resp.status_code == 422
+
+
 def test_update_and_delete_rate_card(client, admin_token):
     cid = client.post("/api/courier/rate-cards", json=_card_body(),
                       headers=auth_header(admin_token)).json()["id"]
@@ -133,6 +151,31 @@ def test_create_settlement_snapshots_lines(client, db, admin_token, courier_user
     assert line["units"] == 10
     assert line["scope"] == "global_default"
     assert line["line_courier_cents"] == 330
+
+
+def test_settlement_blocks_unrated_units(client, db, admin_token, courier_user):
+    # No rate card at all → units have no tariff.
+    _seed_bookings(db, courier_user.id, customer_name="A", sku_code="A1", count=3,
+                   when=datetime.datetime(2026, 5, 12, 9, 0))
+    resp = client.post("/api/courier/settlements",
+                       json={"courier_id": courier_user.id, "month": "2026-05"},
+                       headers=auth_header(admin_token))
+    assert resp.status_code == 422
+
+
+def test_settlement_allow_unrated_override(client, db, admin_token, courier_user):
+    _seed_bookings(db, courier_user.id, customer_name="A", sku_code="A1", count=3,
+                   when=datetime.datetime(2026, 5, 12, 9, 0))
+    resp = client.post(
+        "/api/courier/settlements",
+        json={"courier_id": courier_user.id, "month": "2026-05", "allow_unrated": True},
+        headers=auth_header(admin_token),
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["total_units"] == 3
+    assert body["total_charge_cents"] == 0
+    assert body["lines"][0]["scope"] == "unrated"
 
 
 def test_settlement_duplicate_rejected(client, db, admin_token, courier_user):
