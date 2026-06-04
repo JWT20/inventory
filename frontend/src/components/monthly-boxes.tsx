@@ -3,6 +3,7 @@ import { toast } from "@/App";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -59,6 +60,18 @@ function formatMonth(month: string): string {
   const [year, mm] = month.split("-");
   const idx = parseInt(mm, 10) - 1;
   return `${NL_MONTHS[idx] ?? mm} ${year}`;
+}
+
+function currentMonth(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// A month is "closed" (final, ready to invoice) once it lies before the current
+// calendar month. A finalized order never moves to an earlier month afterwards,
+// so a past month's total can no longer change.
+function isClosedMonth(month: string): boolean {
+  return month < currentMonth();
 }
 
 export function MonthlyBoxesPage() {
@@ -146,23 +159,26 @@ export function MonthlyBoxesPage() {
               <TableRow>
                 <TableHead>Maand</TableHead>
                 <TableHead className="text-right">Geboekte dozen</TableHead>
+                <TableHead className="text-right">Status</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {report.months.map((m) => (
-                <TableRow key={m.month}>
-                  <TableCell>{formatMonth(m.month)}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {m.boxes}
-                  </TableCell>
-                </TableRow>
-              ))}
-              <TableRow className="font-semibold">
-                <TableCell>Totaal</TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {report.total_boxes}
-                </TableCell>
-              </TableRow>
+              {report.months.map((m) => {
+                const closed = isClosedMonth(m.month);
+                return (
+                  <TableRow key={m.month}>
+                    <TableCell>{formatMonth(m.month)}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {m.boxes}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Badge variant={closed ? "completed" : "pending"}>
+                        {closed ? "Afgesloten" : "Lopend"}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </Card>
