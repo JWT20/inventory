@@ -6,14 +6,14 @@ from app.models import Booking, CourierBillingRate, Customer, Order, OrderLine, 
 from tests.conftest import auth_header
 
 
-def _seed_bookings(db, courier_id, *, customer_name, sku_code, count, when):
+def _seed_bookings(db, courier_id, *, customer_name, sku_code, count, when, status="closed"):
     sku = SKU(sku_code=sku_code, name=f"Wine {sku_code}")
     db.add(sku)
     db.flush()
     customer = Customer(name=customer_name)
     db.add(customer)
     db.flush()
-    order = Order(reference=f"ORD-{sku_code}", status="closed", delivery_week="2026-W21")
+    order = Order(reference=f"ORD-{sku_code}", status=status, delivery_week="2026-W21")
     db.add(order)
     db.flush()
     line = OrderLine(
@@ -81,6 +81,34 @@ def test_earnings_filters_by_month(client, db, courier_user, courier_token):
 
     assert may["total_boxes"] == 4
     assert june["total_boxes"] == 7
+
+
+def test_earnings_counts_completed_orders(client, db, courier_user, courier_token):
+    _seed_bookings(
+        db, courier_user.id, customer_name="Cafe A", sku_code="A1", count=6,
+        when=datetime.datetime(2026, 5, 12, 9, 0), status="completed",
+    )
+
+    body = client.get(
+        "/api/courier/earnings?month=2026-05", headers=auth_header(courier_token)
+    ).json()
+
+    assert body["total_boxes"] == 6
+
+
+def test_earnings_excludes_unfinished_and_cancelled_orders(client, db, courier_user, courier_token):
+    for status in ("active", "pending_images", "draft", "cancelled"):
+        _seed_bookings(
+            db, courier_user.id, customer_name=f"Cafe {status}", sku_code=f"S-{status}",
+            count=3, when=datetime.datetime(2026, 5, 12, 9, 0), status=status,
+        )
+
+    body = client.get(
+        "/api/courier/earnings?month=2026-05", headers=auth_header(courier_token)
+    ).json()
+
+    assert body["total_boxes"] == 0
+    assert body["customers"] == []
 
 
 def test_earnings_only_counts_own_scans(client, db, courier_user, courier_token, owner_user):

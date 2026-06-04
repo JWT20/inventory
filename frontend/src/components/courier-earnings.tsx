@@ -116,13 +116,6 @@ export function CourierEarningsPage() {
               Te factureren ({data.total_boxes} dozen &times; {cents(data.charge_cents)})
             </p>
             <p className="text-3xl font-bold">{euro(data.total_charge)}</p>
-            <p className="text-sm text-muted-foreground mt-2">
-              Waarvan afdracht platform ({cents(data.platform_cents)}/doos):{" "}
-              <span className="font-medium text-foreground">{euro(data.total_platform)}</span>
-              {" — "}
-              Netto voor jou ({cents(data.courier_cents)}/doos):{" "}
-              <span className="font-medium text-foreground">{euro(data.total_courier)}</span>
-            </p>
           </Card>
 
           {data.customers.length === 0 ? (

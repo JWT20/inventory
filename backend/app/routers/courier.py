@@ -13,10 +13,15 @@ from sqlalchemy.orm import Session
 
 from app.auth import require_warehouse
 from app.database import get_db
-from app.models import Booking, CourierBillingRate, Customer, OrderLine, User
+from app.models import Booking, CourierBillingRate, Customer, Order, OrderLine, User
 from app.schemas import CourierEarningsCustomer, CourierEarningsResponse
 
 router = APIRouter(prefix="/courier", tags=["courier"])
+
+# Only finalised orders are invoiceable: an order is billed once it is fully
+# picked (completed) or deliberately wrapped up (closed). Still-open orders
+# (draft/pending_images/active) and cancelled ones are excluded.
+BILLABLE_ORDER_STATUSES = ("completed", "closed")
 
 
 def _month_bounds(month: str | None) -> tuple[datetime.datetime, datetime.datetime, str]:
@@ -67,11 +72,13 @@ def courier_earnings(
             func.count(Booking.id),
         )
         .join(OrderLine, Booking.order_line_id == OrderLine.id)
+        .join(Order, Booking.order_id == Order.id)
         .outerjoin(Customer, OrderLine.customer_id == Customer.id)
         .filter(
             Booking.scanned_by == user.id,
             Booking.created_at >= start,
             Booking.created_at < end,
+            Order.status.in_(BILLABLE_ORDER_STATUSES),
         )
         .group_by(OrderLine.customer_id, Customer.name, OrderLine.klant)
         .all()
