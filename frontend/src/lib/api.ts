@@ -317,6 +317,12 @@ export const api = {
     const qs = params.toString();
     return request(`/orders/weekly-summary${qs ? `?${qs}` : ""}`);
   },
+  monthlyBookedBoxes: (organizationId?: string) =>
+    request(
+      `/orders/reports/monthly-boxes${
+        organizationId ? `?organization_id=${organizationId}` : ""
+      }`,
+    ),
   getDeadline: (week?: string) =>
     request(`/orders/deadline${week ? `?week=${week}` : ""}`),
 

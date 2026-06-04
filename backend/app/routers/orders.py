@@ -7,17 +7,29 @@ from collections import defaultdict
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth import get_current_user, require_admin, require_can_create_orders
 from app.database import get_db
 from app.events import publish_event
-from app.models import Customer, CustomerSKU, Order, OrderLine, SKU, Supplier, User
+from app.models import (
+    Customer,
+    CustomerSKU,
+    Order,
+    OrderLine,
+    Organization,
+    SKU,
+    Supplier,
+    User,
+)
 from app.schemas import (
     BookingResponse,
     DeadlineResponse,
     ManualOrderCreate,
+    MonthlyBoxesMonth,
+    MonthlyBoxesOrganization,
+    MonthlyBoxesResponse,
     OrderLineAdd,
     OrderLineResponse,
     OrderLineUpdate,
@@ -612,6 +624,90 @@ def _build_customer_response(
     )
 
 
+@router.get("/reports/monthly-boxes", response_model=MonthlyBoxesResponse)
+def monthly_booked_boxes(
+    organization_id: int | None = Query(
+        None, description="Optioneel: beperk tot één handelaar."
+    ),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Aantal geboekte dozen per maand voor voltooide en gesloten orders.
+
+    Een doos telt mee in de maand waarin de order is afgerond (``finalized_at``).
+    Het aantal is het werkelijk geboekte aantal: een order die op 10/12 wordt
+    gesloten draagt 10 dozen bij. Gegroepeerd per handelaar (organisatie).
+
+    Zichtbaar voor de koerier en platform-admin (alle handelaren) en voor een
+    owner/member (alleen de eigen handelaar).
+    """
+    # Per finalized order: its organization, finalize moment and booked boxes.
+    query = (
+        db.query(
+            Order.organization_id.label("org_id"),
+            Order.finalized_at.label("finalized_at"),
+            func.coalesce(func.sum(OrderLine.booked_count), 0).label("boxes"),
+        )
+        .join(OrderLine, OrderLine.order_id == Order.id)
+        .filter(
+            Order.status.in_(("completed", "closed")),
+            Order.finalized_at.isnot(None),
+        )
+        .group_by(Order.id, Order.organization_id, Order.finalized_at)
+    )
+
+    if user.is_platform_admin or user.role == "courier":
+        if organization_id is not None:
+            query = query.filter(Order.organization_id == organization_id)
+    elif user.organization_id and user.role in ("owner", "member"):
+        query = query.filter(Order.organization_id == user.organization_id)
+    else:
+        raise HTTPException(403, "Geen toegang tot dit overzicht")
+
+    # Bucket booked boxes into (organization, "YYYY-MM").
+    buckets: dict[int | None, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for row in query.all():
+        if not row.boxes or row.finalized_at is None:
+            continue
+        month = row.finalized_at.strftime("%Y-%m")
+        buckets[row.org_id][month] += int(row.boxes)
+
+    if not buckets:
+        return MonthlyBoxesResponse(organizations=[])
+
+    # Resolve organization names in one query.
+    org_ids = [oid for oid in buckets if oid is not None]
+    name_by_id: dict[int, str] = {}
+    if org_ids:
+        name_by_id = {
+            o.id: o.name
+            for o in db.query(Organization).filter(Organization.id.in_(org_ids)).all()
+        }
+
+    organizations: list[MonthlyBoxesOrganization] = []
+    for org_id, months in buckets.items():
+        org_name = (
+            name_by_id.get(org_id, f"Handelaar #{org_id}")
+            if org_id is not None
+            else "Zonder handelaar"
+        )
+        month_rows = [
+            MonthlyBoxesMonth(month=m, boxes=b)
+            for m, b in sorted(months.items(), reverse=True)
+        ]
+        organizations.append(
+            MonthlyBoxesOrganization(
+                organization_id=org_id,
+                organization_name=org_name,
+                total_boxes=sum(months.values()),
+                months=month_rows,
+            )
+        )
+
+    organizations.sort(key=lambda o: o.organization_name.lower())
+    return MonthlyBoxesResponse(organizations=organizations)
+
+
 @router.get("/weekly-summary", response_model=WeeklySummaryResponse)
 def weekly_order_summary(
     week: str = Query(None, description="ISO week, bijv. '2026-W15'. Standaard: huidige week."),
@@ -908,6 +1004,7 @@ def close_order(
         raise HTTPException(400, f"Order kan niet gesloten worden (status: {order.status})")
 
     order.status = "closed"
+    order.mark_finalized()
     db.commit()
     db.refresh(order)
 
@@ -1001,6 +1098,7 @@ def _recompute_order_status(order: Order) -> None:
     all_booked = all(l.booked_count >= l.quantity for l in order.lines)
     if all_booked and order.status == "active":
         order.status = "completed"
+        order.mark_finalized()
     elif order.status == "active":
         pass  # stay active
     elif all_have_images:

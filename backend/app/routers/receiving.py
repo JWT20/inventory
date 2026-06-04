@@ -741,6 +741,7 @@ def confirm_booking(
     all_booked = all(l.booked_count >= l.quantity for l in order.lines)
     if all_booked:
         order.status = "completed"
+        order.mark_finalized()
 
     db.commit()
 
@@ -1016,6 +1017,7 @@ def book_more(
     all_booked = all(l.booked_count >= l.quantity for l in order.lines)
     if all_booked:
         order.status = "completed"
+        order.mark_finalized()
 
     db.commit()
 

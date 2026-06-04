@@ -763,6 +763,22 @@ class WeeklySummaryResponse(BaseModel):
     grand_total_value: float | None = None
 
 
+class MonthlyBoxesMonth(BaseModel):
+    month: str  # "YYYY-MM"
+    boxes: int
+
+
+class MonthlyBoxesOrganization(BaseModel):
+    organization_id: int | None
+    organization_name: str
+    total_boxes: int
+    months: list[MonthlyBoxesMonth] = []
+
+
+class MonthlyBoxesResponse(BaseModel):
+    organizations: list[MonthlyBoxesOrganization] = []
+
+
 class DeadlineResponse(BaseModel):
     week: str
     deadline: str

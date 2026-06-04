@@ -280,6 +280,11 @@ VALID_ORDER_STATUSES = ("draft", "pending_images", "active", "completed", "cance
 
 class Order(Base):
     __tablename__ = "orders"
+    __table_args__ = (
+        # Speeds up the monthly booked-boxes report which filters finalized
+        # orders by terminal status.
+        Index("ix_orders_status_finalized_at", "status", "finalized_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     organization_id: Mapped[int | None] = mapped_column(
@@ -298,6 +303,12 @@ class Order(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+    # When the order first reached a terminal state (completed/closed). Used for
+    # the monthly booked-boxes report so a box counts in the month the order was
+    # finalized, independent of later edits to updated_at.
+    finalized_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
 
     organization: Mapped["Organization | None"] = relationship()
     creator: Mapped["User | None"] = relationship()
@@ -307,6 +318,12 @@ class Order(Base):
     bookings: Mapped[list["Booking"]] = relationship(
         back_populates="order", cascade="all, delete-orphan"
     )
+
+    def mark_finalized(self) -> None:
+        """Stamp ``finalized_at`` the first time the order reaches a terminal
+        state (completed or closed). Idempotent: later calls are no-ops."""
+        if self.finalized_at is None:
+            self.finalized_at = datetime.datetime.utcnow()
 
 
 class OrderLine(Base):
