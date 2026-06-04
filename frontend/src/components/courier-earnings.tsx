@@ -14,6 +14,8 @@ import {
 } from "@/components/ui/table";
 
 interface EarningsCustomer {
+  customer_id: number | null;
+  organization_id: number | null;
   customer_name: string;
   boxes: number;
   charge_amount: number;
@@ -22,12 +24,8 @@ interface EarningsCustomer {
 interface Earnings {
   month: string;
   charge_cents: number;
-  platform_cents: number;
-  courier_cents: number;
   total_boxes: number;
   total_charge: number;
-  total_platform: number;
-  total_courier: number;
   customers: EarningsCustomer[];
 }
 
@@ -134,7 +132,13 @@ export function CourierEarningsPage() {
                 </TableHeader>
                 <TableBody>
                   {data.customers.map((c) => (
-                    <TableRow key={c.customer_name}>
+                    <TableRow
+                      key={
+                        c.customer_id != null
+                          ? `c-${c.customer_id}`
+                          : `k-${c.organization_id ?? "x"}-${c.customer_name}`
+                      }
+                    >
                       <TableCell className="font-medium">{c.customer_name}</TableCell>
                       <TableCell className="text-right">{c.boxes}</TableCell>
                       <TableCell className="text-right">{euro(c.charge_amount)}</TableCell>

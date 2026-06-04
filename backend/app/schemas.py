@@ -776,6 +776,8 @@ class DeadlineResponse(BaseModel):
 
 
 class CourierEarningsCustomer(BaseModel):
+    customer_id: int | None  # None for free-text 'klant' lines
+    organization_id: int | None  # disambiguates same-named customers across orgs
     customer_name: str
     boxes: int
     charge_amount: float  # boxes * charge per box (te factureren aan deze klant)
@@ -784,10 +786,6 @@ class CourierEarningsCustomer(BaseModel):
 class CourierEarningsResponse(BaseModel):
     month: str  # "YYYY-MM"
     charge_cents: int
-    platform_cents: int
-    courier_cents: int
     total_boxes: int
     total_charge: float  # te factureren (dozen * charge_cents)
-    total_platform: float  # afdracht aan platform (dozen * platform_cents)
-    total_courier: float  # netto voor koerier (dozen * courier_cents)
     customers: list[CourierEarningsCustomer] = []

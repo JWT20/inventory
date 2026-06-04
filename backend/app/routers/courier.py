@@ -67,6 +67,7 @@ def courier_earnings(
     rows = (
         db.query(
             OrderLine.customer_id,
+            Order.organization_id,
             Customer.name,
             OrderLine.klant,
             func.count(Booking.id),
@@ -80,38 +81,57 @@ def courier_earnings(
             Booking.created_at < end,
             Order.status.in_(BILLABLE_ORDER_STATUSES),
         )
-        .group_by(OrderLine.customer_id, Customer.name, OrderLine.klant)
+        .group_by(
+            OrderLine.customer_id, Order.organization_id, Customer.name, OrderLine.klant
+        )
         .all()
     )
 
-    # Merge by resolved customer name (a null customer_id falls back to the
-    # free-text 'klant' field; multiple raw rows may resolve to one name).
-    per_customer: dict[str, int] = {}
-    for customer_id, customer_name, klant, count in rows:
-        name = customer_name or klant or "Onbekend"
-        per_customer[name] = per_customer.get(name, 0) + int(count)
+    # Merge by real customer identity. A registered customer is keyed by its
+    # (globally unique) customer_id, so two same-named customers in different
+    # orgs stay separate. Free-text 'klant' lines (no customer_id) are keyed by
+    # org + text so identical names across orgs don't collapse into one row.
+    class _Agg:
+        __slots__ = ("customer_id", "organization_id", "name", "boxes")
 
-    total_boxes = sum(per_customer.values())
+        def __init__(self, customer_id, organization_id, name):
+            self.customer_id = customer_id
+            self.organization_id = organization_id
+            self.name = name
+            self.boxes = 0
+
+    per_customer: dict[tuple, _Agg] = {}
+    for customer_id, organization_id, customer_name, klant, count in rows:
+        if customer_id is not None:
+            key = ("c", customer_id)
+            name = customer_name or klant or "Onbekend"
+        else:
+            name = klant or "Onbekend"
+            key = ("k", organization_id, name)
+        agg = per_customer.get(key)
+        if agg is None:
+            agg = per_customer[key] = _Agg(customer_id, organization_id, name)
+        agg.boxes += int(count)
+
+    total_boxes = sum(a.boxes for a in per_customer.values())
 
     customers = [
         CourierEarningsCustomer(
-            customer_name=name,
-            boxes=boxes,
-            charge_amount=round(boxes * rate.charge_cents / 100, 2),
+            customer_id=a.customer_id,
+            organization_id=a.organization_id,
+            customer_name=a.name,
+            boxes=a.boxes,
+            charge_amount=round(a.boxes * rate.charge_cents / 100, 2),
         )
-        for name, boxes in sorted(
-            per_customer.items(), key=lambda kv: (-kv[1], kv[0].lower())
+        for a in sorted(
+            per_customer.values(), key=lambda a: (-a.boxes, a.name.lower())
         )
     ]
 
     return CourierEarningsResponse(
         month=month_label,
         charge_cents=rate.charge_cents,
-        platform_cents=rate.platform_cents,
-        courier_cents=rate.courier_cents,
         total_boxes=total_boxes,
         total_charge=round(total_boxes * rate.charge_cents / 100, 2),
-        total_platform=round(total_boxes * rate.platform_cents / 100, 2),
-        total_courier=round(total_boxes * rate.courier_cents / 100, 2),
         customers=customers,
     )
