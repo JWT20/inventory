@@ -1,6 +1,13 @@
 """Tests for inventory merchant scope and reserved quantity behavior."""
 
-from app.models import Customer, CustomerSKU, InventoryBalance, ReferenceImage, SKU
+from app.models import (
+    Customer,
+    CustomerSKU,
+    InventoryBalance,
+    ReferenceImage,
+    SKU,
+    Supplier,
+)
 from tests.conftest import auth_header
 
 
@@ -111,6 +118,75 @@ class TestInventoryScope:
         row = resp.json()[0]
         assert row["default_price"] is None
         assert row["customer_prices"] == []
+
+    def test_inventory_overview_search_by_supplier_name(
+        self, client, db, admin_token, sample_org
+    ):
+        """Typing a supplier name in the search box lists that supplier's wines."""
+        supplier = Supplier(name="Domaine Leflaive", organization_id=sample_org.id)
+        other_supplier = Supplier(name="Bodega Catena", organization_id=sample_org.id)
+        db.add_all([supplier, other_supplier])
+        db.commit()
+
+        wine_from_supplier = SKU(
+            sku_code="WINE-SUP-1",
+            name="Puligny-Montrachet",
+            organization_id=sample_org.id,
+            supplier_id=supplier.id,
+        )
+        wine_other_supplier = SKU(
+            sku_code="WINE-SUP-2",
+            name="Malbec Reserva",
+            organization_id=sample_org.id,
+            supplier_id=other_supplier.id,
+        )
+        wine_no_supplier = SKU(
+            sku_code="WINE-SUP-3",
+            name="Naamloze wijn",
+            organization_id=sample_org.id,
+        )
+        db.add_all([wine_from_supplier, wine_other_supplier, wine_no_supplier])
+        db.commit()
+
+        resp = client.get(
+            f"/api/inventory/overview?organization_id={sample_org.id}&search=leflaive",
+            headers=auth_header(admin_token),
+        )
+
+        assert resp.status_code == 200
+        codes = {row["sku_code"] for row in resp.json()}
+        assert codes == {"WINE-SUP-1"}
+
+    def test_inventory_overview_search_matches_name_or_supplier(
+        self, client, db, admin_token, sample_org
+    ):
+        """A search term still matches product names, not only suppliers."""
+        supplier = Supplier(name="Leflaive", organization_id=sample_org.id)
+        db.add(supplier)
+        db.commit()
+
+        by_name = SKU(
+            sku_code="WINE-NAME",
+            name="Leflaive Bourgogne Blanc",
+            organization_id=sample_org.id,
+        )
+        by_supplier = SKU(
+            sku_code="WINE-LINK",
+            name="Andere wijn",
+            organization_id=sample_org.id,
+            supplier_id=supplier.id,
+        )
+        db.add_all([by_name, by_supplier])
+        db.commit()
+
+        resp = client.get(
+            f"/api/inventory/overview?organization_id={sample_org.id}&search=leflaive",
+            headers=auth_header(admin_token),
+        )
+
+        assert resp.status_code == 200
+        codes = {row["sku_code"] for row in resp.json()}
+        assert codes == {"WINE-NAME", "WINE-LINK"}
 
 
 class TestReservedInventory:

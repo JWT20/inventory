@@ -143,7 +143,7 @@ export function InventoryPage() {
       )}
 
       <Input
-        placeholder="Zoek op naam, producent..."
+        placeholder="Zoek op naam of leverancier..."
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         className="mb-4"
