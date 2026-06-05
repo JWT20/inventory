@@ -119,8 +119,14 @@ export function SKUsPage() {
     }
   }, [isCourier, courierOrgId]);
 
+  // Monotonic request token: only the newest in-flight request may write
+  // state, so a slow response for a stale search/org can't overwrite or
+  // append to fresher results.
+  const reqIdRef = useRef(0);
+
   // Reload the first page whenever the org or the (debounced) search changes.
   const load = useCallback(async () => {
+    const reqId = ++reqIdRef.current;
     if (isCourier && courierOrgId === null) {
       setSkus([]);
       setHasMore(false);
@@ -134,12 +140,13 @@ export function SKUsPage() {
         isCourier ? courierOrgId ?? undefined : undefined,
         { search: query, limit: PAGE_SIZE, offset: 0 },
       );
+      if (reqId !== reqIdRef.current) return;
       setSkus(page);
       setHasMore(page.length === PAGE_SIZE);
     } catch {
-      toast.error("Kan SKU's niet laden");
+      if (reqId === reqIdRef.current) toast.error("Kan SKU's niet laden");
     } finally {
-      setLoading(false);
+      if (reqId === reqIdRef.current) setLoading(false);
     }
   }, [isCourier, courierOrgId, query]);
 
@@ -148,6 +155,7 @@ export function SKUsPage() {
   }, [load]);
 
   const loadMore = useCallback(async () => {
+    const reqId = ++reqIdRef.current;
     setLoadingMore(true);
     try {
       const page = await api.listSKUs(
@@ -155,12 +163,13 @@ export function SKUsPage() {
         isCourier ? courierOrgId ?? undefined : undefined,
         { search: query, limit: PAGE_SIZE, offset: skus.length },
       );
+      if (reqId !== reqIdRef.current) return;
       setSkus((prev) => [...prev, ...page]);
       setHasMore(page.length === PAGE_SIZE);
     } catch {
-      toast.error("Kan meer producten niet laden");
+      if (reqId === reqIdRef.current) toast.error("Kan meer producten niet laden");
     } finally {
-      setLoadingMore(false);
+      if (reqId === reqIdRef.current) setLoadingMore(false);
     }
   }, [isCourier, courierOrgId, query, skus.length]);
 
