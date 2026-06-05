@@ -76,12 +76,17 @@ function SKUCardSkeleton() {
   );
 }
 
+const PAGE_SIZE = 50;
+
 export function SKUsPage() {
   const { user } = useAuth();
   const isCourier = user?.role === "courier";
   const [skus, setSkus] = useState<SKU[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<SKU | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [orgs, setOrgs] = useState<Organization[]>([]);
@@ -90,6 +95,12 @@ export function SKUsPage() {
     const stored = window.localStorage.getItem(COURIER_ORG_STORAGE_KEY);
     return stored ? Number(stored) : null;
   });
+
+  // Debounce the search box so each keystroke doesn't hit the server.
+  useEffect(() => {
+    const t = window.setTimeout(() => setQuery(search.trim()), 300);
+    return () => window.clearTimeout(t);
+  }, [search]);
 
   useEffect(() => {
     if (!isCourier) return;
@@ -108,38 +119,61 @@ export function SKUsPage() {
     }
   }, [isCourier, courierOrgId]);
 
+  // Monotonic request token: only the newest in-flight request may write
+  // state, so a slow response for a stale search/org can't overwrite or
+  // append to fresher results.
+  const reqIdRef = useRef(0);
+
+  // Reload the first page whenever the org or the (debounced) search changes.
   const load = useCallback(async () => {
+    const reqId = ++reqIdRef.current;
     if (isCourier && courierOrgId === null) {
       setSkus([]);
+      setHasMore(false);
       setLoading(false);
       return;
     }
     setLoading(true);
     try {
-      setSkus(
-        await api.listSKUs(false, isCourier ? courierOrgId ?? undefined : undefined),
+      const page = await api.listSKUs(
+        false,
+        isCourier ? courierOrgId ?? undefined : undefined,
+        { search: query, limit: PAGE_SIZE, offset: 0 },
       );
+      if (reqId !== reqIdRef.current) return;
+      setSkus(page);
+      setHasMore(page.length === PAGE_SIZE);
     } catch {
-      toast.error("Kan SKU's niet laden");
+      if (reqId === reqIdRef.current) toast.error("Kan SKU's niet laden");
     } finally {
-      setLoading(false);
+      if (reqId === reqIdRef.current) setLoading(false);
     }
-  }, [isCourier, courierOrgId]);
+  }, [isCourier, courierOrgId, query]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const filteredSkus = skus.filter((s) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (
-      s.name.toLowerCase().includes(q) ||
-      s.sku_code.toLowerCase().includes(q) ||
-      (s.attributes?.producent || "").toLowerCase().includes(q) ||
-      (s.category || "").toLowerCase().includes(q)
-    );
-  });
+  const loadMore = useCallback(async () => {
+    const reqId = ++reqIdRef.current;
+    setLoadingMore(true);
+    try {
+      const page = await api.listSKUs(
+        false,
+        isCourier ? courierOrgId ?? undefined : undefined,
+        { search: query, limit: PAGE_SIZE, offset: skus.length },
+      );
+      if (reqId !== reqIdRef.current) return;
+      setSkus((prev) => [...prev, ...page]);
+      setHasMore(page.length === PAGE_SIZE);
+    } catch {
+      if (reqId === reqIdRef.current) toast.error("Kan meer producten niet laden");
+    } finally {
+      if (reqId === reqIdRef.current) setLoadingMore(false);
+    }
+  }, [isCourier, courierOrgId, query, skus.length]);
+
+  const filteredSkus = skus;
 
   const courierNeedsOrg = isCourier && courierOrgId === null;
 
@@ -217,6 +251,26 @@ export function SKUsPage() {
           ))
         )}
       </div>
+
+      {!courierNeedsOrg && !loading && hasMore && (
+        <div className="mt-4 flex justify-center">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={loadMore}
+            disabled={loadingMore}
+          >
+            {loadingMore ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Laden...
+              </>
+            ) : (
+              "Meer tonen"
+            )}
+          </Button>
+        </div>
+      )}
 
       <SKUDialog
         open={showNew}

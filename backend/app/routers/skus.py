@@ -4,7 +4,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, selectinload
 
@@ -19,7 +19,9 @@ from app.models import (
     InventoryBalance,
     OrderLine,
     ReferenceImage,
+    SKUAttribute,
     StockMovement,
+    Supplier,
     User,
 )
 from app.schemas import (
@@ -302,6 +304,7 @@ def _sku_to_response(sku: SKU) -> SKUResponse:
 @router.get("", response_model=list[SKUResponse])
 def list_skus(
     active_only: bool = False,
+    search: str | None = None,
     limit: int = 100,
     offset: int = 0,
     organization_id: int | None = None,
@@ -324,6 +327,25 @@ def list_skus(
         user.is_platform_admin or user.role == "courier"
     ):
         query = query.filter(SKU.organization_id == organization_id)
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        # Search server-side so wines beyond the current page are still found.
+        # Match name, SKU code, category, the producent attribute, or the
+        # supplier (leverancier) name.
+        producent_subq = db.query(SKUAttribute.sku_id).filter(
+            SKUAttribute.key == "producent",
+            SKUAttribute.value.ilike(like),
+        )
+        supplier_subq = db.query(Supplier.id).filter(Supplier.name.ilike(like))
+        query = query.filter(
+            or_(
+                SKU.name.ilike(like),
+                SKU.sku_code.ilike(like),
+                SKU.category.ilike(like),
+                SKU.id.in_(producent_subq),
+                SKU.supplier_id.in_(supplier_subq),
+            )
+        )
     skus = query.order_by(SKU.name).offset(offset).limit(limit).all()
     return [_sku_to_response(s) for s in skus]
 
