@@ -185,10 +185,17 @@ export const api = {
   deleteSupplier: (id: number) => request(`/suppliers/${id}`, { method: "DELETE" }),
 
   // SKUs
-  listSKUs: (activeOnly = false, organizationId?: number) => {
+  listSKUs: (
+    activeOnly = false,
+    organizationId?: number,
+    opts?: { search?: string; limit?: number; offset?: number },
+  ) => {
     const params = new URLSearchParams();
     if (activeOnly) params.set("active_only", "true");
     if (organizationId !== undefined) params.set("organization_id", String(organizationId));
+    if (opts?.search) params.set("search", opts.search);
+    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+    if (opts?.offset !== undefined) params.set("offset", String(opts.offset));
     const qs = params.toString();
     return request(`/skus${qs ? `?${qs}` : ""}`);
   },
