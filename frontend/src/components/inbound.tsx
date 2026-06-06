@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { toast } from "@/App";
 import { api, ApiError } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,6 +60,103 @@ interface SKUOption {
   active: boolean;
 }
 
+/**
+ * Zoekbare, scrollbare keuzelijst voor het koppelen van een bestaande SKU.
+ * Toont de volledige lijst (scrollbaar) en filtert client-side op naam of
+ * SKU-code, zodat ook SKU's verderop in het alfabet — bijv. wijnen met de T —
+ * snel te vinden zijn.
+ */
+function SkuCombobox({
+  options,
+  value,
+  onChange,
+  placeholder = "Kies bestaande SKU...",
+}: {
+  options: SKUOption[];
+  value: number | null;
+  onChange: (id: number) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const selected = options.find((o) => o.id === value) ?? null;
+
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? options.filter(
+        (o) =>
+          o.name.toLowerCase().includes(q) ||
+          o.sku_code.toLowerCase().includes(q),
+      )
+    : options;
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative flex-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex h-8 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-xs ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+      >
+        <span className={cn("line-clamp-1 text-left", !selected && "text-muted-foreground")}>
+          {selected ? `${selected.sku_code} - ${selected.name}` : placeholder}
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 w-full rounded-md border border-border bg-card text-foreground shadow-md">
+          <div className="p-1">
+            <Input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Zoek op naam of code..."
+              className="h-8 text-xs"
+            />
+          </div>
+          <div className="max-h-60 overflow-y-auto p-1">
+            {filtered.length === 0 ? (
+              <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                Geen SKU gevonden
+              </div>
+            ) : (
+              filtered.map((sku) => (
+                <button
+                  key={sku.id}
+                  type="button"
+                  onClick={() => {
+                    onChange(sku.id);
+                    setOpen(false);
+                    setQuery("");
+                  }}
+                  className={cn(
+                    "flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground",
+                    sku.id === value && "bg-accent/50",
+                  )}
+                >
+                  {sku.sku_code} - {sku.name}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface ExtractPreview {
   supplier_name: string;
   reference: string;
@@ -104,7 +203,10 @@ export function InboundPage() {
   useEffect(() => {
     async function loadSkus() {
       try {
-        const skus = await api.listSKUs(true);
+        // Haal de volledige actieve lijst op (niet de standaard 100) zodat ook
+        // SKU's verderop in het alfabet — bijv. wijnen met de T — beschikbaar
+        // zijn om te scrollen en doorzoeken in de koppel-combobox.
+        const skus = await api.listSKUs(true, undefined, { limit: 10000 });
         setSkuOptions((skus || []) as SKUOption[]);
       } catch (err: unknown) {
         toast.error(err instanceof Error ? err.message : "SKU's laden mislukt");
@@ -662,26 +764,16 @@ export function InboundPage() {
                     {(!line.matched_sku_code || editing) && !ignored && (
                       <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
                         <div className="flex gap-2">
-                          <Select
-                            value={selectedSkuByLine[idx] ? String(selectedSkuByLine[idx]) : ""}
-                            onValueChange={(v) =>
+                          <SkuCombobox
+                            options={skuOptions}
+                            value={selectedSkuByLine[idx] ?? null}
+                            onChange={(id) =>
                               setSelectedSkuByLine((prev) => ({
                                 ...prev,
-                                [idx]: Number(v),
+                                [idx]: id,
                               }))
                             }
-                          >
-                            <SelectTrigger className="flex-1 text-xs h-8">
-                              <SelectValue placeholder="Kies bestaande SKU..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {skuOptions.map((sku) => (
-                                <SelectItem key={sku.id} value={String(sku.id)}>
-                                  {sku.sku_code} - {sku.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          />
                           <Button
                             type="button"
                             variant="outline"
