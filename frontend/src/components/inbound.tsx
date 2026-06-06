@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
 import { toast } from "@/App";
 import { api, ApiError } from "@/lib/api";
@@ -63,9 +64,13 @@ interface SKUOption {
 
 /**
  * Zoekbare, scrollbare keuzelijst voor het koppelen van een bestaande SKU.
- * Toont de volledige lijst (scrollbaar) en filtert client-side op naam of
- * SKU-code, zodat ook SKU's verderop in het alfabet — bijv. wijnen met de T —
- * snel te vinden zijn.
+ * Toont de volledige lijst (scrollbaar) en filtert client-side op naam,
+ * SKU-code of leverancier, zodat ook SKU's verderop in het alfabet — bijv.
+ * wijnen met de T — snel te vinden zijn.
+ *
+ * Het menu wordt via een portal (fixed) gerenderd, zodat het niet door de
+ * scroll-container van de regellijst wordt afgekapt en het niet als
+ * geneste <button> in de regel terechtkomt.
  */
 function SkuCombobox({
   options,
@@ -80,7 +85,9 @@ function SkuCombobox({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState<{ left: number; top: number; width: number } | null>(null);
 
   const selected = options.find((o) => o.id === value) ?? null;
 
@@ -94,20 +101,39 @@ function SkuCombobox({
       )
     : options;
 
+  const updatePosition = useCallback(() => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setMenuPos({ left: r.left, top: r.bottom + 4, width: r.width });
+  }, []);
+
   useEffect(() => {
     if (!open) return;
+    updatePosition();
     function onDocClick(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
+    }
+    function reposition() {
+      updatePosition();
     }
     document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open]);
+    // capture=true so we also catch scrolling of the regellijst container.
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [open, updatePosition]);
 
   return (
-    <div ref={containerRef} className="relative flex-1">
+    <div className="relative flex-1">
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="flex h-8 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-xs ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
@@ -117,51 +143,58 @@ function SkuCombobox({
         </span>
         <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
       </button>
-      {open && (
-        <div className="absolute z-50 mt-1 w-full rounded-md border border-border bg-card text-foreground shadow-md">
-          <div className="p-1">
-            <Input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Zoek op naam, code of leverancier..."
-              className="h-8 text-xs"
-            />
-          </div>
-          <div className="max-h-60 overflow-y-auto p-1">
-            {filtered.length === 0 ? (
-              <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                Geen SKU gevonden
-              </div>
-            ) : (
-              filtered.map((sku) => (
-                <button
-                  key={sku.id}
-                  type="button"
-                  onClick={() => {
-                    onChange(sku.id);
-                    setOpen(false);
-                    setQuery("");
-                  }}
-                  className={cn(
-                    "flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground",
-                    sku.id === value && "bg-accent/50",
-                  )}
-                >
-                  <span className="line-clamp-1">
-                    {sku.sku_code} - {sku.name}
-                  </span>
-                  {sku.supplier_name && (
-                    <span className="text-[10px] text-muted-foreground">
-                      {sku.supplier_name}
+      {open &&
+        menuPos &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={{ left: menuPos.left, top: menuPos.top, width: menuPos.width }}
+            className="fixed z-50 rounded-md border border-border bg-card text-foreground shadow-md"
+          >
+            <div className="p-1">
+              <Input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Zoek op naam, code of leverancier..."
+                className="h-8 text-xs"
+              />
+            </div>
+            <div className="max-h-60 overflow-y-auto p-1">
+              {filtered.length === 0 ? (
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                  Geen SKU gevonden
+                </div>
+              ) : (
+                filtered.map((sku) => (
+                  <button
+                    key={sku.id}
+                    type="button"
+                    onClick={() => {
+                      onChange(sku.id);
+                      setOpen(false);
+                      setQuery("");
+                    }}
+                    className={cn(
+                      "flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground",
+                      sku.id === value && "bg-accent/50",
+                    )}
+                  >
+                    <span className="line-clamp-1">
+                      {sku.sku_code} - {sku.name}
                     </span>
-                  )}
-                </button>
-              ))
-            )}
-          </div>
-        </div>
-      )}
+                    {sku.supplier_name && (
+                      <span className="text-[10px] text-muted-foreground">
+                        {sku.supplier_name}
+                      </span>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
@@ -673,10 +706,18 @@ export function InboundPage() {
                         ? "border-border border-l-2 border-l-amber-500"
                         : "border-border";
                   return (
-                  <button
+                  <div
                     key={`${line.supplier_code}-${idx}`}
+                    role="button"
+                    tabIndex={0}
                     className={`w-full text-left border rounded p-2 ${borderClass} ${ignored ? "opacity-60" : ""}`}
                     onClick={() => setSelectedLineIndex(idx)}
+                    onKeyDown={(e) => {
+                      if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                        e.preventDefault();
+                        setSelectedLineIndex(idx);
+                      }
+                    }}
                   >
                     <div className="flex items-center gap-2">
                       <p className={`text-sm font-medium ${ignored ? "line-through" : ""}`}>
@@ -824,7 +865,7 @@ export function InboundPage() {
                         {ignored ? "Wel boeken" : "Niet boeken"}
                       </Button>
                     </div>
-                  </button>
+                  </div>
                   );
                 })}
               </div>
