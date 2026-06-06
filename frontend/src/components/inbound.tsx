@@ -1,6 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { ChevronDown } from "lucide-react";
 import { toast } from "@/App";
 import { api, ApiError } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,6 +59,144 @@ interface SKUOption {
   sku_code: string;
   name: string;
   active: boolean;
+  supplier_name: string | null;
+}
+
+/**
+ * Zoekbare, scrollbare keuzelijst voor het koppelen van een bestaande SKU.
+ * Toont de volledige lijst (scrollbaar) en filtert client-side op naam,
+ * SKU-code of leverancier, zodat ook SKU's verderop in het alfabet — bijv.
+ * wijnen met de T — snel te vinden zijn.
+ *
+ * Het menu wordt via een portal (fixed) gerenderd, zodat het niet door de
+ * scroll-container van de regellijst wordt afgekapt en het niet als
+ * geneste <button> in de regel terechtkomt.
+ */
+function SkuCombobox({
+  options,
+  value,
+  onChange,
+  placeholder = "Kies bestaande SKU...",
+}: {
+  options: SKUOption[];
+  value: number | null;
+  onChange: (id: number) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState<{ left: number; top: number; width: number } | null>(null);
+
+  const selected = options.find((o) => o.id === value) ?? null;
+
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? options.filter(
+        (o) =>
+          o.name.toLowerCase().includes(q) ||
+          o.sku_code.toLowerCase().includes(q) ||
+          (o.supplier_name?.toLowerCase().includes(q) ?? false),
+      )
+    : options;
+
+  const updatePosition = useCallback(() => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setMenuPos({ left: r.left, top: r.bottom + 4, width: r.width });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    function onDocClick(e: MouseEvent) {
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
+    }
+    function reposition() {
+      updatePosition();
+    }
+    document.addEventListener("mousedown", onDocClick);
+    // capture=true so we also catch scrolling of the regellijst container.
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [open, updatePosition]);
+
+  return (
+    <div className="relative flex-1">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex h-8 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-xs ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+      >
+        <span className={cn("line-clamp-1 text-left", !selected && "text-muted-foreground")}>
+          {selected ? `${selected.sku_code} - ${selected.name}` : placeholder}
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
+      </button>
+      {open &&
+        menuPos &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={{ left: menuPos.left, top: menuPos.top, width: menuPos.width }}
+            className="fixed z-50 rounded-md border border-border bg-card text-foreground shadow-md"
+          >
+            <div className="p-1">
+              <Input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Zoek op naam, code of leverancier..."
+                className="h-8 text-xs"
+              />
+            </div>
+            <div className="max-h-60 overflow-y-auto p-1">
+              {filtered.length === 0 ? (
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                  Geen SKU gevonden
+                </div>
+              ) : (
+                filtered.map((sku) => (
+                  <button
+                    key={sku.id}
+                    type="button"
+                    onClick={() => {
+                      onChange(sku.id);
+                      setOpen(false);
+                      setQuery("");
+                    }}
+                    className={cn(
+                      "flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground",
+                      sku.id === value && "bg-accent/50",
+                    )}
+                  >
+                    <span className="line-clamp-1">
+                      {sku.sku_code} - {sku.name}
+                    </span>
+                    {sku.supplier_name && (
+                      <span className="text-[10px] text-muted-foreground">
+                        {sku.supplier_name}
+                      </span>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
 }
 
 interface ExtractPreview {
@@ -104,7 +245,10 @@ export function InboundPage() {
   useEffect(() => {
     async function loadSkus() {
       try {
-        const skus = await api.listSKUs(true);
+        // Haal de volledige actieve lijst op (niet de standaard 100) zodat ook
+        // SKU's verderop in het alfabet — bijv. wijnen met de T — beschikbaar
+        // zijn om te scrollen en doorzoeken in de koppel-combobox.
+        const skus = await api.listSKUs(true, undefined, { limit: 10000 });
         setSkuOptions((skus || []) as SKUOption[]);
       } catch (err: unknown) {
         toast.error(err instanceof Error ? err.message : "SKU's laden mislukt");
@@ -562,10 +706,18 @@ export function InboundPage() {
                         ? "border-border border-l-2 border-l-amber-500"
                         : "border-border";
                   return (
-                  <button
+                  <div
                     key={`${line.supplier_code}-${idx}`}
+                    role="button"
+                    tabIndex={0}
                     className={`w-full text-left border rounded p-2 ${borderClass} ${ignored ? "opacity-60" : ""}`}
                     onClick={() => setSelectedLineIndex(idx)}
+                    onKeyDown={(e) => {
+                      if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                        e.preventDefault();
+                        setSelectedLineIndex(idx);
+                      }
+                    }}
                   >
                     <div className="flex items-center gap-2">
                       <p className={`text-sm font-medium ${ignored ? "line-through" : ""}`}>
@@ -662,26 +814,16 @@ export function InboundPage() {
                     {(!line.matched_sku_code || editing) && !ignored && (
                       <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
                         <div className="flex gap-2">
-                          <Select
-                            value={selectedSkuByLine[idx] ? String(selectedSkuByLine[idx]) : ""}
-                            onValueChange={(v) =>
+                          <SkuCombobox
+                            options={skuOptions}
+                            value={selectedSkuByLine[idx] ?? null}
+                            onChange={(id) =>
                               setSelectedSkuByLine((prev) => ({
                                 ...prev,
-                                [idx]: Number(v),
+                                [idx]: id,
                               }))
                             }
-                          >
-                            <SelectTrigger className="flex-1 text-xs h-8">
-                              <SelectValue placeholder="Kies bestaande SKU..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {skuOptions.map((sku) => (
-                                <SelectItem key={sku.id} value={String(sku.id)}>
-                                  {sku.sku_code} - {sku.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          />
                           <Button
                             type="button"
                             variant="outline"
@@ -723,7 +865,7 @@ export function InboundPage() {
                         {ignored ? "Wel boeken" : "Niet boeken"}
                       </Button>
                     </div>
-                  </button>
+                  </div>
                   );
                 })}
               </div>
