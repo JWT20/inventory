@@ -58,6 +58,7 @@ interface SKUOption {
   sku_code: string;
   name: string;
   active: boolean;
+  supplier_name: string | null;
 }
 
 /**
@@ -88,7 +89,8 @@ function SkuCombobox({
     ? options.filter(
         (o) =>
           o.name.toLowerCase().includes(q) ||
-          o.sku_code.toLowerCase().includes(q),
+          o.sku_code.toLowerCase().includes(q) ||
+          (o.supplier_name?.toLowerCase().includes(q) ?? false),
       )
     : options;
 
@@ -122,7 +124,7 @@ function SkuCombobox({
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Zoek op naam of code..."
+              placeholder="Zoek op naam, code of leverancier..."
               className="h-8 text-xs"
             />
           </div>
@@ -142,11 +144,18 @@ function SkuCombobox({
                     setQuery("");
                   }}
                   className={cn(
-                    "flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground",
+                    "flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground",
                     sku.id === value && "bg-accent/50",
                   )}
                 >
-                  {sku.sku_code} - {sku.name}
+                  <span className="line-clamp-1">
+                    {sku.sku_code} - {sku.name}
+                  </span>
+                  {sku.supplier_name && (
+                    <span className="text-[10px] text-muted-foreground">
+                      {sku.supplier_name}
+                    </span>
+                  )}
                 </button>
               ))
             )}
