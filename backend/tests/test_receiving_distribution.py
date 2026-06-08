@@ -197,6 +197,43 @@ def test_distribution_rejects_other_org_for_owner(client, db, owner_token, sampl
     assert resp.status_code == 403
 
 
+def test_distribution_rows_never_overpromise_stock(client, db, courier_token, sample_org):
+    """Rows, not just the headline, are bounded by stock (no nog 4 + nog 4 on 4 boxes)."""
+    sku = _make_sku(db)
+    wed_cust = _make_customer(db, sample_org, "Wed")
+    thu_cust = _make_customer(db, sample_org, "Thu")
+    context_order = _make_order(db, sample_org, "WED", week="2026-W21")
+    thu_order = _make_order(db, sample_org, "THU", week="2026-W21")
+    _make_line(db, context_order, sku, wed_cust, quantity=5, delivery_day="wednesday")
+    _make_line(db, thu_order, sku, thu_cust, quantity=5, delivery_day="thursday")
+    _set_stock(db, sku, sample_org, 4)  # one shared pool across both days
+    db.commit()
+
+    body = _get(client, courier_token, context_order.id, sku.id).json()
+    by_name = {line["customer_name"]: line for line in body["lines"]}
+    # The 4 boxes go to the context order's day first; nothing is left to overpromise Thu.
+    assert by_name["Wed"]["remaining_quantity"] == 4
+    assert by_name["Thu"]["remaining_quantity"] == 0
+    # Rows now sum to exactly what is on hand — never more than the headline total.
+    assert sum(line["remaining_quantity"] for line in body["lines"]) == body["total_remaining"] == 4
+
+
+def test_distribution_hides_sku_from_another_org(client, db, owner_token, sample_org):
+    """A foreign tenant's org-scoped SKU must not leak its code/name — return 404."""
+    other_org = Organization(name="Andere Wijnhandel", slug="andere2")
+    db.add(other_org)
+    db.flush()
+    foreign_sku = SKU(sku_code="SECRET-1", name="Geheime Wijn", organization_id=other_org.id)
+    db.add(foreign_sku)
+    db.flush()
+    my_order = _make_order(db, sample_org, "MINE")
+    db.commit()
+
+    # owner_token's own order, but a foreign org's sku_id — existence must not be revealed.
+    resp = _get(client, owner_token, my_order.id, foreign_sku.id)
+    assert resp.status_code == 404
+
+
 def test_distribution_unknown_order_returns_404(client, courier_token):
     resp = _get(client, courier_token, 999999, 1)
     assert resp.status_code == 404

@@ -777,7 +777,7 @@ function ScanStep({
 
 /* ---------- Verdeel-lijst: which customers this SKU still needs to go to ---------- */
 
-function DistributionPanel({ orderId, skuId }: { orderId: number; skuId: number }) {
+function DistributionPanel({ orderId, skuId, refreshKey }: { orderId: number; skuId: number; refreshKey: number }) {
   const [data, setData] = useState<DistributionResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -792,7 +792,9 @@ function DistributionPanel({ orderId, skuId }: { orderId: number; skuId: number 
       .catch(() => { if (active) setFailed(true); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [orderId, skuId]);
+    // refreshKey bumps after each extra booking so the verdeel-lijst re-fetches its
+    // gescand/nog counts instead of going stale against the box we just booked.
+  }, [orderId, skuId, refreshKey]);
 
   if (loading) {
     return (
@@ -1001,7 +1003,7 @@ function ResultStep({
 
       {/* Read-only verdeel-lijst: which other customers this SKU still needs to go to */}
       {booking.sku_id != null && (
-        <DistributionPanel orderId={order.id} skuId={booking.sku_id} />
+        <DistributionPanel orderId={order.id} skuId={booking.sku_id} refreshKey={totalBooked} />
       )}
 
       <div className="flex flex-col gap-3">

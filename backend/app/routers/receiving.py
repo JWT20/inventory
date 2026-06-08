@@ -432,6 +432,12 @@ def sku_distribution(
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
+    # The verdeel-lijst is always scoped to the context order's organization (caps and
+    # stock below use it), so a SKU from another org has no place here. Reject as "not
+    # found" rather than leaking its code/name across the tenant boundary. Global SKUs
+    # (organization_id is None) are shared and stay visible.
+    if sku.organization_id not in (None, context_order.organization_id):
+        raise HTTPException(404, "SKU niet gevonden")
 
     # Scope to the context order's own delivery week: the koerier is distributing
     # this week's boxes, not every future week's open orders. Eager-load customer and
@@ -471,10 +477,10 @@ def sku_distribution(
         )
     )
 
-    # Per-(week, day) caps are each computed against the same shared stock, so their
-    # sum can exceed what physically exists. Bound the headline total by available
-    # stock so it never promises more boxes than are on hand.
-    total_remaining = sum(d.remaining_quantity for d in dist_lines)
+    # Per-(week, day) caps are each computed against the same shared stock, so the rows
+    # can collectively promise more boxes than physically exist. Hand out the real
+    # available stock across the rows in display order (context order first) so no row —
+    # and therefore the headline total — ever overpromises what is on hand.
     if context_order.delivery_week:
         balance = (
             db.query(InventoryBalance)
@@ -484,8 +490,11 @@ def sku_distribution(
             )
             .first()
         )
-        available = balance.quantity_available if balance else 0
-        total_remaining = min(total_remaining, available)
+        budget = balance.quantity_available if balance else 0
+        for d in dist_lines:
+            d.remaining_quantity = min(d.remaining_quantity, budget)
+            budget -= d.remaining_quantity
+    total_remaining = sum(d.remaining_quantity for d in dist_lines)
 
     return SKUDistributionResponse(
         sku_id=sku.id,
