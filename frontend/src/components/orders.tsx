@@ -717,7 +717,7 @@ function ManualOrderDialog({
 
   useEffect(() => {
     if (!open) return;
-    api.listSKUs(false, undefined, { limit: 10000 }).then((s: SKUOption[]) => setAllSkus(s));
+    api.listSKUOptions().then((s: SKUOption[]) => setAllSkus(s));
     api.listCustomers().then((c: CustomerOption[]) => {
       setAllCustomers(c);
       if (isLinkedCustomer && user.customer_id) {

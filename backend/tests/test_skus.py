@@ -57,6 +57,37 @@ class TestListSKUs:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/skus/options
+# ---------------------------------------------------------------------------
+
+class TestListSKUOptions:
+    def test_options_return_slim_projection(self, client, courier_token, sample_sku):
+        resp = client.get("/api/skus/options", headers=auth_header(courier_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert set(data[0].keys()) == {"id", "sku_code", "name"}
+        assert data[0]["sku_code"] == "WINE-001"
+
+    def test_options_active_only(self, client, db, courier_token, sample_sku):
+        from app.models import SKU
+        db.add(SKU(sku_code="WINE-002", name="Inactive Wine", active=False))
+        db.commit()
+
+        resp = client.get(
+            "/api/skus/options", params={"active_only": True},
+            headers=auth_header(courier_token),
+        )
+        assert resp.status_code == 200
+        codes = [s["sku_code"] for s in resp.json()]
+        assert codes == ["WINE-001"]
+
+    def test_options_unauthenticated(self, client):
+        resp = client.get("/api/skus/options")
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
 # POST /api/skus
 # ---------------------------------------------------------------------------
 

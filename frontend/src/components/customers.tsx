@@ -849,7 +849,7 @@ function AddProductDialog({
       setSearch("");
       setSelected(new Set());
       setLoading(true);
-      api.listSKUs(true, undefined, { limit: 10000 }).then((skus: SKU[]) => {
+      api.listSKUOptions(true).then((skus: SKU[]) => {
         setAllSKUs(skus);
         setLoading(false);
       }).catch(() => {

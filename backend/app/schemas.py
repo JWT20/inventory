@@ -208,6 +208,15 @@ class SKUResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SKUOption(BaseModel):
+    """Lightweight SKU projection for pickers (no attributes/images)."""
+    id: int
+    sku_code: str
+    name: str
+
+    model_config = {"from_attributes": True}
+
+
 # --- Reference Image ---
 class ReferenceImageResponse(BaseModel):
     id: int
