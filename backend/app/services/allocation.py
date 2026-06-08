@@ -33,7 +33,7 @@ def compute_allocation(
     organization_id : int | None
         Org scope for inventory balance.
     delivery_day : str
-        "wednesday", "thursday", or "friday".
+        One of "monday", "tuesday", "wednesday", "thursday", or "friday".
     """
     # 1. Fetch all active order lines for this SKU + week + day
     lines = (

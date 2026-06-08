@@ -208,6 +208,15 @@ class SKUResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SKUOption(BaseModel):
+    """Lightweight SKU projection for pickers (no attributes/images)."""
+    id: int
+    sku_code: str
+    name: str
+
+    model_config = {"from_attributes": True}
+
+
 # --- Reference Image ---
 class ReferenceImageResponse(BaseModel):
     id: int
@@ -257,7 +266,7 @@ class MatchResult(BaseModel):
 
 
 # --- Customer ---
-VALID_DELIVERY_DAYS = ("wednesday", "thursday", "friday")
+VALID_DELIVERY_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday")
 
 
 class CustomerCreate(BaseModel):
@@ -265,14 +274,14 @@ class CustomerCreate(BaseModel):
     organization_id: int | None = None
     show_prices: bool = True
     discount_percentage: float | None = Field(None, ge=0, le=100)
-    delivery_day: Literal["wednesday", "thursday", "friday"] = "thursday"
+    delivery_day: Literal["monday", "tuesday", "wednesday", "thursday", "friday"] = "thursday"
 
 
 class CustomerUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=150)
     show_prices: bool | None = None
     discount_percentage: float | None = None
-    delivery_day: Literal["wednesday", "thursday", "friday"] | None = None
+    delivery_day: Literal["monday", "tuesday", "wednesday", "thursday", "friday"] | None = None
 
 
 class CustomerResponse(BaseModel):
@@ -367,7 +376,7 @@ class ManualOrderLineCreate(BaseModel):
     customer_id: int = Field(..., gt=0)
     sku_id: int = Field(..., gt=0)
     quantity: int = Field(..., gt=0)
-    delivery_day: Literal["wednesday", "thursday", "friday"] | None = None
+    delivery_day: Literal["monday", "tuesday", "wednesday", "thursday", "friday"] | None = None
 
 
 class ManualOrderCreate(BaseModel):
@@ -380,7 +389,7 @@ class OrderLineAdd(BaseModel):
     customer_id: int = Field(..., gt=0)
     sku_id: int = Field(..., gt=0)
     quantity: int = Field(..., gt=0)
-    delivery_day: Literal["wednesday", "thursday", "friday"] | None = None
+    delivery_day: Literal["monday", "tuesday", "wednesday", "thursday", "friday"] | None = None
 
 
 class OrderUpdate(BaseModel):

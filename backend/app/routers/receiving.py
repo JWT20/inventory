@@ -44,7 +44,13 @@ REGISTER_TOKEN_MAX_AGE = 300  # seconds
 
 # Image processing states that count as "the SKU has a usable reference image".
 _USABLE_REF_STATUSES = ("pending", "processing", "done")
-_DELIVERY_DAY_SORT = {"wednesday": 0, "thursday": 1, "friday": 2}
+_DELIVERY_DAY_SORT = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+}
 
 
 def _scope_label(context_order: "Order") -> str:

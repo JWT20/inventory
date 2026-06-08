@@ -62,6 +62,8 @@ interface Customer {
 }
 
 const DELIVERY_DAY_LABELS: Record<string, string> = {
+  monday: "Maandag",
+  tuesday: "Dinsdag",
   wednesday: "Woensdag",
   thursday: "Donderdag",
   friday: "Vrijdag",
@@ -385,6 +387,8 @@ function CustomerDetail({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="monday">Maandag</SelectItem>
+                <SelectItem value="tuesday">Dinsdag</SelectItem>
                 <SelectItem value="wednesday">Woensdag</SelectItem>
                 <SelectItem value="thursday">Donderdag</SelectItem>
                 <SelectItem value="friday">Vrijdag</SelectItem>
@@ -845,7 +849,7 @@ function AddProductDialog({
       setSearch("");
       setSelected(new Set());
       setLoading(true);
-      api.listSKUs(true, undefined, { limit: 10000 }).then((skus: SKU[]) => {
+      api.listSKUOptions(true).then((skus: SKU[]) => {
         setAllSKUs(skus);
         setLoading(false);
       }).catch(() => {

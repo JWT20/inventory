@@ -80,10 +80,39 @@ interface DeadlineInfo {
 }
 
 const DELIVERY_DAY_LABELS: Record<string, string> = {
+  monday: "Ma",
+  tuesday: "Di",
   wednesday: "Wo",
   thursday: "Do",
   friday: "Vr",
 };
+
+const DELIVERY_DAY_LABELS_LONG: Record<string, string> = {
+  monday: "Maandag",
+  tuesday: "Dinsdag",
+  wednesday: "Woensdag",
+  thursday: "Donderdag",
+  friday: "Vrijdag",
+};
+
+// Early-week delivery days, only selectable for special customers whose own
+// default delivery day is monday/tuesday (mirrors the backend guard).
+const EXTENDED_DELIVERY_DAYS = ["monday", "tuesday"];
+const DELIVERY_DAY_ORDER: Record<string, number> = {
+  monday: 0,
+  tuesday: 1,
+  wednesday: 2,
+  thursday: 3,
+  friday: 4,
+};
+
+// Days every customer can always choose; special customers additionally get
+// the early-week days prepended.
+const STANDARD_DELIVERY_DAYS = ["wednesday", "thursday", "friday"];
+const deliveryDayOptionsFor = (customerDeliveryDay: string | undefined): string[] =>
+  EXTENDED_DELIVERY_DAYS.includes(customerDeliveryDay ?? "")
+    ? [...EXTENDED_DELIVERY_DAYS, ...STANDARD_DELIVERY_DAYS]
+    : STANDARD_DELIVERY_DAYS;
 
 interface Order {
   id: number;
@@ -209,6 +238,8 @@ export function OrdersPage() {
   };
 
   const DELIVERY_DAY_LABELS_FULL: Record<string, string> = {
+    monday: "maandag",
+    tuesday: "dinsdag",
     wednesday: "woensdag",
     thursday: "donderdag",
     friday: "vrijdag",
@@ -217,8 +248,9 @@ export function OrdersPage() {
   // Determine unique delivery days across all order lines for display on cards
   const getOrderDeliveryDays = (order: Order): string[] => {
     const days = new Set(order.lines.map((l) => l.delivery_day));
-    const dayOrder: Record<string, number> = { wednesday: 0, thursday: 1, friday: 2 };
-    return Array.from(days).sort((a, b) => (dayOrder[a] ?? 9) - (dayOrder[b] ?? 9));
+    return Array.from(days).sort(
+      (a, b) => (DELIVERY_DAY_ORDER[a] ?? 9) - (DELIVERY_DAY_ORDER[b] ?? 9)
+    );
   };
 
   // Group orders by ISO week
@@ -348,8 +380,7 @@ export function OrdersPage() {
     [...items].sort((a, b) => {
       const [aDay] = getOrderDeliveryDays(a);
       const [bDay] = getOrderDeliveryDays(b);
-      const dayOrder: Record<string, number> = { wednesday: 0, thursday: 1, friday: 2 };
-      const dayDiff = (dayOrder[aDay] ?? 9) - (dayOrder[bDay] ?? 9);
+      const dayDiff = (DELIVERY_DAY_ORDER[aDay] ?? 9) - (DELIVERY_DAY_ORDER[bDay] ?? 9);
       if (dayDiff !== 0) return dayDiff;
       return remainingBoxes(b) - remainingBoxes(a);
     });
@@ -534,6 +565,11 @@ export function OrdersPage() {
                 </span>
               )}
             </div>
+            {EXTENDED_DELIVERY_DAYS.includes(deadline.customer_delivery_day ?? "") && (
+              <div className="text-amber-600">
+                Maandag- of dinsdaglevering alleen in overleg met Jurjen.
+              </div>
+            )}
           </div>
         </Card>
       )}
@@ -681,7 +717,7 @@ function ManualOrderDialog({
 
   useEffect(() => {
     if (!open) return;
-    api.listSKUs(false, undefined, { limit: 10000 }).then((s: SKUOption[]) => setAllSkus(s));
+    api.listSKUOptions().then((s: SKUOption[]) => setAllSkus(s));
     api.listCustomers().then((c: CustomerOption[]) => {
       setAllCustomers(c);
       if (isLinkedCustomer && user.customer_id) {
@@ -871,9 +907,11 @@ function ManualOrderDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="wednesday">Woensdag</SelectItem>
-                      <SelectItem value="thursday">Donderdag</SelectItem>
-                      <SelectItem value="friday">Vrijdag</SelectItem>
+                      {deliveryDayOptionsFor(customer.delivery_day).map((d) => (
+                        <SelectItem key={d} value={d}>
+                          {DELIVERY_DAY_LABELS_LONG[d]}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>

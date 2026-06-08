@@ -199,6 +199,15 @@ export const api = {
     const qs = params.toString();
     return request(`/skus${qs ? `?${qs}` : ""}`);
   },
+  // Lightweight SKU list (id, sku_code, name) for dialog pickers — avoids
+  // pulling full SKUResponse payloads with attributes/images.
+  listSKUOptions: (activeOnly = false, organizationId?: number) => {
+    const params = new URLSearchParams();
+    if (activeOnly) params.set("active_only", "true");
+    if (organizationId !== undefined) params.set("organization_id", String(organizationId));
+    const qs = params.toString();
+    return request(`/skus/options${qs ? `?${qs}` : ""}`);
+  },
   createSKU: (data: {
     sku_code?: string;
     name?: string;

@@ -29,12 +29,16 @@ interface Order {
 }
 
 const DELIVERY_DAY_LABELS: Record<string, string> = {
+  monday: "maandag",
+  tuesday: "dinsdag",
   wednesday: "woensdag",
   thursday: "donderdag",
   friday: "vrijdag",
 };
 
 const DELIVERY_DAY_SHORT: Record<string, string> = {
+  monday: "ma",
+  tuesday: "di",
   wednesday: "wo",
   thursday: "do",
   friday: "vr",
@@ -246,7 +250,13 @@ export function ReceivePage() {
 
 function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (order: Order) => void }) {
   const days = [...new Set(o.lines?.map((l) => l.delivery_day) ?? [])];
-  const dayOrderMap: Record<string, number> = { wednesday: 0, thursday: 1, friday: 2 };
+  const dayOrderMap: Record<string, number> = {
+    monday: 0,
+    tuesday: 1,
+    wednesday: 2,
+    thursday: 3,
+    friday: 4,
+  };
   days.sort((a, b) => (dayOrderMap[a] ?? 9) - (dayOrderMap[b] ?? 9));
 
   return (

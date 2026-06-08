@@ -29,6 +29,7 @@ from app.schemas import (
     ReferenceImageResponse,
     ReferenceImageStatusResponse,
     SKUCreate,
+    SKUOption,
     SKUResponse,
     SKUUpdate,
     generate_wine_display_name,
@@ -348,6 +349,37 @@ def list_skus(
         )
     skus = query.order_by(SKU.name).offset(offset).limit(limit).all()
     return [_sku_to_response(s) for s in skus]
+
+
+@router.get("/options", response_model=list[SKUOption])
+def list_sku_options(
+    active_only: bool = False,
+    organization_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Lightweight SKU list (id, sku_code, name only) for dialog pickers.
+
+    Returns a slim column projection without attributes or reference images,
+    so dialogs that need the full catalog (manual order, customer assortment)
+    don't pull large SKUResponse payloads. Returns all matching SKUs — the
+    projection is cheap, so there is no truncating page limit.
+    """
+    query = db.query(SKU.id, SKU.sku_code, SKU.name)
+    if active_only:
+        query = query.filter(SKU.active.is_(True))
+    if not user.is_platform_admin:
+        if user.organization_id:
+            query = query.filter(SKU.organization_id == user.organization_id)
+        # Couriers (no org) are platform-level workers and see all SKUs.
+    if organization_id is not None and (
+        user.is_platform_admin or user.role == "courier"
+    ):
+        query = query.filter(SKU.organization_id == organization_id)
+    rows = query.order_by(SKU.name).all()
+    return [
+        SKUOption(id=r.id, sku_code=r.sku_code, name=r.name) for r in rows
+    ]
 
 
 @router.post("", response_model=SKUResponse, status_code=201)
