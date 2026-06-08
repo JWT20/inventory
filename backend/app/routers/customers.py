@@ -46,6 +46,7 @@ def _customer_to_response(customer: Customer) -> CustomerResponse:
             else None
         ),
         delivery_day=customer.delivery_day,
+        delivery_days=customer.delivery_days,
         sku_ids=[link.sku_id for link in ordered_links],
         sku_count=len(ordered_links),
         created_at=customer.created_at,
@@ -143,13 +144,25 @@ def create_customer(
     )
     if existing:
         raise HTTPException(409, f"Klant '{name}' bestaat al")
+    delivery_days = body.delivery_days
+    if "delivery_days" not in body.model_fields_set and "delivery_day" in body.model_fields_set:
+        delivery_days = [body.delivery_day]
+    if (
+        "delivery_days" in body.model_fields_set
+        and "delivery_day" in body.model_fields_set
+        and body.delivery_day not in delivery_days
+    ):
+        raise HTTPException(400, "Voorkeursleverdag moet in mogelijke leverdagen staan")
+    delivery_day = body.delivery_day if body.delivery_day in delivery_days else delivery_days[0]
+
     customer = Customer(
         name=name,
         organization_id=org_id,
         show_prices=body.show_prices,
         discount_percentage=body.discount_percentage,
-        delivery_day=body.delivery_day,
+        delivery_day=delivery_day,
     )
+    customer.delivery_days = delivery_days
     db.add(customer)
     db.commit()
     db.refresh(customer)
@@ -192,7 +205,14 @@ def update_customer(
     elif "discount_percentage" in (body.model_fields_set or set()):
         customer.discount_percentage = None
 
+    if body.delivery_days is not None:
+        customer.delivery_days = body.delivery_days
+        if customer.delivery_day not in customer.delivery_days:
+            customer.delivery_day = customer.delivery_days[0]
+
     if body.delivery_day is not None:
+        if body.delivery_day not in customer.delivery_days:
+            raise HTTPException(400, "Voorkeursleverdag moet in mogelijke leverdagen staan")
         customer.delivery_day = body.delivery_day
 
     db.commit()

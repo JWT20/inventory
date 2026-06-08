@@ -23,13 +23,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { ArrowLeft, Plus, Trash2, Search, GripVertical } from "lucide-react";
 import {
   DndContext,
@@ -56,10 +49,13 @@ interface Customer {
   show_prices: boolean;
   discount_percentage: number | null;
   delivery_day: string;
+  delivery_days: string[];
   sku_ids: number[];
   sku_count: number;
   created_at: string;
 }
+
+const DELIVERY_DAY_OPTIONS = ["monday", "tuesday", "wednesday", "thursday", "friday"];
 
 const DELIVERY_DAY_LABELS: Record<string, string> = {
   monday: "Maandag",
@@ -68,6 +64,9 @@ const DELIVERY_DAY_LABELS: Record<string, string> = {
   thursday: "Donderdag",
   friday: "Vrijdag",
 };
+
+const formatDeliveryDays = (days: string[]) =>
+  days.map((day) => DELIVERY_DAY_LABELS[day] ?? day).join(", ");
 
 interface CustomerSKU {
   sku_id: number;
@@ -164,7 +163,7 @@ function CustomerList({ onSelect }: { onSelect: (id: number) => void }) {
                   <TableCell className="font-medium">{c.name}</TableCell>
                   <TableCell>
                     <Badge variant="secondary">
-                      {DELIVERY_DAY_LABELS[c.delivery_day] ?? c.delivery_day}
+                      {formatDeliveryDays(c.delivery_days?.length ? c.delivery_days : [c.delivery_day])}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right">
@@ -208,7 +207,11 @@ function CustomerDetail({
   const [name, setName] = useState("");
   const [showPrices, setShowPrices] = useState(true);
   const [discountPct, setDiscountPct] = useState("");
-  const [deliveryDay, setDeliveryDay] = useState("thursday");
+  const [deliveryDays, setDeliveryDays] = useState<string[]>([
+    "wednesday",
+    "thursday",
+    "friday",
+  ]);
   const [dirty, setDirty] = useState(false);
 
   // Add product dialog
@@ -225,7 +228,9 @@ function CustomerDetail({
       setName(c.name);
       setShowPrices(c.show_prices);
       setDiscountPct(c.discount_percentage != null ? String(c.discount_percentage) : "");
-      setDeliveryDay(c.delivery_day || "thursday");
+      setDeliveryDays(
+        c.delivery_days?.length ? c.delivery_days : [c.delivery_day || "thursday"],
+      );
       setDirty(false);
     } catch {
       toast.error("Fout bij laden klant");
@@ -259,7 +264,10 @@ function CustomerDetail({
         name: name.trim(),
         show_prices: showPrices,
         discount_percentage: dp,
-        delivery_day: deliveryDay,
+        delivery_day: deliveryDays.includes(customer.delivery_day)
+          ? customer.delivery_day
+          : deliveryDays[0],
+        delivery_days: deliveryDays,
       });
       toast.success("Klant opgeslagen");
       load();
@@ -311,6 +319,17 @@ function CustomerDetail({
 
   function markDirty(setter: (v: string) => void, value: string) {
     setter(value);
+    setDirty(true);
+  }
+
+  function toggleDeliveryDay(day: string) {
+    setDeliveryDays((prev) => {
+      if (prev.includes(day)) {
+        if (prev.length === 1) return prev;
+        return prev.filter((d) => d !== day);
+      }
+      return DELIVERY_DAY_OPTIONS.filter((d) => [...prev, day].includes(d));
+    });
     setDirty(true);
   }
 
@@ -378,22 +397,23 @@ function CustomerDetail({
             />
           </div>
           <div className="space-y-1">
-            <Label>Leverdag</Label>
-            <Select
-              value={deliveryDay}
-              onValueChange={(v) => { setDeliveryDay(v); setDirty(true); }}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="monday">Maandag</SelectItem>
-                <SelectItem value="tuesday">Dinsdag</SelectItem>
-                <SelectItem value="wednesday">Woensdag</SelectItem>
-                <SelectItem value="thursday">Donderdag</SelectItem>
-                <SelectItem value="friday">Vrijdag</SelectItem>
-              </SelectContent>
-            </Select>
+            <Label>Mogelijke leverdagen</Label>
+            <div className="flex flex-wrap gap-2 rounded-md border border-border bg-background px-3 py-2 min-h-10">
+              {DELIVERY_DAY_OPTIONS.map((day) => (
+                <label
+                  key={day}
+                  className="flex items-center gap-1.5 text-sm font-medium"
+                >
+                  <input
+                    type="checkbox"
+                    checked={deliveryDays.includes(day)}
+                    onChange={() => toggleDeliveryDay(day)}
+                    className="rounded"
+                  />
+                  {DELIVERY_DAY_LABELS[day]}
+                </label>
+              ))}
+            </div>
           </div>
           <div className="flex items-end gap-2 pb-1">
             <Switch

@@ -45,6 +45,7 @@ interface CustomerOption {
   name: string;
   sku_ids: number[];
   delivery_day: string;
+  delivery_days: string[];
 }
 
 interface OrderLine {
@@ -75,7 +76,7 @@ interface DeadlineInfo {
   delivery_wednesday: string;
   delivery_thursday: string;
   delivery_friday: string;
-  customer_delivery_day: string | null;
+  customer_delivery_days: string[];
   customer_delivery_date: string | null;
 }
 
@@ -95,8 +96,6 @@ const DELIVERY_DAY_LABELS_LONG: Record<string, string> = {
   friday: "Vrijdag",
 };
 
-// Early-week delivery days, only selectable for special customers whose own
-// default delivery day is monday/tuesday (mirrors the backend guard).
 const EXTENDED_DELIVERY_DAYS = ["monday", "tuesday"];
 const DELIVERY_DAY_ORDER: Record<string, number> = {
   monday: 0,
@@ -106,13 +105,22 @@ const DELIVERY_DAY_ORDER: Record<string, number> = {
   friday: 4,
 };
 
-// Days every customer can always choose; special customers additionally get
-// the early-week days prepended.
 const STANDARD_DELIVERY_DAYS = ["wednesday", "thursday", "friday"];
-const deliveryDayOptionsFor = (customerDeliveryDay: string | undefined): string[] =>
-  EXTENDED_DELIVERY_DAYS.includes(customerDeliveryDay ?? "")
-    ? [...EXTENDED_DELIVERY_DAYS, ...STANDARD_DELIVERY_DAYS]
-    : STANDARD_DELIVERY_DAYS;
+
+const normalizeDeliveryDays = (days: string[] | undefined, fallback?: string): string[] => {
+  const source = days?.length ? days : fallback ? [fallback] : STANDARD_DELIVERY_DAYS;
+  return [...new Set(source)].sort(
+    (a, b) => (DELIVERY_DAY_ORDER[a] ?? 9) - (DELIVERY_DAY_ORDER[b] ?? 9),
+  );
+};
+
+const deliveryDayOptionsFor = (customer: CustomerOption | undefined): string[] =>
+  normalizeDeliveryDays(customer?.delivery_days, customer?.delivery_day);
+
+const defaultDeliveryDayFor = (customer: CustomerOption): string => {
+  const options = deliveryDayOptionsFor(customer);
+  return options.includes(customer.delivery_day) ? customer.delivery_day : options[0];
+};
 
 interface Order {
   id: number;
@@ -565,9 +573,9 @@ export function OrdersPage() {
                 </span>
               )}
             </div>
-            {EXTENDED_DELIVERY_DAYS.includes(deadline.customer_delivery_day ?? "") && (
+            {deadline.customer_delivery_days?.some((day) => EXTENDED_DELIVERY_DAYS.includes(day)) && (
               <div className="text-amber-600">
-                Maandag- of dinsdaglevering alleen in overleg met Jurjen.
+                Maandag of dinsdag levering alleen in overleg met Jurjen.
               </div>
             )}
           </div>
@@ -712,7 +720,7 @@ function ManualOrderDialog({
       quantity: 1,
     }));
     setCurrentLines(lines);
-    setCurrentDeliveryDay(customer.delivery_day || "thursday");
+    setCurrentDeliveryDay(defaultDeliveryDayFor(customer));
   }
 
   useEffect(() => {
@@ -907,7 +915,7 @@ function ManualOrderDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {deliveryDayOptionsFor(customer.delivery_day).map((d) => (
+                      {deliveryDayOptionsFor(customer).map((d) => (
                         <SelectItem key={d} value={d}>
                           {DELIVERY_DAY_LABELS_LONG[d]}
                         </SelectItem>

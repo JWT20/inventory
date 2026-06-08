@@ -141,8 +141,7 @@ class TestCreateOrder:
 
 
 class TestDeliveryDayScoping:
-    """Monday/Tuesday delivery is only allowed for special customers whose own
-    default delivery day is monday/tuesday."""
+    """Orders can only use days configured as possible delivery days."""
 
     def test_monday_rejected_for_normal_customer(
         self, client, db, owner_token, sample_org
@@ -150,6 +149,7 @@ class TestDeliveryDayScoping:
         customer = Customer(
             name="gewone klant", organization_id=sample_org.id, delivery_day="thursday"
         )
+        customer.delivery_days = ["wednesday", "thursday", "friday"]
         sku = SKU(sku_code="WINE-DD-1", name="Leverdag wijn 1")
         db.add_all([customer, sku])
         db.commit()
@@ -177,6 +177,7 @@ class TestDeliveryDayScoping:
         customer = Customer(
             name="speciale klant", organization_id=sample_org.id, delivery_day="tuesday"
         )
+        customer.delivery_days = ["monday", "tuesday"]
         sku = SKU(sku_code="WINE-DD-2", name="Leverdag wijn 2")
         db.add_all([customer, sku])
         db.commit()
@@ -205,6 +206,7 @@ class TestDeliveryDayScoping:
         customer = Customer(
             name="wo klant", organization_id=sample_org.id, delivery_day="thursday"
         )
+        customer.delivery_days = ["wednesday", "thursday", "friday"]
         sku = SKU(sku_code="WINE-DD-3", name="Leverdag wijn 3")
         db.add_all([customer, sku])
         db.commit()
@@ -226,6 +228,29 @@ class TestDeliveryDayScoping:
         )
         assert resp.status_code == 200
         assert resp.json()["lines"][0]["delivery_day"] == "wednesday"
+
+
+class TestDeadlineDeliveryDays:
+    def test_customer_deadline_returns_possible_delivery_days(
+        self, client, db, customer_user, customer_token, sample_org
+    ):
+        customer = Customer(
+            name="deadline klant",
+            organization_id=sample_org.id,
+            delivery_day="monday",
+        )
+        customer.delivery_days = ["monday", "tuesday"]
+        db.add(customer)
+        db.commit()
+        customer_user.customer_id = customer.id
+        db.commit()
+
+        resp = client.get("/api/orders/deadline", headers=auth_header(customer_token))
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["customer_delivery_day"] == "monday"
+        assert data["customer_delivery_days"] == ["monday", "tuesday"]
 
 
 class TestWeeklyPickPhotos:
