@@ -28,7 +28,11 @@ VALID_ROLES = ("owner", "member", "courier", "customer")
 VALID_SHIPMENT_STATUSES = ("draft", "booked")
 VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count")
 VALID_DISCOUNT_TYPES = ("percentage", "fixed")
-VALID_DELIVERY_DAYS = ("wednesday", "thursday", "friday")
+VALID_DELIVERY_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday")
+# Delivery days that are only allowed for customers explicitly configured for
+# them (i.e. whose own default delivery day is monday/tuesday). Used to scope
+# the early-week delivery option to special customers like café de sigaar.
+EXTENDED_DELIVERY_DAYS = ("monday", "tuesday")
 
 
 class Organization(Base):

@@ -140,6 +140,94 @@ class TestCreateOrder:
         assert resp.status_code == 400
 
 
+class TestDeliveryDayScoping:
+    """Monday/Tuesday delivery is only allowed for special customers whose own
+    default delivery day is monday/tuesday."""
+
+    def test_monday_rejected_for_normal_customer(
+        self, client, db, owner_token, sample_org
+    ):
+        customer = Customer(
+            name="gewone klant", organization_id=sample_org.id, delivery_day="thursday"
+        )
+        sku = SKU(sku_code="WINE-DD-1", name="Leverdag wijn 1")
+        db.add_all([customer, sku])
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [
+                    {
+                        "customer_id": customer.id,
+                        "sku_id": sku.id,
+                        "quantity": 1,
+                        "delivery_day": "monday",
+                    }
+                ],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 400
+
+    def test_tuesday_allowed_for_special_customer(
+        self, client, db, owner_token, sample_org
+    ):
+        customer = Customer(
+            name="speciale klant", organization_id=sample_org.id, delivery_day="tuesday"
+        )
+        sku = SKU(sku_code="WINE-DD-2", name="Leverdag wijn 2")
+        db.add_all([customer, sku])
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [
+                    {
+                        "customer_id": customer.id,
+                        "sku_id": sku.id,
+                        "quantity": 1,
+                        "delivery_day": "tuesday",
+                    }
+                ],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["lines"][0]["delivery_day"] == "tuesday"
+
+    def test_standard_day_still_works_for_normal_customer(
+        self, client, db, owner_token, sample_org
+    ):
+        customer = Customer(
+            name="wo klant", organization_id=sample_org.id, delivery_day="thursday"
+        )
+        sku = SKU(sku_code="WINE-DD-3", name="Leverdag wijn 3")
+        db.add_all([customer, sku])
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [
+                    {
+                        "customer_id": customer.id,
+                        "sku_id": sku.id,
+                        "quantity": 1,
+                        "delivery_day": "wednesday",
+                    }
+                ],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["lines"][0]["delivery_day"] == "wednesday"
+
+
 class TestWeeklyPickPhotos:
     def test_weekly_pick_photos_returns_only_open_lines_for_week(
         self, client, db, owner_user, owner_token, sample_org

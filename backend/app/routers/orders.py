@@ -14,6 +14,7 @@ from app.auth import get_current_user, require_admin, require_can_create_orders
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
+    EXTENDED_DELIVERY_DAYS,
     Customer,
     CustomerSKU,
     Order,
@@ -224,6 +225,25 @@ def _resolve_organization_id(user: User, body_org_id: int | None, db: Session) -
     raise HTTPException(400, "User has no organization")
 
 
+def _check_delivery_day_allowed(delivery_day: str | None, customer: Customer) -> None:
+    """Guard early-week (monday/tuesday) delivery to special customers only.
+
+    Monday/Tuesday delivery is only available for customers whose own default
+    delivery day is monday/tuesday. This mirrors the client-side scoping so the
+    rule cannot be bypassed via a raw API call (e.g. a self-ordering customer
+    login).
+    """
+    if (
+        delivery_day in EXTENDED_DELIVERY_DAYS
+        and customer.delivery_day not in EXTENDED_DELIVERY_DAYS
+    ):
+        raise HTTPException(
+            400,
+            "Levering op maandag/dinsdag is alleen mogelijk voor klanten met "
+            "maandag of dinsdag als standaard-leverdag (in overleg met Jurjen).",
+        )
+
+
 @router.post("", response_model=OrderResponse)
 def create_order(
     body: ManualOrderCreate,
@@ -298,6 +318,7 @@ def create_order(
 
         # Use explicitly chosen delivery_day, fall back to customer default
         delivery_day = customer_delivery_days.get(customer_id) or customer.delivery_day
+        _check_delivery_day_allowed(delivery_day, customer)
 
         db.add(OrderLine(
             order_id=order.id,
@@ -390,7 +411,13 @@ def list_orders(
 # ---------------------------------------------------------------------------
 
 
-DELIVERY_DAY_OFFSETS = {"wednesday": 2, "thursday": 3, "friday": 4}
+DELIVERY_DAY_OFFSETS = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+}
 
 
 @router.get("/deadline", response_model=DeadlineResponse)
@@ -1142,6 +1169,7 @@ def add_order_line(
         raise HTTPException(404, f"SKU met id {body.sku_id} niet gevonden")
 
     delivery_day = body.delivery_day or customer.delivery_day
+    _check_delivery_day_allowed(delivery_day, customer)
 
     # Check if a line for this (customer, sku) already exists — merge quantities
     existing_line = (
