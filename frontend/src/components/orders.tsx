@@ -277,15 +277,22 @@ export function OrdersPage() {
     return monday;
   };
 
-  const formatWeekRange = (weekStr: string): string => {
+  const formatWeekRange = (weekStr: string, weekOrders: Order[] = []): string => {
     const mon = getWeekMonday(weekStr);
-    const wed = new Date(mon);
-    wed.setDate(mon.getDate() + 2);
-    const fri = new Date(mon);
-    fri.setDate(mon.getDate() + 4);
+    const offsets = weekOrders
+      .flatMap((order) => order.lines.map((line) => DELIVERY_DAY_ORDER[line.delivery_day]))
+      .filter((offset): offset is number => offset !== undefined);
+    const firstOffset = offsets.length > 0 ? Math.min(...offsets) : DELIVERY_DAY_ORDER.wednesday;
+    const lastOffset = offsets.length > 0 ? Math.max(...offsets) : DELIVERY_DAY_ORDER.friday;
+    const first = new Date(mon);
+    first.setDate(mon.getDate() + firstOffset);
+    const last = new Date(mon);
+    last.setDate(mon.getDate() + lastOffset);
     const fmtShort = (d: Date) =>
       d.toLocaleDateString("nl-NL", { weekday: "short", day: "numeric", month: "short" });
-    return `${fmtShort(wed)} - ${fmtShort(fri)}`;
+    return firstOffset === lastOffset
+      ? fmtShort(first)
+      : `${fmtShort(first)} - ${fmtShort(last)}`;
   };
 
   const currentWeek = getISOWeek(new Date().toISOString());
@@ -335,7 +342,7 @@ export function OrdersPage() {
       .map((week) => ({
         week,
         label: getWeekLabel(week),
-        range: formatWeekRange(week),
+        range: formatWeekRange(week, groups[week]),
         orders: groups[week],
       }));
   };
