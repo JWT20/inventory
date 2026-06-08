@@ -86,6 +86,27 @@ class TestListSKUOptions:
         resp = client.get("/api/skus/options")
         assert resp.status_code == 401
 
+    def test_options_filtered_by_organization(
+        self, client, db, courier_token, sample_org,
+    ):
+        from app.models import Organization, SKU
+        other_org = Organization(name="Other Wijnhandel", slug="other-wijnhandel")
+        db.add(other_org)
+        db.flush()
+        own = SKU(sku_code="OWN-1", name="Own", organization_id=sample_org.id)
+        other = SKU(sku_code="OTH-1", name="Other", organization_id=other_org.id)
+        db.add_all([own, other])
+        db.commit()
+
+        resp = client.get(
+            "/api/skus/options",
+            params={"organization_id": sample_org.id},
+            headers=auth_header(courier_token),
+        )
+        assert resp.status_code == 200
+        codes = [s["sku_code"] for s in resp.json()]
+        assert codes == ["OWN-1"]
+
 
 # ---------------------------------------------------------------------------
 # POST /api/skus
