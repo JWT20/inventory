@@ -79,6 +79,54 @@ ufw allow 80/tcp
 ufw allow 443/tcp
 ufw --force enable
 
+echo "==> Unattended-upgrades: night-only window + auto-reboot + netdata refresh"
+apt-get install -y unattended-upgrades
+
+# 1. Move the auto-upgrade off business hours. The stock apt-daily(-upgrade) timers
+#    fire mid-morning (~06:46 here), and a systemd/udev upgrade at that time re-execs
+#    systemd and reshuffles cgroups right as people start working. Run download at
+#    03:00 and install at 03:30 instead, when nobody is using the app.
+for timer in apt-daily apt-daily-upgrade; do
+  install -d "/etc/systemd/system/${timer}.timer.d"
+done
+cat > /etc/systemd/system/apt-daily.timer.d/override.conf <<'EOF'
+[Timer]
+# Clear the stock twice-daily schedule, then download updates at 03:00.
+OnCalendar=
+OnCalendar=*-*-* 03:00
+RandomizedDelaySec=30m
+Persistent=true
+EOF
+cat > /etc/systemd/system/apt-daily-upgrade.timer.d/override.conf <<'EOF'
+[Timer]
+# Install the downloaded updates at 03:30, after the download window.
+OnCalendar=
+OnCalendar=*-*-* 03:30
+RandomizedDelaySec=15m
+Persistent=true
+EOF
+
+# 2. Let unattended-upgrades reboot when a kernel/systemd upgrade requires it, so
+#    services never keep running against half-replaced libsystemd/cgroup state.
+#    Reboot at 03:45 (after the install window), even if a user is logged in.
+cat > /etc/apt/apt.conf.d/52unattended-upgrades-local <<'EOF'
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+Unattended-Upgrade::Automatic-Reboot-Time "03:45";
+EOF
+
+# 3. Belt-and-braces for upgrades that do NOT trigger a reboot: hand netdata a fresh
+#    start after every package transaction. After a systemd/udev upgrade netdata's
+#    cgroup collector can hold stale handles and hammer the Docker API, so dockerd +
+#    containerd burn ~140% CPU until netdata is restarted. try-restart is a no-op
+#    when netdata is not running, so this stays safe on hosts without it.
+cat > /etc/apt/apt.conf.d/99restart-netdata <<'EOF'
+DPkg::Post-Invoke-Success { "if systemctl is-active --quiet netdata; then systemctl try-restart netdata >/dev/null 2>&1 || true; fi"; };
+EOF
+
+systemctl daemon-reload
+systemctl restart apt-daily.timer apt-daily-upgrade.timer
+
 cat <<'NEXT'
 
 ==> bootstrap complete
