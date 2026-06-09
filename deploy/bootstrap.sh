@@ -108,11 +108,16 @@ EOF
 
 # 2. Let unattended-upgrades reboot when a kernel/systemd upgrade requires it, so
 #    services never keep running against half-replaced libsystemd/cgroup state.
-#    Reboot at 03:45 (after the install window), even if a user is logged in.
+#    Reboot at 05:00, even if a user is logged in. Automatic-Reboot-Time is an
+#    absolute wall-clock time handed to `shutdown -r`: the install run can start
+#    as late as 03:45 (03:30 + RandomizedDelaySec) and then take a few minutes,
+#    so a tighter time risks finishing *after* it -- which puts the target in the
+#    past and lets the reboot slip to the next day. Keep generous headroom; the
+#    app is idle at night, so a later reboot costs nothing.
 cat > /etc/apt/apt.conf.d/52unattended-upgrades-local <<'EOF'
 Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
-Unattended-Upgrade::Automatic-Reboot-Time "03:45";
+Unattended-Upgrade::Automatic-Reboot-Time "05:00";
 EOF
 
 # 3. Belt-and-braces for upgrades that do NOT trigger a reboot: hand netdata a fresh
