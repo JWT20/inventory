@@ -9,6 +9,7 @@ import { ImageSlideshow } from "@/components/image-slideshow";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { QuantityPicker } from "@/components/quantity-picker";
 import { Skeleton } from "@/components/ui/skeleton";
+import { X } from "lucide-react";
 
 interface OrderLine {
   delivery_day: string;
@@ -781,11 +782,15 @@ function DistributionPanel({ orderId, skuId, refreshKey }: { orderId: number; sk
   const [data, setData] = useState<DistributionResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setFailed(false);
+    // Each new box (refreshKey) or SKU is fresh info worth showing again, so a
+    // manual dismiss only hides the current list — not every future one.
+    setDismissed(false);
     api
       .getDistribution(orderId, skuId)
       .then((res: DistributionResult) => { if (active) setData(res); })
@@ -795,6 +800,8 @@ function DistributionPanel({ orderId, skuId, refreshKey }: { orderId: number; sk
     // refreshKey bumps after each extra booking so the verdeel-lijst re-fetches its
     // gescand/nog counts instead of going stale against the box we just booked.
   }, [orderId, skuId, refreshKey]);
+
+  if (dismissed) return null;
 
   if (loading) {
     return (
@@ -812,11 +819,23 @@ function DistributionPanel({ orderId, skuId, refreshKey }: { orderId: number; sk
 
   return (
     <Card className="p-4 mb-4">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between gap-2 mb-3">
         <p className="text-sm font-semibold">Deze SKU ook nog naar</p>
-        <Badge variant="secondary" className="shrink-0">
-          nog {data.total_remaining} te verdelen
-        </Badge>
+        <div className="flex items-center gap-1 shrink-0">
+          <Badge variant="secondary" className="shrink-0">
+            nog {data.total_remaining} te verdelen
+          </Badge>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 -mr-1 text-muted-foreground"
+            aria-label="Verdeel-lijst sluiten"
+            onClick={() => setDismissed(true)}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
       <ul className="space-y-2">
         {data.lines.map((line) => (
