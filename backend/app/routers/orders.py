@@ -14,7 +14,6 @@ from app.auth import get_current_user, require_admin, require_can_create_orders
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
-    EXTENDED_DELIVERY_DAYS,
     Customer,
     CustomerSKU,
     Order,
@@ -226,22 +225,18 @@ def _resolve_organization_id(user: User, body_org_id: int | None, db: Session) -
 
 
 def _check_delivery_day_allowed(delivery_day: str | None, customer: Customer) -> None:
-    """Guard early-week (monday/tuesday) delivery to special customers only.
-
-    Monday/Tuesday delivery is only available for customers whose own default
-    delivery day is monday/tuesday. This mirrors the client-side scoping so the
-    rule cannot be bypassed via a raw API call (e.g. a self-ordering customer
-    login).
-    """
-    if (
-        delivery_day in EXTENDED_DELIVERY_DAYS
-        and customer.delivery_day not in EXTENDED_DELIVERY_DAYS
-    ):
+    """Ensure the requested delivery day is configured for this customer."""
+    if delivery_day not in customer.delivery_days:
         raise HTTPException(
             400,
-            "Levering op maandag/dinsdag is alleen mogelijk voor klanten met "
-            "maandag of dinsdag als standaard-leverdag (in overleg met Jurjen).",
+            "Deze leverdag is niet ingesteld als mogelijke leverdag voor deze klant.",
         )
+
+
+def _default_delivery_day(customer: Customer) -> str:
+    if customer.delivery_day in customer.delivery_days:
+        return customer.delivery_day
+    return customer.delivery_days[0]
 
 
 @router.post("", response_model=OrderResponse)
@@ -317,7 +312,7 @@ def create_order(
         sku_cache[sku_id] = sku
 
         # Use explicitly chosen delivery_day, fall back to customer default
-        delivery_day = customer_delivery_days.get(customer_id) or customer.delivery_day
+        delivery_day = customer_delivery_days.get(customer_id) or _default_delivery_day(customer)
         _check_delivery_day_allowed(delivery_day, customer)
 
         db.add(OrderLine(
@@ -448,12 +443,14 @@ def get_deadline(
 
     # If user is a customer, resolve their personal delivery date
     customer_delivery_day = None
+    customer_delivery_days: list[str] = []
     customer_delivery_date = None
     if user.role == "customer" and user.customer_id:
         customer = db.get(Customer, user.customer_id)
         if customer:
-            customer_delivery_day = customer.delivery_day
-            offset = DELIVERY_DAY_OFFSETS.get(customer.delivery_day, 3)
+            customer_delivery_day = _default_delivery_day(customer)
+            customer_delivery_days = customer.delivery_days
+            offset = DELIVERY_DAY_OFFSETS.get(customer_delivery_day, 3)
             customer_delivery_date = (monday + datetime.timedelta(days=offset)).isoformat()
 
     now = datetime.datetime.now()
@@ -466,6 +463,7 @@ def get_deadline(
         delivery_thursday=thu,
         delivery_friday=fri,
         customer_delivery_day=customer_delivery_day,
+        customer_delivery_days=customer_delivery_days,
         customer_delivery_date=customer_delivery_date,
     )
 
@@ -1168,7 +1166,7 @@ def add_order_line(
     if not sku:
         raise HTTPException(404, f"SKU met id {body.sku_id} niet gevonden")
 
-    delivery_day = body.delivery_day or customer.delivery_day
+    delivery_day = body.delivery_day or _default_delivery_day(customer)
     _check_delivery_day_allowed(delivery_day, customer)
 
     # Check if a line for this (customer, sku) already exists — merge quantities

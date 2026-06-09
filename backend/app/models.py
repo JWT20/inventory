@@ -29,10 +29,8 @@ VALID_SHIPMENT_STATUSES = ("draft", "booked")
 VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count")
 VALID_DISCOUNT_TYPES = ("percentage", "fixed")
 VALID_DELIVERY_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday")
-# Delivery days that are only allowed for customers explicitly configured for
-# them (i.e. whose own default delivery day is monday/tuesday). Used to scope
-# the early-week delivery option to special customers like café de sigaar.
-EXTENDED_DELIVERY_DAYS = ("monday", "tuesday")
+DEFAULT_DELIVERY_DAYS = ("wednesday", "thursday", "friday")
+DEFAULT_DELIVERY_DAYS_JSON = json.dumps(list(DEFAULT_DELIVERY_DAYS))
 
 
 class Organization(Base):
@@ -246,6 +244,13 @@ class Customer(Base):
     delivery_day: Mapped[str] = mapped_column(
         String(20), default="thursday", server_default="thursday"
     )
+    delivery_days_raw: Mapped[str] = mapped_column(
+        "delivery_days",
+        Text,
+        default=DEFAULT_DELIVERY_DAYS_JSON,
+        server_default=DEFAULT_DELIVERY_DAYS_JSON,
+        nullable=False,
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -254,6 +259,30 @@ class Customer(Base):
     sku_links: Mapped[list["CustomerSKU"]] = relationship(
         back_populates="customer", cascade="all, delete-orphan"
     )
+
+    @property
+    def delivery_days(self) -> list[str]:
+        try:
+            raw = json.loads(self.delivery_days_raw or "[]")
+        except (TypeError, json.JSONDecodeError):
+            raw = []
+        days: list[str] = []
+        for day in (raw if isinstance(raw, list) else []):
+            if day in VALID_DELIVERY_DAYS and day not in days:
+                days.append(day)
+        if days:
+            return days
+        if self.delivery_day in VALID_DELIVERY_DAYS:
+            return [self.delivery_day]
+        return list(DEFAULT_DELIVERY_DAYS)
+
+    @delivery_days.setter
+    def delivery_days(self, value: list[str]) -> None:
+        days: list[str] = []
+        for day in value:
+            if day in VALID_DELIVERY_DAYS and day not in days:
+                days.append(day)
+        self.delivery_days_raw = json.dumps(days or list(DEFAULT_DELIVERY_DAYS))
 
 
 class CustomerSKU(Base):

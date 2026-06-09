@@ -64,6 +64,71 @@ class TestCustomerRoleAccess:
         assert resp.status_code == 403
 
 
+class TestCustomerDeliveryDays:
+    def test_create_customer_defaults_to_standard_possible_days(
+        self, client, owner_token
+    ):
+        resp = client.post(
+            "/api/customers",
+            json={"name": "standaard klant"},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["delivery_day"] == "thursday"
+        assert data["delivery_days"] == ["wednesday", "thursday", "friday"]
+
+    def test_update_customer_accepts_multiple_possible_days(
+        self, client, db, owner_token, sample_org
+    ):
+        customer = Customer(name="multi klant", organization_id=sample_org.id)
+        db.add(customer)
+        db.commit()
+
+        resp = client.patch(
+            f"/api/customers/{customer.id}",
+            json={"delivery_days": ["monday", "tuesday"]},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["delivery_day"] == "monday"
+        assert data["delivery_days"] == ["monday", "tuesday"]
+
+    def test_empty_delivery_days_rejected(self, client, db, owner_token, sample_org):
+        customer = Customer(name="lege dagen", organization_id=sample_org.id)
+        db.add(customer)
+        db.commit()
+
+        resp = client.patch(
+            f"/api/customers/{customer.id}",
+            json={"delivery_days": []},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 422
+
+    def test_delivery_day_only_update_must_stay_within_possible_days(
+        self, client, db, owner_token, sample_org
+    ):
+        customer = Customer(name="geen wipe", organization_id=sample_org.id)
+        customer.delivery_days = ["wednesday", "thursday", "friday"]
+        db.add(customer)
+        db.commit()
+
+        resp = client.patch(
+            f"/api/customers/{customer.id}",
+            json={"delivery_day": "monday"},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 400
+        db.refresh(customer)
+        assert customer.delivery_days == ["wednesday", "thursday", "friday"]
+
+
 class TestCustomerSKUSortOrder:
     def _make_customer_with_skus(self, db, sample_org, sku_names):
         customer = Customer(name="sort klant", organization_id=sample_org.id)

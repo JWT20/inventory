@@ -267,6 +267,21 @@ class MatchResult(BaseModel):
 
 # --- Customer ---
 VALID_DELIVERY_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday")
+DEFAULT_DELIVERY_DAYS = ("wednesday", "thursday", "friday")
+
+
+def _normalize_delivery_days(days: list[str] | None) -> list[str]:
+    if days is None:
+        return list(DEFAULT_DELIVERY_DAYS)
+    normalized: list[str] = []
+    for day in days:
+        if day not in VALID_DELIVERY_DAYS:
+            raise ValueError(f"Ongeldige leverdag: {day}")
+        if day not in normalized:
+            normalized.append(day)
+    if not normalized:
+        raise ValueError("Selecteer minimaal één leverdag")
+    return normalized
 
 
 class CustomerCreate(BaseModel):
@@ -275,6 +290,14 @@ class CustomerCreate(BaseModel):
     show_prices: bool = True
     discount_percentage: float | None = Field(None, ge=0, le=100)
     delivery_day: Literal["monday", "tuesday", "wednesday", "thursday", "friday"] = "thursday"
+    delivery_days: list[Literal["monday", "tuesday", "wednesday", "thursday", "friday"]] = Field(
+        default_factory=lambda: list(DEFAULT_DELIVERY_DAYS)
+    )
+
+    @field_validator("delivery_days")
+    @classmethod
+    def validate_delivery_days(cls, v: list[str]) -> list[str]:
+        return _normalize_delivery_days(v)
 
 
 class CustomerUpdate(BaseModel):
@@ -282,6 +305,14 @@ class CustomerUpdate(BaseModel):
     show_prices: bool | None = None
     discount_percentage: float | None = None
     delivery_day: Literal["monday", "tuesday", "wednesday", "thursday", "friday"] | None = None
+    delivery_days: list[Literal["monday", "tuesday", "wednesday", "thursday", "friday"]] | None = None
+
+    @field_validator("delivery_days")
+    @classmethod
+    def validate_delivery_days(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        return _normalize_delivery_days(v)
 
 
 class CustomerResponse(BaseModel):
@@ -290,6 +321,7 @@ class CustomerResponse(BaseModel):
     show_prices: bool = True
     discount_percentage: float | None = None
     delivery_day: str = "thursday"
+    delivery_days: list[str] = []
     sku_ids: list[int] = []
     sku_count: int = 0
     created_at: datetime
@@ -825,4 +857,5 @@ class DeadlineResponse(BaseModel):
     delivery_thursday: str = ""
     delivery_friday: str = ""
     customer_delivery_day: str | None = None
+    customer_delivery_days: list[str] = []
     customer_delivery_date: str | None = None
