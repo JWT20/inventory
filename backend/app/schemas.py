@@ -464,6 +464,34 @@ class RegisterReferenceRequest(BaseModel):
     sku_id: int = Field(..., gt=0)
 
 
+class SKUDistributionLine(BaseModel):
+    """One customer's demand for a scanned SKU. Display only — books nothing."""
+    order_id: int
+    order_line_id: int
+    customer_name: str
+    rolcontainer: str
+    delivery_day: str
+    delivery_week: str | None = None
+    ordered_quantity: int
+    booked_count: int
+    # Remaining bookable now, respecting the fair weekly allocation cap.
+    remaining_quantity: int
+    # Fully delivered (booked >= ordered) — shown with a ✓, not hidden.
+    is_complete: bool
+    # Belongs to the order the koerier started scanning in.
+    is_context_order: bool
+
+
+class SKUDistributionResponse(BaseModel):
+    """Read-only verdeel-lijst: which customers a scanned SKU still needs to go to."""
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    scope: str
+    total_remaining: int
+    lines: list[SKUDistributionLine]
+
+
 # --- Inbound Shipments ---
 
 class ShipmentLineCreate(BaseModel):

@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, Form, HTTPException, Response, UploadFile
 from sqlalchemy.exc import IntegrityError
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, contains_eager, joinedload
 
 from app.auth import require_inbound_booker
 from app.config import settings
@@ -22,6 +22,8 @@ from app.schemas import (
     MatchResult,
     MissingReferenceCandidate,
     RegisterReferenceRequest,
+    SKUDistributionLine,
+    SKUDistributionResponse,
     SKUResponse,
 )
 from app.services.storage import storage
@@ -57,7 +59,12 @@ def _scope_label(context_order: "Order") -> str:
     return "de open orders" if context_order.delivery_week else "deze order"
 
 
-def _open_scope_lines_query(db: Session, context_order: "Order", sku_id: int | None = None):
+def _open_scope_lines_query(
+    db: Session,
+    context_order: "Order",
+    sku_id: int | None = None,
+    include_complete: bool = False,
+):
     """Open active order lines across all open weeks, or the order itself as fallback.
 
     A scheduled order (with a delivery_week) opens up matching against every active
@@ -65,15 +72,17 @@ def _open_scope_lines_query(db: Session, context_order: "Order", sku_id: int | N
     scanning incoming boxes and each one is routed to whichever open order line matches.
     An ad-hoc order (no delivery_week) stays scoped to itself and is never swept into
     weekly matching.
+
+    With ``include_complete=True`` fully-booked lines are kept too, so a read-only
+    overview can show already-finished customers with a ✓ instead of hiding them.
     """
     query = (
         db.query(OrderLine)
         .join(Order, OrderLine.order_id == Order.id)
-        .filter(
-            Order.status == "active",
-            OrderLine.booked_count < OrderLine.quantity,
-        )
+        .filter(Order.status == "active")
     )
+    if not include_complete:
+        query = query.filter(OrderLine.booked_count < OrderLine.quantity)
     if context_order.delivery_week:
         query = query.filter(
             Order.organization_id == context_order.organization_id,
@@ -393,6 +402,108 @@ async def identify_box(
             scan_image_url=_image_url(scan_key),
             reference_image_urls=_all_reference_image_urls(db, matched_sku.id),
         )
+
+
+@router.get("/distribution", response_model=SKUDistributionResponse)
+def sku_distribution(
+    order_id: int,
+    sku_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_inbound_booker),
+):
+    """Read-only verdeel-lijst for a scanned SKU.
+
+    After a scan identifies a SKU, this shows which customers the SKU still needs
+    to go to across the open scope (the whole week for scheduled orders, or just
+    the order itself for ad-hoc ones), with the fair allocation cap as ``remaining``.
+    Pure display: it books nothing and never touches stock.
+    """
+    context_order = db.get(Order, order_id)
+    if not context_order:
+        raise HTTPException(404, "Order niet gevonden")
+    # Owners/members may only read their own organization's orders. Platform admins
+    # and couriers serve across organizations, so they are unrestricted — same guard
+    # the concept-product endpoint applies.
+    if (
+        user.role in ("owner", "member")
+        and context_order.organization_id != user.organization_id
+    ):
+        raise HTTPException(403, "Geen toegang tot deze organisatie")
+    sku = db.get(SKU, sku_id)
+    if not sku:
+        raise HTTPException(404, "SKU niet gevonden")
+    # The verdeel-lijst is always scoped to the context order's organization (caps and
+    # stock below use it), so a SKU from another org has no place here. Reject as "not
+    # found" rather than leaking its code/name across the tenant boundary. Global SKUs
+    # (organization_id is None) are shared and stay visible.
+    if sku.organization_id not in (None, context_order.organization_id):
+        raise HTTPException(404, "SKU niet gevonden")
+
+    # Scope to the context order's own delivery week: the koerier is distributing
+    # this week's boxes, not every future week's open orders. Eager-load customer and
+    # order to avoid an N+1 over the result set.
+    query = _open_scope_lines_query(db, context_order, sku_id, include_complete=True)
+    if context_order.delivery_week:
+        query = query.filter(Order.delivery_week == context_order.delivery_week)
+    lines = query.options(
+        contains_eager(OrderLine.order),
+        joinedload(OrderLine.customer),
+    ).all()
+    cap_remaining = _cap_remaining_by_line(db, context_order, sku_id, lines)
+
+    dist_lines = [
+        SKUDistributionLine(
+            order_id=line.order_id,
+            order_line_id=line.id,
+            customer_name=line.customer_name,
+            rolcontainer=f"KLANT {line.customer_name.upper()}",
+            delivery_day=line.delivery_day,
+            delivery_week=line.order.delivery_week,
+            ordered_quantity=line.quantity,
+            booked_count=line.booked_count,
+            remaining_quantity=cap_remaining.get(line.id, max(0, line.quantity - line.booked_count)),
+            is_complete=line.booked_count >= line.quantity,
+            is_context_order=line.order_id == context_order.id,
+        )
+        for line in lines
+    ]
+    # Context order first, then week, delivery day, customer — stable and scannable.
+    dist_lines.sort(
+        key=lambda d: (
+            0 if d.is_context_order else 1,
+            d.delivery_week or "",
+            _DELIVERY_DAY_SORT.get(d.delivery_day, 9),
+            d.customer_name.lower(),
+        )
+    )
+
+    # Per-(week, day) caps are each computed against the same shared stock, so the rows
+    # can collectively promise more boxes than physically exist. Hand out the real
+    # available stock across the rows in display order (context order first) so no row —
+    # and therefore the headline total — ever overpromises what is on hand.
+    if context_order.delivery_week:
+        balance = (
+            db.query(InventoryBalance)
+            .filter(
+                InventoryBalance.sku_id == sku_id,
+                InventoryBalance.organization_id == context_order.organization_id,
+            )
+            .first()
+        )
+        budget = balance.quantity_available if balance else 0
+        for d in dist_lines:
+            d.remaining_quantity = min(d.remaining_quantity, budget)
+            budget -= d.remaining_quantity
+    total_remaining = sum(d.remaining_quantity for d in dist_lines)
+
+    return SKUDistributionResponse(
+        sku_id=sku.id,
+        sku_code=sku.sku_code,
+        sku_name=sku.name,
+        scope=_scope_label(context_order),
+        total_remaining=total_remaining,
+        lines=dist_lines,
+    )
 
 
 @router.post("/book", response_model=BookingConfirmation)
