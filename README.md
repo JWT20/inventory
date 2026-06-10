@@ -36,10 +36,10 @@ Eliminates person-dependency in the wine picking process by identifying boxes vi
 
 ## How It Works
 
-1. **Reference registration** — Upload a photo of each wine box. Gemini Vision generates a structured text description, which is then converted to a 3072-dimensional embedding and stored in pgvector.
-2. **Scanning** — Point the phone camera at an incoming box. The same vision+embedding pipeline runs on the scan image.
-3. **Matching** — PostgreSQL's pgvector performs cosine similarity search between the scan embedding and all reference embeddings. If the best match exceeds the confidence threshold (default 0.80), the box is identified.
-4. **Booking** — Each successful scan creates a booking (1 scan = 1 box = 1 booking), assigns the box to a customer rolcontainer, and decrements the remaining count on the order line. Orders auto-complete when all lines are fully booked.
+1. **Reference registration** — Upload a photo of each product (a wine box, or the bottle itself for loose-bottle products). Gemini Vision generates a structured text description, which is then converted to a 3072-dimensional embedding and stored in pgvector.
+2. **Scanning** — Point the phone camera at an incoming box or bottle (the courier picks the scan mode). The same vision+embedding pipeline runs on the scan image.
+3. **Matching** — PostgreSQL's pgvector performs cosine similarity search between the scan embedding and the reference embeddings of the same unit type (box scans match box references, bottle scans match bottle references). If the best match exceeds the confidence threshold (default 0.80), the product is identified.
+4. **Booking** — Each successful scan creates a booking (1 scan = 1 order unit = 1 booking; a unit is a box, or a single bottle for `is_bottle` products), assigns it to a customer rolcontainer, and decrements the remaining count on the order line. Orders auto-complete when all lines are fully booked.
 
 ## Quick Start
 

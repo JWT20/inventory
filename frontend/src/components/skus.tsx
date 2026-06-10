@@ -574,7 +574,7 @@ function SKUDialog({
   }
 
   function failedImageTitle(img: RefImage) {
-    if (img.processing_error_code === WINE_CHECK_FAILED) return "Niet herkend als wijndoos";
+    if (img.processing_error_code === WINE_CHECK_FAILED) return "Niet herkend als wijndoos of fles";
     if (img.processing_error_code === DUPLICATE_CHECK_FAILED) return "Mogelijk duplicaat gevonden";
     return "Beeldanalyse mislukt";
   }

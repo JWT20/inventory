@@ -870,6 +870,7 @@ def confirm_booking(
         details={
             "order_reference": order.reference,
             "sku_code": sku.sku_code,
+            "is_bottle": sku.is_bottle,
             "confidence": data.get("confidence"),
             "rolcontainer": rolcontainer,
             "klant": order_line.customer_name,
@@ -1146,6 +1147,7 @@ def book_more(
         details={
             "order_reference": order.reference,
             "sku_code": sku.sku_code,
+            "is_bottle": sku.is_bottle,
             "rolcontainer": rolcontainer,
             "klant": order_line.customer_name,
             "order_completed": all_booked,
