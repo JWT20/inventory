@@ -249,8 +249,8 @@ export const api = {
     request(`/skus/${skuId}/images/${imageId}`, { method: "DELETE" }),
 
   // Receiving
-  identifyBox: (blob: Blob) =>
-    upload("/receiving/identify", blob, "scan.jpg"),
+  identifyBox: (blob: Blob, scanMode: "box" | "bottle" = "box") =>
+    uploadWithFields("/receiving/identify", blob, { scan_mode: scanMode }, "scan.jpg"),
   createNewProduct: (
     blob: Blob,
     skuCode: string,
@@ -343,11 +343,12 @@ export const api = {
   getDeadline: (week?: string) =>
     request(`/orders/deadline${week ? `?week=${week}` : ""}`),
 
-  // Receiving - book (1 scan = 1 box = 1 booking)
-  bookBox: (blob: Blob, orderId: number) => {
+  // Receiving - book (1 scan = 1 besteleenheid = 1 booking)
+  bookBox: (blob: Blob, orderId: number, scanMode: "box" | "bottle" = "box") => {
     const form = new FormData();
     form.append("file", blob, "scan.jpg");
     form.append("order_id", String(orderId));
+    form.append("scan_mode", scanMode);
     return request("/receiving/book", { method: "POST", body: form });
   },
 

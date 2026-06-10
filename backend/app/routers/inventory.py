@@ -94,18 +94,29 @@ def _to_int(value: object, default: int = 0) -> int:
         return default
 
 
-def _resolve_inbound_quantity(row: dict) -> tuple[int, int, str]:
-    """Normalize LLM quantity output to (booked_boxes, raw_quantity, unit).
+def _resolve_inbound_quantity(row: dict, is_bottle: bool = False) -> tuple[int, int, str]:
+    """Normalize LLM quantity output to (booked_units, raw_quantity, unit).
 
-    Rules:
+    Rules for box SKUs (default):
     - unit=boxes → use as-is.
     - unit=pieces → convert to boxes using BOTTLES_PER_BOX; partial box (<6) → 0.
     - unit unknown/missing → fall back to legacy quantity_boxes field if present,
       else 0 with unit='unknown' so the operator must confirm.
+
+    Rules for bottle SKUs (is_bottle=True) — the order unit is a single bottle:
+    - unit=pieces → count one-to-one (no division by 6).
+    - unit=boxes/colli → ambiguous for a bottle product → unit='unknown' so the
+      operator confirms the intended number of bottles.
     """
     unit_raw = str(row.get("quantity_unit") or "").strip().lower()
     qty_raw = _to_int(row.get("quantity"), 0)
     legacy_boxes = _to_int(row.get("quantity_boxes"), 0)
+
+    if is_bottle:
+        if unit_raw in _PIECE_UNIT_ALIASES:
+            qty_raw = max(0, qty_raw)
+            return (qty_raw, qty_raw, "pieces")
+        return (0, max(qty_raw, legacy_boxes, 0), "unknown")
 
     if unit_raw in _BOX_UNIT_ALIASES:
         return (max(0, qty_raw), max(0, qty_raw), "boxes")
@@ -331,6 +342,7 @@ async def _build_preview_lines(
     mapping_lookup: dict[tuple[str, str], tuple[int, str, str]] = {}
     sku_candidates: dict[str, tuple[int, str, str]] = {}
     supplier_scoped_candidates: dict[str, tuple[int, str, str]] = {}
+    is_bottle_by_id: dict[int, bool] = {}
     if normalized_supplier:
         mappings = db.query(SupplierSKUMapping, SKU).join(
             SKU, SKU.id == SupplierSKUMapping.sku_id
@@ -347,6 +359,7 @@ async def _build_preview_lines(
                 (_normalize_supplier_name(mapping.supplier_name), _normalize_supplier_code(mapping.supplier_code))
             ] = normalized_mapping
             supplier_scoped_candidates[_normalize_supplier_code(sku.sku_code)] = normalized_mapping
+            is_bottle_by_id[sku.id] = sku.is_bottle
 
     sku_query = db.query(SKU)
     if target_org_id is not None:
@@ -355,6 +368,7 @@ async def _build_preview_lines(
         sku_query = sku_query.filter(SKU.organization_id.is_(None))
     for sku in sku_query.all():
         sku_candidates[_normalize_supplier_code(sku.sku_code)] = (sku.id, sku.sku_code, sku.name)
+        is_bottle_by_id[sku.id] = sku.is_bottle
 
     lines: list[ShipmentExtractedLine] = []
     for row in extracted.get("lines", []):
@@ -404,6 +418,14 @@ async def _build_preview_lines(
                 match_source = "llm_suggestion"
                 if llm_confidence >= LLM_ARTICLE_MATCH_MIN_CONFIDENCE:
                     confidence = max(confidence, llm_confidence)
+
+        # Re-resolve the quantity once the matched SKU's unit is known: a
+        # bottle SKU counts pieces one-to-one and flags box quantities as
+        # ambiguous instead of dividing by BOTTLES_PER_BOX.
+        if matched_id is not None and is_bottle_by_id.get(matched_id):
+            qty, qty_raw, qty_unit = _resolve_inbound_quantity(row_dict, is_bottle=True)
+            if qty_unit == "unknown":
+                needs_confirmation = True
 
         lines.append(ShipmentExtractedLine(
             supplier_code=code,
