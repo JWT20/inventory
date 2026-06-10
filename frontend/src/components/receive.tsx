@@ -10,6 +10,7 @@ import { ImageLightbox } from "@/components/image-lightbox";
 import { QuantityPicker } from "@/components/quantity-picker";
 import { Skeleton } from "@/components/ui/skeleton";
 import { X } from "lucide-react";
+import { formatBoxesBottles, formatBookedBoxesBottles } from "@/lib/units";
 
 interface OrderLine {
   delivery_day: string;
@@ -26,7 +27,50 @@ interface Order {
   customer_name: string | null;
   total_boxes: number;
   booked_boxes: number;
+  total_bottles: number;
+  booked_bottles: number;
   lines?: OrderLine[];
+}
+
+type ScanMode = "box" | "bottle";
+
+const SCAN_MODE_WORD: Record<ScanMode, string> = { box: "doos", bottle: "fles" };
+const SCAN_MODE_WORD_PLURAL: Record<ScanMode, string> = { box: "dozen", bottle: "flessen" };
+
+/** Toggle between scanning boxes and loose bottles — selects the match pool. */
+function ScanModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: ScanMode;
+  onChange: (mode: ScanMode) => void;
+}) {
+  return (
+    <div className="flex rounded-md border border-border overflow-hidden mb-3 text-sm">
+      <button
+        type="button"
+        onClick={() => onChange("box")}
+        className={`flex-1 px-3 py-2 transition-colors ${
+          mode === "box"
+            ? "bg-primary text-primary-foreground"
+            : "bg-background hover:bg-muted"
+        }`}
+      >
+        Doos
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("bottle")}
+        className={`flex-1 px-3 py-2 transition-colors border-l border-border ${
+          mode === "bottle"
+            ? "bg-primary text-primary-foreground"
+            : "bg-background hover:bg-muted"
+        }`}
+      >
+        Fles
+      </button>
+    </div>
+  );
 }
 
 const DELIVERY_DAY_LABELS: Record<string, string> = {
@@ -165,6 +209,7 @@ type Step = "select-order" | "this-week" | "scan" | "result" | "confirm" | "iden
 
 export function ReceivePage() {
   const [step, setStep] = useState<Step>("select-order");
+  const [scanMode, setScanMode] = useState<ScanMode>("box");
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [overviewWeek, setOverviewWeek] = useState(() => getISOWeek(new Date()));
   const [lastBooking, setLastBooking] = useState<BookingResult | null>(null);
@@ -230,6 +275,8 @@ export function ReceivePage() {
       {step === "scan" && selectedOrder && (
         <ScanStep
           order={selectedOrder}
+          scanMode={scanMode}
+          onScanModeChange={setScanMode}
           onBooked={handleBooked}
           onBack={reset}
         />
@@ -238,6 +285,7 @@ export function ReceivePage() {
       {step === "confirm" && pendingConfirmation && selectedOrder && (
         <ConfirmStep
           confirmation={pendingConfirmation}
+          scanMode={scanMode}
           onConfirmed={handleConfirmed}
           onReject={scanNext}
         />
@@ -247,6 +295,7 @@ export function ReceivePage() {
         <ResultStep
           booking={lastBooking}
           order={selectedOrder}
+          scanMode={scanMode}
           onNext={scanNext}
           onDone={reset}
         />
@@ -254,6 +303,8 @@ export function ReceivePage() {
 
       {step === "identify-scan" && (
         <IdentifyScanStep
+          scanMode={scanMode}
+          onScanModeChange={setScanMode}
           onIdentified={handleIdentified}
           onBack={reset}
         />
@@ -302,7 +353,13 @@ function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (order: Ord
         {o.customer_name ?? "—"}
       </p>
       <p className="text-sm text-muted-foreground">
-        {o.booked_boxes}/{o.total_boxes} dozen geboekt
+        {formatBookedBoxesBottles(
+          o.booked_boxes,
+          o.total_boxes,
+          o.booked_bottles,
+          o.total_bottles,
+        )}{" "}
+        geboekt
       </p>
     </Card>
   );
@@ -332,8 +389,10 @@ function OrderSelectStep({
         const active = all.filter((o: Order) => o.status === "active");
         // Sort by booked percentage ascending — least progress first
         active.sort((a: Order, b: Order) => {
-          const pctA = a.total_boxes > 0 ? a.booked_boxes / a.total_boxes : 0;
-          const pctB = b.total_boxes > 0 ? b.booked_boxes / b.total_boxes : 0;
+          const totalA = a.total_boxes + a.total_bottles;
+          const totalB = b.total_boxes + b.total_bottles;
+          const pctA = totalA > 0 ? (a.booked_boxes + a.booked_bottles) / totalA : 0;
+          const pctB = totalB > 0 ? (b.booked_boxes + b.booked_bottles) / totalB : 0;
           return pctA - pctB;
         });
         setOrders(active);
@@ -368,7 +427,7 @@ function OrderSelectStep({
       </div>
 
       <p className="text-sm text-muted-foreground mb-3">
-        Kies een actieve order om dozen te scannen
+        Kies een actieve order om te scannen
       </p>
 
       {loading ? (
@@ -532,16 +591,21 @@ function ThisWeekStep({ week: initialWeek, onBack }: { week: string; onBack: () 
 
 function ScanStep({
   order,
+  scanMode,
+  onScanModeChange,
   onBooked,
   onBack,
 }: {
   order: Order;
+  scanMode: ScanMode;
+  onScanModeChange: (mode: ScanMode) => void;
   onBooked: (booking: ConfirmationData) => void;
   onBack: () => void;
 }) {
   const [scanning, setScanning] = useState(false);
   const [openProgress, setOpenProgress] = useState<{
     openBoxes: number;
+    openBottles: number;
     openOrders: number;
   } | null>(null);
   const [needsRef, setNeedsRef] = useState<{
@@ -567,21 +631,26 @@ function ScanStep({
           .filter((o) => o.status === "active" && o.organization_id === order.organization_id)
           .map((o) => ({
             ...o,
-            remaining: Math.max(o.total_boxes - o.booked_boxes, 0),
+            remainingBoxes: Math.max(o.total_boxes - o.booked_boxes, 0),
+            remainingBottles: Math.max(o.total_bottles - o.booked_bottles, 0),
           }))
-          .filter((o) => o.remaining > 0);
+          .filter((o) => o.remainingBoxes + o.remainingBottles > 0);
 
         if (!cancelled) {
           setOpenProgress({
-            openBoxes: openOrders.reduce((sum, o) => sum + o.remaining, 0),
+            openBoxes: openOrders.reduce((sum, o) => sum + o.remainingBoxes, 0),
+            openBottles: openOrders.reduce((sum, o) => sum + o.remainingBottles, 0),
             openOrders: openOrders.length,
           });
         }
       } catch {
         if (!cancelled) {
+          const remainingBoxes = Math.max(order.total_boxes - order.booked_boxes, 0);
+          const remainingBottles = Math.max(order.total_bottles - order.booked_bottles, 0);
           setOpenProgress({
-            openBoxes: Math.max(order.total_boxes - order.booked_boxes, 0),
-            openOrders: Math.max(order.total_boxes - order.booked_boxes, 0) > 0 ? 1 : 0,
+            openBoxes: remainingBoxes,
+            openBottles: remainingBottles,
+            openOrders: remainingBoxes + remainingBottles > 0 ? 1 : 0,
           });
         }
       }
@@ -636,7 +705,7 @@ function ScanStep({
     }
 
     try {
-      const confirmation: ConfirmationData = await api.bookBox(blob, order.id);
+      const confirmation: ConfirmationData = await api.bookBox(blob, order.id, scanMode);
       onBooked(confirmation);
     } catch (err: unknown) {
       if (
@@ -681,7 +750,7 @@ function ScanStep({
           </p>
           <p className="text-xs text-muted-foreground">
             {openProgress
-              ? `${openProgress.openBoxes} dozen open · ${openProgress.openOrders} orders`
+              ? `${formatBoxesBottles(openProgress.openBoxes, openProgress.openBottles)} open · ${openProgress.openOrders} orders`
               : "Open orders laden..."}
           </p>
         </Card>
@@ -689,7 +758,7 @@ function ScanStep({
         <Card className="p-3 mb-3 bg-amber-50 border-amber-200">
           <p className="text-sm font-semibold mb-1">Geen referentiefoto bekend</p>
           <p className="text-xs text-muted-foreground">
-            Welke SKU staat er op de doos? Je scan wordt dan opgeslagen als
+            Welke SKU staat er op de {SCAN_MODE_WORD[scanMode]}? Je scan wordt dan opgeslagen als
             referentiefoto en de boeking gaat door.
           </p>
         </Card>
@@ -736,13 +805,15 @@ function ScanStep({
         </p>
         <p className="text-xs text-muted-foreground">
           {openProgress
-            ? `${openProgress.openBoxes} dozen open · ${openProgress.openOrders} orders`
+            ? `${formatBoxesBottles(openProgress.openBoxes, openProgress.openBottles)} open · ${openProgress.openOrders} orders`
             : "Open orders laden..."}
         </p>
       </Card>
 
+      <ScanModeToggle mode={scanMode} onChange={onScanModeChange} />
+
       <p className="text-sm text-muted-foreground mb-3">
-        Richt de camera op de doos en druk op Scan
+        Richt de camera op de {SCAN_MODE_WORD[scanMode]} en druk op Scan
       </p>
       <div className="relative w-full aspect-[4/3] rounded-lg overflow-hidden bg-black mb-3">
         <video
@@ -871,11 +942,13 @@ function DistributionPanel({ orderId, skuId, refreshKey }: { orderId: number; sk
 function ResultStep({
   booking,
   order,
+  scanMode,
   onNext,
   onDone,
 }: {
   booking: BookingResult;
   order: Order;
+  scanMode: ScanMode;
   onNext: () => void;
   onDone: () => void;
 }) {
@@ -1027,7 +1100,7 @@ function ResultStep({
 
       <div className="flex flex-col gap-3">
         <Button size="lg" className="w-full h-14 text-lg" onClick={onNext}>
-          Volgende doos scannen
+          Volgende {SCAN_MODE_WORD[scanMode]} scannen
         </Button>
         <Button variant="secondary" className="w-full" onClick={onDone}>
           Terug naar orders
@@ -1048,13 +1121,17 @@ function ResultStep({
 
 function ConfirmStep({
   confirmation,
+  scanMode,
   onConfirmed,
   onReject,
 }: {
   confirmation: ConfirmationData;
+  scanMode: ScanMode;
   onConfirmed: (booking: BookingResult) => void;
   onReject: () => void;
 }) {
+  const unitWord = SCAN_MODE_WORD[scanMode];
+  const unitWordPlural = SCAN_MODE_WORD_PLURAL[scanMode];
   const [confirming, setConfirming] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
@@ -1091,7 +1168,7 @@ function ConfirmStep({
             Meerdere matches
           </p>
           <p className="text-orange-300 text-sm">
-            Vergelijkbare producten gevonden — welke doos is dit?
+            Vergelijkbare producten gevonden — welke {unitWord} is dit?
           </p>
         </div>
       ) : highConfidence ? (
@@ -1147,7 +1224,7 @@ function ConfirmStep({
       {maxQuantity > 1 && (
         <Card className="p-4 mb-4">
           <p className="text-xs text-muted-foreground mb-2 font-semibold text-center">
-            Hoeveel dozen van dit product?
+            Hoeveel {unitWordPlural} van dit product?
           </p>
           <QuantityPicker value={quantity} onChange={setQuantity} max={maxQuantity} />
           <p className="text-xs text-muted-foreground mt-2 text-center">
@@ -1155,7 +1232,7 @@ function ConfirmStep({
           </p>
           {hasCap && (
             <p className="text-xs text-orange-400 mt-2 text-center">
-              Max voor {confirmation.klant} vandaag: {confirmation.cap_for_customer} van {confirmation.ordered_by_customer} dozen {confirmation.sku_name}
+              Max voor {confirmation.klant} vandaag: {confirmation.cap_for_customer} van {confirmation.ordered_by_customer} {unitWordPlural} {confirmation.sku_name}
             </p>
           )}
         </Card>
@@ -1163,7 +1240,7 @@ function ConfirmStep({
       {maxQuantity <= 1 && hasCap && (
         <Card className="p-4 mb-4">
           <p className="text-xs text-orange-400 text-center">
-            Max voor {confirmation.klant} vandaag: {confirmation.cap_for_customer} van {confirmation.ordered_by_customer} dozen {confirmation.sku_name}
+            Max voor {confirmation.klant} vandaag: {confirmation.cap_for_customer} van {confirmation.ordered_by_customer} {unitWordPlural} {confirmation.sku_name}
           </p>
         </Card>
       )}
@@ -1277,7 +1354,7 @@ function ConfirmStep({
             </div>
 
             <p className="text-xs text-muted-foreground mb-2 font-semibold">
-              Is dit dezelfde doos?
+              Is dit dezelfde {unitWord}?
             </p>
             <ImageSlideshow
               images={confirmation.reference_image_urls?.length ? confirmation.reference_image_urls : (confirmation.reference_image_url ? [confirmation.reference_image_url] : [])}
@@ -1324,9 +1401,13 @@ function ConfirmStep({
 /* ---------- Identify Scan (without order) ---------- */
 
 function IdentifyScanStep({
+  scanMode,
+  onScanModeChange,
   onIdentified,
   onBack,
 }: {
+  scanMode: ScanMode;
+  onScanModeChange: (mode: ScanMode) => void;
   onIdentified: (result: IdentifyResult) => void;
   onBack: () => void;
 }) {
@@ -1378,11 +1459,13 @@ function IdentifyScanStep({
     }
 
     try {
-      const result: IdentifyResult | null = await api.identifyBox(blob);
+      const result: IdentifyResult | null = await api.identifyBox(blob, scanMode);
       if (result) {
         onIdentified(result);
       } else {
-        toast.error("Doos niet herkend — geen match gevonden");
+        toast.error(
+          `${scanMode === "bottle" ? "Fles" : "Doos"} niet herkend — geen match gevonden`,
+        );
       }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Scanfout");
@@ -1396,12 +1479,14 @@ function IdentifyScanStep({
       <Card className="p-3 mb-3">
         <p className="text-sm font-semibold">Scan zonder order</p>
         <p className="text-xs text-muted-foreground">
-          Identificeer een doos zonder te boeken
+          Identificeer een {SCAN_MODE_WORD[scanMode]} zonder te boeken
         </p>
       </Card>
 
+      <ScanModeToggle mode={scanMode} onChange={onScanModeChange} />
+
       <p className="text-sm text-muted-foreground mb-3">
-        Richt de camera op de doos en druk op Scan
+        Richt de camera op de {SCAN_MODE_WORD[scanMode]} en druk op Scan
       </p>
       <div className="relative w-full aspect-[4/3] rounded-lg overflow-hidden bg-black mb-3">
         <video

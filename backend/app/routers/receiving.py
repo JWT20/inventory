@@ -30,7 +30,11 @@ from app.services.storage import storage
 from langfuse import observe, propagate_attributes
 
 from app.services.allocation import compute_allocation
-from app.services.embedding import assess_description_quality, process_image
+from app.services.embedding import (
+    assess_description_quality,
+    generate_embedding,
+    process_image,
+)
 from app.services.matching import find_best_matches
 from app.services.product_status import recompute_active
 
@@ -180,13 +184,20 @@ def _select_order_line_for_scope(
 def _missing_reference_candidates(
     db: Session,
     context_order: "Order",
+    is_bottle: bool | None = None,
 ) -> list[MissingReferenceCandidate]:
-    """SKUs in the scan scope that have no usable reference image and still need bookings."""
+    """SKUs in the scan scope that have no usable reference image and still need bookings.
+
+    When *is_bottle* is set, only SKUs of that unit type are offered — a bottle
+    scan should never become the reference image of a box product.
+    """
     by_sku: dict[int, MissingReferenceCandidate] = {}
     for line in _open_scope_lines_query(db, context_order).all():
         if line.booked_count >= line.quantity:
             continue
         sku = line.sku
+        if is_bottle is not None and sku.is_bottle != is_bottle:
+            continue
         if not any(img.processing_status in _USABLE_REF_STATUSES for img in sku.reference_images):
             remaining = line.quantity - line.booked_count
             existing = by_sku.get(sku.id)
@@ -256,13 +267,18 @@ router = APIRouter(
 @observe()
 async def identify_box(
     file: UploadFile,
+    scan_mode: str = Form("box"),
     db: Session = Depends(get_db),
     user: User = Depends(require_inbound_booker),
 ):
-    """Scan a box and identify it against reference images.
+    """Scan a box or bottle and identify it against reference images.
 
+    ``scan_mode`` selects the match pool: box scans only match box
+    references, bottle scans only bottle references. In bottle mode the
+    is_package gate is skipped — the courier chose the mode deliberately.
     Returns the matched SKU, or null if no match found.
     """
+    bottle_mode = scan_mode == "bottle"
     with propagate_attributes(
         user_id=str(user.id),
         metadata={"endpoint": "/api/receiving/identify", "username": user.username},
@@ -284,7 +300,7 @@ async def identify_box(
             raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
         t_process = time.perf_counter()
 
-        if not is_package:
+        if not is_package and not bottle_mode:
             logger.info(
                 "[TIMING] identify total=%.0fms (rejected: not a package) | read=%.0fms save=%.0fms process_image=%.0fms",
                 (t_process - t_start) * 1000,
@@ -302,13 +318,20 @@ async def identify_box(
                     "threshold": settings.match_threshold,
                     "rejected": True,
                     "rejection_reason": "not_a_package",
+                    "scan_mode": scan_mode,
                 },
                 user=user,
                 resource_type="receiving",
             )
             return None
 
-        candidates = find_best_matches(db, embedding, top_n=5)
+        # In bottle mode a scan the classifier rejected still proceeds; the
+        # description was not embedded yet (process_image skips that), so do
+        # it here before matching.
+        if embedding is None:
+            embedding = await generate_embedding(description)
+
+        candidates = find_best_matches(db, embedding, top_n=5, is_bottle=bottle_mode)
         t_match = time.perf_counter()
 
         matched_sku, confidence, matched_ref_desc = None, 0.0, None
@@ -343,6 +366,7 @@ async def identify_box(
                 "vision_description": description,
                 "candidates": candidate_details,
                 "threshold": settings.match_threshold,
+                "scan_mode": scan_mode,
             },
             user=user,
             resource_type="receiving",
@@ -511,14 +535,18 @@ def sku_distribution(
 async def book_box(
     file: UploadFile,
     order_id: int = Form(...),
+    scan_mode: str = Form("box"),
     db: Session = Depends(get_db),
     user: User = Depends(require_inbound_booker),
 ):
-    """1 scan = 1 box = 1 booking.
+    """1 scan = 1 besteleenheid (doos of fles) = 1 booking.
 
-    Scans the box, identifies the SKU, finds the matching order line,
-    and creates a booking. Returns the rolcontainer assignment.
+    Scans the box or bottle, identifies the SKU, finds the matching order
+    line, and creates a booking. Returns the rolcontainer assignment.
+    ``scan_mode`` restricts matching to box or bottle references; in bottle
+    mode the is_package gate is skipped.
     """
+    bottle_mode = scan_mode == "bottle"
     with propagate_attributes(
         user_id=str(user.id),
         session_id=str(order_id),
@@ -548,7 +576,7 @@ async def book_box(
             raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
         t_process = time.perf_counter()
 
-        if not is_package:
+        if not is_package and not bottle_mode:
             publish_event(
                 "box_booked",
                 details={
@@ -556,6 +584,7 @@ async def book_box(
                     "rejected": True,
                     "rejection_reason": "not_a_package",
                     "vision_description": description,
+                    "scan_mode": scan_mode,
                 },
                 user=user,
                 resource_type="booking",
@@ -565,6 +594,13 @@ async def book_box(
                 "Dit is geen doos of verpakking — scan een productdoos",
             )
 
+        unit_word = "fles" if bottle_mode else "doos"
+
+        # Bottle mode skips the gate, but a rejected classification means the
+        # description was never embedded — do that now so matching can run.
+        if embedding is None:
+            embedding = await generate_embedding(description)
+
         # Match against open SKUs across all open orders (FIFO across weeks).
         scope_sku_ids = set(_scope_sku_ids(db, order))
         if not scope_sku_ids:
@@ -572,7 +608,9 @@ async def book_box(
                 400,
                 "Geen open orderregels gevonden",
             )
-        candidates = find_best_matches(db, embedding, top_n=5, sku_ids=list(scope_sku_ids))
+        candidates = find_best_matches(
+            db, embedding, top_n=5, sku_ids=list(scope_sku_ids), is_bottle=bottle_mode
+        )
         t_match = time.perf_counter()
 
         matched_sku, confidence, matched_image_path, matched_ref_desc = None, 0.0, None, None
@@ -580,15 +618,16 @@ async def book_box(
             matched_sku, confidence, matched_image_path, matched_ref_desc = candidates[0]
 
         # Always run an unrestricted search to detect cross-order ambiguity
-        all_candidates = find_best_matches(db, embedding, top_n=5)
+        # (still within the same unit pool).
+        all_candidates = find_best_matches(db, embedding, top_n=5, is_bottle=bottle_mode)
 
         if matched_sku is None:
-            # Check if the box matches a SKU outside this week's open order lines.
+            # Check if the scan matches a SKU outside this week's open order lines.
             if all_candidates and all_candidates[0][1] >= settings.match_threshold:
                 wrong_sku = all_candidates[0][0]
                 raise HTTPException(
                     409,
-                    f"Deze doos lijkt op SKU {wrong_sku.sku_code} ({wrong_sku.name}), "
+                    f"Deze {unit_word} lijkt op SKU {wrong_sku.sku_code} ({wrong_sku.name}), "
                     f"maar die staat niet open in {_scope_label(order)}",
                 )
 
@@ -596,7 +635,7 @@ async def book_box(
             # matching cannot succeed against them. The koerier is holding the
             # bottle right now, so they can pick which SKU this box is for and
             # the scan becomes the first reference image.
-            missing_refs = _missing_reference_candidates(db, order)
+            missing_refs = _missing_reference_candidates(db, order, is_bottle=bottle_mode)
             if missing_refs:
                 register_token = _register_signer.dumps({
                     "context_order_id": order_id,
@@ -608,7 +647,7 @@ async def book_box(
                     detail={
                         "error": "needs_reference_image",
                         "message": (
-                            f"Doos niet herkend. Eén of meer SKUs in {_scope_label(order)} "
+                            f"{unit_word.capitalize()} niet herkend. Eén of meer SKUs in {_scope_label(order)} "
                             "hebben nog geen referentiefoto. Kies de juiste SKU "
                             "om deze scan als referentiefoto te registreren."
                         ),
@@ -620,7 +659,7 @@ async def book_box(
 
             raise HTTPException(
                 404,
-                f"Doos niet herkend — geen match gevonden met open SKUs in {_scope_label(order)}",
+                f"{unit_word.capitalize()} niet herkend — geen match gevonden met open SKUs in {_scope_label(order)}",
             )
 
         # Collect quality/confidence/ambiguity reasons for logging.
@@ -1183,18 +1222,23 @@ async def create_product_inline(
     name: str = Form(...),
     description: str | None = Form(None),
     category: str | None = Form(None),
+    is_bottle: bool = Form(False),
     db: Session = Depends(get_db),
     user: User = Depends(require_inbound_booker),
 ):
     """Quick-create a new SKU with a reference image from the camera.
 
-    Used when a scanned box is not recognized.
+    Used when a scanned box (or, with ``is_bottle``, a loose bottle) is not
+    recognized.
     """
     existing = db.query(SKU).filter(SKU.sku_code == sku_code).first()
     if existing:
         raise HTTPException(400, f"SKU code '{sku_code}' already exists")
 
-    sku = SKU(sku_code=sku_code, name=name, description=description, category=category)
+    sku = SKU(
+        sku_code=sku_code, name=name, description=description,
+        category=category, is_bottle=is_bottle,
+    )
     db.add(sku)
     db.flush()
 
@@ -1208,9 +1252,13 @@ async def create_product_inline(
         logger.exception("Failed to process image for new SKU %s", sku_code)
         raise HTTPException(502, "Beeldverwerking mislukt — controleer Gemini API-configuratie")
 
-    if not is_package:
+    if not is_package and not is_bottle:
         db.rollback()
         raise HTTPException(400, "Dit is geen doos of verpakking — upload alleen foto's van dozen")
+
+    if embedding is None:
+        # Bottle product admitted past the gate: embed the description here.
+        embedding = await generate_embedding(vision_description)
 
     # Duplicate detection via embedding similarity (check against all existing SKUs)
     dup_sku, similarity = _check_duplicate_embedding(db, embedding, exclude_sku_id=sku.id)

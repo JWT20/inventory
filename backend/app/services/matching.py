@@ -17,6 +17,7 @@ def find_best_matches(
     embedding: list[float],
     top_n: int = 5,
     sku_ids: list[int] | None = None,
+    is_bottle: bool | None = None,
 ) -> list[tuple[SKU, float, str | None, str | None]]:
     """Return the top-N matching SKUs for a given embedding.
 
@@ -25,7 +26,9 @@ def find_best_matches(
     Each SKU appears at most once, with the similarity, image path, and
     vision description of its best-matching reference image.  Only includes
     active SKUs.  When *sku_ids* is provided, only matches against reference
-    images belonging to those SKUs (order-aware scanning).
+    images belonging to those SKUs (order-aware scanning).  When *is_bottle*
+    is set, the match pool is restricted to bottle SKUs (True) or box SKUs
+    (False) so bottle scans never match box references and vice versa.
     """
     t0 = time.perf_counter()
     embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
@@ -36,6 +39,9 @@ def find_best_matches(
     if sku_ids:
         sku_filter = "AND ri.sku_id = ANY(:sku_ids)"
         params["sku_ids"] = sku_ids
+    if is_bottle is not None:
+        sku_filter += "\n                  AND s.is_bottle = :is_bottle"
+        params["is_bottle"] = is_bottle
 
     # Use DISTINCT ON to keep only the best-matching reference image per SKU,
     # then sort globally by similarity and apply the LIMIT.
