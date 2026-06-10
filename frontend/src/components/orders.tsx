@@ -101,6 +101,30 @@ const DELIVERY_DAY_ORDER: Record<string, number> = {
 
 const STANDARD_DELIVERY_DAYS = ["wednesday", "thursday", "friday"];
 
+const isoWeekString = (d: Date): string => {
+  // ISO week via the Thursday of the same week.
+  const thu = new Date(d);
+  thu.setDate(d.getDate() - ((d.getDay() + 6) % 7) + 3);
+  const yearStart = new Date(thu.getFullYear(), 0, 1);
+  const week = Math.ceil(((thu.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${thu.getFullYear()}-W${String(week).padStart(2, "0")}`;
+};
+
+const upcomingWeekOptions = (count = 4): { value: string; label: string }[] =>
+  Array.from({ length: count }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() + i * 7);
+    const value = isoWeekString(d);
+    const num = value.split("-W")[1];
+    const label =
+      i === 0
+        ? `Deze week (week ${num})`
+        : i === 1
+          ? `Volgende week (week ${num})`
+          : `Week ${num}`;
+    return { value, label };
+  });
+
 const normalizeDeliveryDays = (days: string[] | undefined, fallback?: string): string[] => {
   const source = days?.length ? days : fallback ? [fallback] : STANDARD_DELIVERY_DAYS;
   return [...new Set(source)].sort(
@@ -187,6 +211,7 @@ export function OrdersPage() {
   const [showHistory, setShowHistory] = useState(false);
   const [showUpcoming, setShowUpcoming] = useState(false);
   const [showPending, setShowPending] = useState(false);
+  const [showApproval, setShowApproval] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -207,6 +232,7 @@ export function OrdersPage() {
   }, [load]);
 
   const isCustomer = user?.role === "customer";
+  const isCourier = user?.role === "courier";
 
   // Who can create orders?
   const canCreate =
@@ -557,7 +583,7 @@ export function OrdersPage() {
           </p>
         ) : (
           <>
-            {approvalOrders.length > 0 && (
+            {!isCourier && approvalOrders.length > 0 && (
               <div>
                 <div className="flex items-center gap-2 mb-2">
                   <span className="text-sm font-semibold">Te beoordelen</span>
@@ -602,6 +628,21 @@ export function OrdersPage() {
                 Geen orders voor deze week
               </p>
             )}
+
+            {isCourier && approvalOrders.length > 0 &&
+              renderCollapsedGroup(
+                "Nog niet goedgekeurd",
+                `${approvalOrders.length} order${
+                  approvalOrders.length === 1 ? "" : "s"
+                } wacht${approvalOrders.length === 1 ? "" : "en"} op goedkeuring van de handelaar`,
+                showApproval,
+                () => setShowApproval((value) => !value),
+                <div className="space-y-3">
+                  {[...approvalOrders]
+                    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+                    .map((o) => renderOrderCard(o, true))}
+                </div>,
+              )}
 
             {!isCustomer && pendingOrders.length > 0 &&
               renderCollapsedGroup(
@@ -1098,6 +1139,7 @@ function OrderDetailDialog({
 }) {
   const { user } = useAuth();
   const [activating, setActivating] = useState(false);
+  const [approveWeek, setApproveWeek] = useState(() => isoWeekString(new Date()));
   const [closing, setClosing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [uploadingSkuId, setUploadingSkuId] = useState<number | null>(null);
@@ -1131,7 +1173,10 @@ function OrderDetailDialog({
     if (!order) return;
     setActivating(true);
     try {
-      await api.approveOrder(order.id);
+      await api.approveOrder(
+        order.id,
+        order.status === "pending_approval" ? approveWeek : undefined,
+      );
       toast.success(
         order.status === "pending_approval"
           ? "Order goedgekeurd"
@@ -1401,6 +1446,24 @@ function OrderDetailDialog({
             <p className="text-xs text-muted-foreground">
               {order.hidden_lines_count} orderregel(s) hebben verborgen prijzen.
             </p>
+          )}
+
+          {canApprove && order.status === "pending_approval" && (
+            <div>
+              <Label className="mb-1 block text-sm">Leverweek</Label>
+              <Select value={approveWeek} onValueChange={setApproveWeek}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {upcomingWeekOptions().map((w) => (
+                    <SelectItem key={w.value} value={w.value}>
+                      {w.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           )}
 
           {canApprove && (

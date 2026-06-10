@@ -319,8 +319,8 @@ export const api = {
     return request(`/orders${query ? `?${query}` : ""}`);
   },
   getOrder: (id: number) => request(`/orders/${id}`),
-  approveOrder: (id: number) =>
-    request(`/orders/${id}/approve`, { method: "POST" }),
+  approveOrder: (id: number, week?: string) =>
+    json(`/orders/${id}/approve`, "POST", week ? { week } : {}),
   closeOrder: (id: number) =>
     request(`/orders/${id}/close`, { method: "POST" }),
   deleteOrder: (id: number) => request(`/orders/${id}`, { method: "DELETE" }),

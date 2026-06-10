@@ -26,6 +26,7 @@ from app.models import (
 from app.schemas import (
     BookingResponse,
     ManualOrderCreate,
+    OrderApprove,
     MonthlyBoxesMonth,
     MonthlyBoxesOrganization,
     MonthlyBoxesResponse,
@@ -46,8 +47,12 @@ from app.schemas import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
 
-# Statuses a courier may view (matches the courier history list).
-COURIER_VIEWABLE_STATUSES = ("active", "completed", "cancelled", "closed")
+# Statuses a courier may view (matches the courier order list). Orders
+# awaiting merchant approval are visible read-only, so the courier can see
+# what work may be coming.
+COURIER_VIEWABLE_STATUSES = (
+    "pending_approval", "active", "completed", "cancelled", "closed",
+)
 
 
 def _calc_effective_price(
@@ -363,7 +368,8 @@ def list_orders(
     - Platform admin: all orders
     - Org owner/member: orders for their organization
     - Customer: only their own orders
-    - Courier: all active orders (for delivery), plus completed/cancelled orders
+    - Courier: all open orders (for delivery) including read-only visibility
+      of orders awaiting merchant approval, plus completed/cancelled orders
       when include_history=true
 
     Optional ``week`` filter (e.g. "2026-W16") restricts to that delivery week.
@@ -375,11 +381,13 @@ def list_orders(
     elif user.role == "courier":
         if include_history:
             query = query.filter(Order.status.in_((
-                "pending_images", "active",
+                "pending_approval", "pending_images", "active",
                 "completed", "cancelled", "closed",
             )))
         else:
-            query = query.filter(Order.status.in_(("pending_images", "active")))
+            query = query.filter(
+                Order.status.in_(("pending_approval", "pending_images", "active"))
+            )
     elif user.role == "customer":
         if not user.customer_id:
             return []
@@ -918,15 +926,16 @@ def get_order(
 @router.post("/{order_id}/approve", response_model=OrderResponse)
 def approve_order(
     order_id: int,
+    body: OrderApprove | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Approve an order so the courier can start working on it.
 
-    On approval the delivery week is fixed to the ISO week of today: an
-    order approved on Friday is delivered that same week. The order becomes
-    ``active``, or ``pending_images`` when SKU reference images are still
-    missing.
+    On approval the delivery week is fixed: by default the ISO week of
+    today (an order approved on Friday is delivered that same week), or an
+    explicitly chosen week. The order becomes ``active``, or
+    ``pending_images`` when SKU reference images are still missing.
 
     A ``pending_images`` order can be approved again once that is resolved
     (or deliberately without images: wines that arrive at the warehouse
@@ -946,14 +955,20 @@ def approve_order(
     if order.status not in ("pending_approval", "pending_images"):
         raise HTTPException(400, f"Order kan niet goedgekeurd worden (status: {order.status})")
 
+    week = body.week if body else None
+    if week:
+        _parse_iso_week(week)  # validates the format, raises 400 otherwise
+
     if order.status == "pending_approval":
-        order.delivery_week = _current_iso_week()
+        order.delivery_week = week or _current_iso_week()
         all_have_images = all(
             len(line.sku.reference_images) > 0 for line in order.lines
         )
         order.status = "active" if all_have_images else "pending_images"
     else:
         # pending_images → active: explicit activation, images optional.
+        if week:
+            order.delivery_week = week
         order.status = "active"
 
     db.commit()

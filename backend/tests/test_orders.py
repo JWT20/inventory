@@ -602,6 +602,46 @@ class TestApproveOrder:
         assert resp.status_code == 200
         assert resp.json()["status"] == "active"
 
+    def test_approve_with_explicit_week(self, client, db, owner_token, sample_org):
+        order_id = self._create_order(
+            client, db, owner_token, sample_org, "WINE-104", with_image=True
+        )
+
+        resp = client.post(
+            f"/api/orders/{order_id}/approve",
+            json={"week": "2026-W30"},
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "active"
+        assert data["delivery_week"] == "2026-W30"
+
+    def test_approve_with_invalid_week_rejected(
+        self, client, db, owner_token, sample_org
+    ):
+        order_id = self._create_order(client, db, owner_token, sample_org, "WINE-105")
+
+        resp = client.post(
+            f"/api/orders/{order_id}/approve",
+            json={"week": "week-30"},
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 400
+
+    def test_courier_sees_pending_approval_read_only(
+        self, client, db, owner_token, courier_token, sample_org
+    ):
+        order_id = self._create_order(client, db, owner_token, sample_org, "WINE-106")
+
+        resp = client.get("/api/orders", headers=auth_header(courier_token))
+        assert resp.status_code == 200
+        match = next(o for o in resp.json() if o["id"] == order_id)
+        assert match["status"] == "pending_approval"
+
+        resp = client.get(f"/api/orders/{order_id}", headers=auth_header(courier_token))
+        assert resp.status_code == 200
+
     def test_courier_cannot_approve_order(
         self, client, db, owner_token, courier_token, sample_org
     ):

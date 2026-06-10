@@ -436,6 +436,11 @@ class OrderUpdate(BaseModel):
     remarks: str
 
 
+class OrderApprove(BaseModel):
+    # ISO week to deliver in, e.g. "2026-W24". Defaults to the week of approval.
+    week: str | None = None
+
+
 class OrderLineUpdate(BaseModel):
     quantity: int = Field(..., gt=0)
 
