@@ -173,6 +173,7 @@ class SKUCreate(BaseModel):
     attributes: dict[str, str] = {}
     active: bool = True
     supplier_id: int | None = None
+    is_bottle: bool = False
 
     @field_validator("attributes")
     @classmethod
@@ -189,6 +190,7 @@ class SKUUpdate(BaseModel):
     attributes: dict[str, str] | None = None
     active: bool | None = None
     supplier_id: int | None = None
+    is_bottle: bool | None = None
 
 
 class SKUResponse(BaseModel):
@@ -201,6 +203,7 @@ class SKUResponse(BaseModel):
     attributes: dict[str, str] = {}
     supplier_id: int | None = None
     supplier_name: str | None = None
+    is_bottle: bool = False
     created_at: datetime
     updated_at: datetime
     image_count: int = 0

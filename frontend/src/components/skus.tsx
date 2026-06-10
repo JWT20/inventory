@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { AlertCircle, Loader2 } from "lucide-react";
 
 interface Supplier {
@@ -46,6 +47,7 @@ interface SKU {
   attributes: Record<string, string>;
   supplier_id: number | null;
   supplier_name: string | null;
+  is_bottle: boolean;
   image_count: number;
 }
 
@@ -310,6 +312,7 @@ function SKUDialog({
   const [volume, setVolume] = useState("");
   const [supplierId, setSupplierId] = useState<number | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [isBottle, setIsBottle] = useState(false);
 
   // Helper to build attributes dict from individual state fields
   const getAttributes = () => ({
@@ -340,6 +343,7 @@ function SKUDialog({
       setWijntype(a.wijntype || "");
       setVolume(a.volume || "");
       setSupplierId(sku.supplier_id ?? null);
+      setIsBottle(sku.is_bottle ?? false);
       setCurrentId(sku.id);
       loadImages(sku.id);
     } else if (open) {
@@ -348,6 +352,7 @@ function SKUDialog({
       setWijntype("");
       setVolume("");
       setSupplierId(null);
+      setIsBottle(false);
       setCurrentId(null);
       setImages([]);
     }
@@ -405,6 +410,7 @@ function SKUDialog({
         await api.updateSKU(skuId, {
           attributes: getAttributes(),
           supplier_id: supplierId,
+          is_bottle: isBottle,
         });
         toast.success("SKU bijgewerkt");
       } else {
@@ -412,6 +418,7 @@ function SKUDialog({
           category: "wine",
           attributes: getAttributes(),
           supplier_id: supplierId,
+          is_bottle: isBottle,
         });
         skuId = created.id;
         setCurrentId(skuId);
@@ -648,6 +655,14 @@ function SKUDialog({
                 ))}
               </SelectContent>
             </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <Switch
+              checked={isBottle}
+              onCheckedChange={setIsBottle}
+              disabled={isCourier}
+            />
+            <Label className="text-xs">Dit product is een losse fles</Label>
           </div>
           {!isCourier && (
             <Button type="submit" className="w-full" disabled={submitting}>

@@ -161,6 +161,22 @@ class TestCreateSKU:
         )
         assert resp.status_code == 400
 
+    def test_create_sku_defaults_to_box(self, client, merchant_token):
+        resp = client.post(
+            "/api/skus", json=WINE_DATA,
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 201
+        assert resp.json()["is_bottle"] is False
+
+    def test_create_bottle_sku(self, client, merchant_token):
+        resp = client.post(
+            "/api/skus", json={**WINE_DATA, "is_bottle": True},
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 201
+        assert resp.json()["is_bottle"] is True
+
 
 # ---------------------------------------------------------------------------
 # GET /api/skus/{id}
@@ -212,6 +228,25 @@ class TestUpdateSKU:
             headers=auth_header(courier_token),
         )
         assert resp.status_code == 403
+
+    def test_update_is_bottle(self, client, merchant_token, sample_sku):
+        resp = client.patch(
+            f"/api/skus/{sample_sku.id}",
+            json={"is_bottle": True},
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["is_bottle"] is True
+        assert data["active"] is True  # unchanged
+
+        resp = client.patch(
+            f"/api/skus/{sample_sku.id}",
+            json={"is_bottle": False},
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["is_bottle"] is False
 
     def test_update_nonexistent_sku(self, client, merchant_token):
         resp = client.patch(

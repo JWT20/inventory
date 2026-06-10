@@ -144,6 +144,10 @@ class SKU(Base):
     default_price: Mapped[float | None] = mapped_column(
         Numeric(10, 2), nullable=True
     )
+    # True = ordered/scanned/booked per single bottle; False = per box.
+    is_bottle: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()

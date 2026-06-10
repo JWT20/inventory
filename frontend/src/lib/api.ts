@@ -215,6 +215,7 @@ export const api = {
     attributes: Record<string, string>;
     active?: boolean;
     supplier_id?: number | null;
+    is_bottle?: boolean;
   }) => json("/skus", "POST", data),
   getSKU: (id: number) => request(`/skus/${id}`),
   updateSKU: (id: number, data: Record<string, unknown>) =>
