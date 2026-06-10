@@ -321,6 +321,14 @@ export const api = {
   getOrder: (id: number) => request(`/orders/${id}`),
   approveOrder: (id: number, week?: string) =>
     json(`/orders/${id}/approve`, "POST", week ? { week } : {}),
+  addOrderLine: (
+    orderId: number,
+    data: { customer_id: number; sku_id: number; quantity: number; delivery_day?: string },
+  ) => json(`/orders/${orderId}/lines`, "POST", data),
+  updateOrderLine: (orderId: number, lineId: number, quantity: number) =>
+    json(`/orders/${orderId}/lines/${lineId}`, "PATCH", { quantity }),
+  deleteOrderLine: (orderId: number, lineId: number) =>
+    request(`/orders/${orderId}/lines/${lineId}`, { method: "DELETE" }),
   closeOrder: (id: number) =>
     request(`/orders/${id}/close`, { method: "POST" }),
   deleteOrder: (id: number) => request(`/orders/${id}`, { method: "DELETE" }),

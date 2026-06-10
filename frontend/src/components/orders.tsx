@@ -30,7 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ChevronDown, Minus, Plus } from "lucide-react";
+import { ChevronDown, Minus, Plus, Trash2 } from "lucide-react";
 import {
   unitLabel,
   formatBoxesBottles,
@@ -705,6 +705,7 @@ export function OrdersPage() {
         order={selectedOrder}
         onClose={() => setSelectedOrder(null)}
         onUpdated={load}
+        onOrderChanged={(o) => setSelectedOrder(o)}
       />
     </>
   );
@@ -1131,11 +1132,13 @@ function OrderDetailDialog({
   order,
   onClose,
   onUpdated,
+  onOrderChanged,
 }: {
   open: boolean;
   order: Order | null;
   onClose: () => void;
   onUpdated: () => void;
+  onOrderChanged: (order: Order) => void;
 }) {
   const { user } = useAuth();
   const [activating, setActivating] = useState(false);
@@ -1147,14 +1150,29 @@ function OrderDetailDialog({
   const [editingRemarks, setEditingRemarks] = useState(false);
   const [remarksValue, setRemarksValue] = useState("");
   const [savingRemarks, setSavingRemarks] = useState(false);
-
-  if (!order) return null;
+  const [allSkus, setAllSkus] = useState<SKUOption[]>([]);
+  // Optimistic quantities while line PATCHes are in flight.
+  const [draftQty, setDraftQty] = useState<Record<number, number>>({});
 
   const isAdmin = user?.is_platform_admin;
   const isOwner = user?.role === "owner";
   const isMember = user?.role === "member";
   const canManage = isAdmin || isOwner;
   const isCustomer = user?.role === "customer";
+
+  const canEditLines =
+    !!order &&
+    (canManage || isMember) &&
+    (order.status === "pending_approval" || order.status === "pending_images");
+
+  useEffect(() => {
+    setDraftQty({});
+    if (open && canEditLines) {
+      api.listSKUOptions().then((s: SKUOption[]) => setAllSkus(s));
+    }
+  }, [open, order?.id, canEditLines]);
+
+  if (!order) return null;
 
   const skusWithoutImages = order.lines.filter((l) => !l.has_image);
   // Owners and members approve new orders; a pending_images order can be
@@ -1188,6 +1206,54 @@ function OrderDetailDialog({
       toast.error(err instanceof Error ? err.message : "Goedkeuren mislukt");
     } finally {
       setActivating(false);
+    }
+  }
+
+  async function changeLineQuantity(lineId: number, quantity: number) {
+    if (!order) return;
+    setDraftQty((prev) => ({ ...prev, [lineId]: quantity }));
+    try {
+      const updated = await api.updateOrderLine(order.id, lineId, quantity);
+      onOrderChanged(updated);
+      onUpdated();
+    } catch (err: unknown) {
+      setDraftQty((prev) => {
+        const next = { ...prev };
+        delete next[lineId];
+        return next;
+      });
+      toast.error(err instanceof Error ? err.message : "Aanpassen mislukt");
+    }
+  }
+
+  async function removeLine(lineId: number) {
+    if (!order) return;
+    try {
+      const updated = await api.deleteOrderLine(order.id, lineId);
+      onOrderChanged(updated);
+      onUpdated();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Verwijderen mislukt");
+    }
+  }
+
+  async function addLine(skuId: number) {
+    if (!order) return;
+    const customerId = order.lines[0]?.customer_id;
+    if (!customerId) {
+      toast.error("Order heeft geen gekoppelde klant");
+      return;
+    }
+    try {
+      const updated = await api.addOrderLine(order.id, {
+        customer_id: customerId,
+        sku_id: skuId,
+        quantity: 1,
+      });
+      onOrderChanged(updated);
+      onUpdated();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Toevoegen mislukt");
     }
   }
 
@@ -1369,6 +1435,24 @@ function OrderDetailDialog({
                     </p>
                   </div>
                   <div className="text-right flex items-center gap-2">
+                    {canEditLines ? (
+                      <>
+                        <OrderQuantityControl
+                          value={draftQty[line.id] ?? line.quantity}
+                          onChange={(qty) => changeLineQuantity(line.id, qty)}
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive"
+                          aria-label="Regel verwijderen"
+                          disabled={order.lines.length <= 1}
+                          onClick={() => removeLine(line.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </>
+                    ) : (
                     <div>
                       <p>
                         {isCustomer
@@ -1389,6 +1473,7 @@ function OrderDetailDialog({
                         </p>
                       )}
                     </div>
+                    )}
                     {!line.has_image && canManage && (
                       <>
                         <Button
@@ -1424,6 +1509,28 @@ function OrderDetailDialog({
                   </div>
                 </div>
               ))}
+              {canEditLines && order.lines[0]?.customer_id != null && (
+                <Select
+                  value=""
+                  onValueChange={(v) => {
+                    if (v) addLine(Number(v));
+                  }}
+                >
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue placeholder="+ Product toevoegen..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allSkus
+                      .filter((s) => !order.lines.some((l) => l.sku_id === s.id))
+                      .map((s) => (
+                        <SelectItem key={s.id} value={String(s.id)}>
+                          {s.name} ({s.sku_code})
+                          {s.is_bottle ? " · fles" : ""}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
           </div>
 
