@@ -19,7 +19,7 @@ register_heif_opener()
 from langfuse import observe, get_client as get_langfuse_client
 
 from app.config import settings
-from app.services.langfuse_client import get_prompt, get_prompt_required
+from app.services.langfuse_client import get_prompt_required
 from app.models import EMBEDDING_DIM
 
 logger = logging.getLogger(__name__)
@@ -47,62 +47,9 @@ def _get_semaphore() -> asyncio.Semaphore:
     return _semaphore
 
 
-# ---------------------------------------------------------------------------
-# Classification-only prompt (used when caller only needs is_package check)
-# ---------------------------------------------------------------------------
-
-CLASSIFY_PROMPT = """Analyze this image and respond in EXACTLY this JSON format — no markdown fencing, no extra text:
-
-{"is_package": true, "summary": "brief 5-word description"}
-
-Set "is_package" to true if the image shows any kind of box, case, crate, carton, or product packaging.
-Set it to false for loose objects, scenes, furniture, electronics without packaging, food without packaging, etc.
-
-Examples of true: wine box, shoe box, cardboard carton, wooden crate, sealed package, shipping parcel.
-Examples of false: a clock, candles on a table, a laptop, a pair of shoes, a glass of wine."""
-
-# ---------------------------------------------------------------------------
-# Combined prompt — classify AND describe in a single call
-# ---------------------------------------------------------------------------
-
-CLASSIFY_AND_DESCRIBE_DEFAULT = """Analyze this image and respond in EXACTLY this JSON format — no markdown fencing, no extra text:
-
-{"is_package": true, "description": "detailed description here"}
-
-CLASSIFICATION:
-Set "is_package" to true if the image shows any kind of box, case, crate, carton, or product packaging.
-Set it to false for loose objects, scenes, furniture, electronics without packaging, food without packaging, etc.
-If is_package is false, set "description" to a brief 5-word summary of what you see.
-
-DESCRIPTION (only when is_package is true):
-Your description will be embedded and compared against a reference database using cosine similarity.
-Accuracy and specificity are critical — a wrong match means the wrong product gets shipped.
-
-Transcribe ALL visible text exactly as printed (brand names, product names, years, volumes, certifications, codes).
-Describe visual elements: dominant colors, logos, crests, illustrations, label placement, box material.
-If this appears to be wine, pay special attention to: producer/domaine, wine name/cuvée, vintage year, appellation/region, classification.
-For logos or symbols without readable text: describe the geometric structure (shapes, symmetry, line weight), position on the box, relative size, and color contrast. Be precise about what the shapes depict.
-
-ONLY describe what you can actually see. Do NOT mention things that are "not visible" or "not present" — simply omit them.
-
-Format the description as a compact paragraph starting with the most distinctive identifiers, optimized for text-similarity search."""
-
-# ---------------------------------------------------------------------------
-# Description-only prompt (used when classification is skipped)
-# ---------------------------------------------------------------------------
-
-DESCRIBE_DEFAULT = """Describe this product packaging for identification matching.
-Your description will be embedded and compared against a reference database using cosine similarity.
-Accuracy and specificity are critical — a wrong match means the wrong product gets shipped.
-
-Transcribe ALL visible text exactly as printed (brand names, product names, years, volumes, certifications, codes).
-Describe visual elements: dominant colors, logos, crests, illustrations, label placement, box material.
-If this appears to be wine, pay special attention to: producer/domaine, wine name/cuvée, vintage year, appellation/region, classification.
-For logos or symbols without readable text: describe the geometric structure (shapes, symmetry, line weight), position on the box, relative size, and color contrast. Be precise about what the shapes depict.
-
-ONLY describe what you can actually see. Do NOT mention things that are "not visible" or "not present" — simply omit them.
-
-Format as a compact paragraph starting with the most distinctive identifiers, optimized for text-similarity search."""
+# NOTE: All LLM prompts live in Langfuse only (fetched via get_prompt_required;
+# see docs/flessen.md, sectie I). There are intentionally no code fallbacks:
+# without a configured Langfuse these calls fail loudly.
 
 
 def _strip_markdown_fences(text: str) -> str:
@@ -392,7 +339,8 @@ async def classify_image(image_bytes: bytes) -> tuple[bool, str]:
     resize_ms = (time.perf_counter() - t0) * 1000
     logger.info("[TIMING] image_resize=%.0fms", resize_ms)
 
-    raw_text = await _call_vision(image, CLASSIFY_PROMPT)
+    prompt = get_prompt_required("classify")
+    raw_text = await _call_vision(image, prompt)
     logger.info("Classification raw response: %s", raw_text[:120])
 
     is_package, summary = parse_classify_response(raw_text)
@@ -409,7 +357,7 @@ async def describe_package(image_bytes: bytes) -> str:
     or when the user has overridden classification.
     """
     image = await asyncio.to_thread(optimize_for_vision, image_bytes)
-    prompt = get_prompt("describe-package", fallback=DESCRIBE_DEFAULT)
+    prompt = get_prompt_required("describe-package")
     raw_text = await _call_vision(image, prompt)
     logger.info("Description raw response: %s", raw_text[:120])
 
@@ -529,7 +477,7 @@ async def classify_and_describe(image_bytes: bytes) -> tuple[bool, str]:
     resize_ms = (time.perf_counter() - t0) * 1000
     logger.info("[TIMING] image_resize=%.0fms", resize_ms)
 
-    prompt = get_prompt("classify-and-describe", fallback=CLASSIFY_AND_DESCRIBE_DEFAULT)
+    prompt = get_prompt_required("classify-and-describe")
     raw_text = await _call_vision(image, prompt)
     logger.info("Classify+describe raw response: %s", raw_text[:200])
 
@@ -560,60 +508,6 @@ async def process_image(image_bytes: bytes) -> tuple[str, list[float] | None, bo
     logger.info("[TIMING] process_image_total=%.0fms", total_ms)
     return description, embedding, True
 
-
-EXTRACT_SHIPMENT_SYSTEM_DEFAULT = "\n".join([
-    "You are a delivery-note and invoice analysis agent for an inbound warehouse receiving system.",
-    "You will receive a single document image (pakbon, factuur, or similar).",
-    "Extract all product lines visible on the document.",
-    "Output MUST be valid JSON matching the structure below exactly.",
-    "",
-    "JSON structure:",
-    "{",
-    '  "supplier_name": "string",',
-    '  "reference": "string",',
-    '  "document_type": "pakbon|invoice|unknown",',
-    '  "raw_text": "short transcription summary",',
-    '  "lines": [',
-    "    {",
-    '      "supplier_code": "string",',
-    '      "description": "string",',
-    '      "evidence": {',
-    '        "line_text": "raw line text",',
-    '        "quantity_text": "raw quantity fragment",',
-    '        "unit_hint": "column header or inline label that identifies the unit"',
-    "      },",
-    '      "quantity": 102,',
-    '      "quantity_unit": "pieces",',
-    '      "confidence": 0.91',
-    "    }",
-    "  ]",
-    "}",
-    "",
-    "Quantity rules (IMPORTANT):",
-    "- Return ONE numeric quantity per line plus its unit. The backend converts pieces→boxes using a fixed ratio of 6 bottles per box, so you MUST NOT do that math yourself.",
-    '- quantity_unit MUST be one of: "boxes" (dozen/colli/kisten/ds/ct), "pieces" (flessen/fl/btls/stuks/pcs), or "unknown".',
-    "- Decide the unit from document context in this priority:",
-    "  1. Column header directly above the number (e.g. 'Aantal', 'Colli', 'Dozen', 'Flessen', 'Fl', 'Btls').",
-    "  2. Inline label right next to the number (e.g. '18 fl', '3 ds', '2 colli').",
-    "  3. If the same line shows BOTH a small number (typically 1–5) and a larger number (e.g. 12, 24, 102) without explicit labels, the small number is boxes and the larger one is pieces — return the pieces value with quantity_unit='pieces'.",
-    "- If you truly cannot tell whether the number is boxes or pieces, set quantity_unit='unknown' and lower the confidence score. Do NOT guess.",
-    "- quantity MUST be a non-negative integer.",
-    "- Transcribe the raw fragment you used into evidence.quantity_text and the header/label you relied on into evidence.unit_hint.",
-    "",
-    "Evidence rules:",
-    "- Keep evidence fields as short verbatim snippets from the document.",
-    "",
-    "Filtering rules:",
-    "- Include only product lines.",
-    "- Ignore totals, pallet costs, transport, and signature fields.",
-    "- If uncertain about a line, include it with a lower confidence score.",
-    "",
-    "Examples:",
-    '- "ART123 Merlot 6x75cl 18 fl" → quantity=18, quantity_unit="pieces", evidence.quantity_text="18 fl", evidence.unit_hint="fl".',
-    '- "ART456 Chardonnay 3 ds" → quantity=3, quantity_unit="boxes", evidence.quantity_text="3 ds", evidence.unit_hint="ds".',
-    '- "AFI810125 - Trent, VdD Pinot Grigio25 1 102 132,60 76,50" with column headers (Colli | Flessen | Brutto | Netto) → quantity=102, quantity_unit="pieces", evidence.quantity_text="102", evidence.unit_hint="Flessen".',
-    '- Single bare number with no header or label → quantity=<n>, quantity_unit="unknown", confidence lowered.',
-])
 
 EXTRACT_SHIPMENT_USER_PROMPT = "\n".join([
     "Return ONLY JSON matching the schema.",
@@ -722,7 +616,7 @@ async def extract_shipment_document(file_bytes: bytes) -> dict:
 
     PDFs are rendered to one image per page; lines from all pages are merged.
     """
-    system_prompt = get_prompt("extract-shipment-document", fallback=EXTRACT_SHIPMENT_SYSTEM_DEFAULT)
+    system_prompt = get_prompt_required("extract-shipment-document")
 
     if _is_pdf(file_bytes):
         pages = await asyncio.to_thread(pdf_to_images, file_bytes)
@@ -762,20 +656,6 @@ async def extract_shipment_text(text: str) -> dict:
     return _parse_shipment_json(raw_text)
 
 
-MATCH_SHIPMENT_ARTICLE_DEFAULT = """You are matching one inbound shipment line to an internal SKU catalog.
-Return ONLY valid JSON:
-{
-  "sku_code": "string",
-  "confidence": 0.0
-}
-
-Rules:
-- Use the line description and optional supplier name.
-- Choose from provided candidates only.
-- If uncertain, return {"sku_code": "", "confidence": 0.0}.
-"""
-
-
 @observe()
 async def match_shipment_article_name(
     *,
@@ -791,10 +671,7 @@ async def match_shipment_article_name(
         return None, 0.0
 
     candidate_lines = "\n".join(f"- {code}: {name}" for code, name in candidates[:200])
-    prompt_template = get_prompt(
-        "match-shipment-article-name",
-        fallback=MATCH_SHIPMENT_ARTICLE_DEFAULT,
-    )
+    prompt_template = get_prompt_required("match-shipment-article-name")
     prompt = (
         f"{prompt_template}\n\n"
         f"Supplier: {supplier_name or '(unknown)'}\n"

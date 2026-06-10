@@ -55,19 +55,6 @@ def shutdown_langfuse():
     logger.info("Langfuse client shut down")
 
 
-def get_prompt(name: str, *, fallback: str) -> str:
-    """Fetch a managed prompt from Langfuse, falling back to hardcoded default."""
-    client = get_langfuse()
-    if client is None:
-        return fallback
-    try:
-        prompt = client.get_prompt(name)
-        return prompt.compile()
-    except Exception:
-        logger.warning("Failed to fetch Langfuse prompt '%s', using fallback", name)
-        return fallback
-
-
 class PromptUnavailableError(RuntimeError):
     """Raised when a required Langfuse prompt cannot be fetched (no fallback)."""
 

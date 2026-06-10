@@ -87,7 +87,7 @@ def test_extract_shipment_document_passes_system_instruction():
     })
 
     with patch("app.services.embedding.asyncio.to_thread", new=AsyncMock(return_value=_make_image())), \
-         patch("app.services.embedding.get_prompt", return_value="system prompt text"), \
+         patch("app.services.embedding.get_prompt_required", return_value="system prompt text"), \
          patch("app.services.embedding._call_vision", new=AsyncMock(return_value=payload)) as mock_cv:
         asyncio.run(extract_shipment_document(b"fake-image-bytes"))
 
@@ -107,7 +107,7 @@ def test_extract_shipment_document_uses_user_prompt():
     })
 
     with patch("app.services.embedding.asyncio.to_thread", new=AsyncMock(return_value=_make_image())), \
-         patch("app.services.embedding.get_prompt", return_value="system prompt text"), \
+         patch("app.services.embedding.get_prompt_required", return_value="system prompt text"), \
          patch("app.services.embedding._call_vision", new=AsyncMock(return_value=payload)) as mock_cv:
         asyncio.run(extract_shipment_document(b"fake-image-bytes"))
 
@@ -140,7 +140,7 @@ def test_extract_shipment_document_normalizes_null_string_fields():
     })
 
     with patch("app.services.embedding.asyncio.to_thread", new=AsyncMock(return_value=_make_image())), \
-         patch("app.services.embedding.get_prompt", return_value="sys"), \
+         patch("app.services.embedding.get_prompt_required", return_value="sys"), \
          patch("app.services.embedding._call_vision", new=AsyncMock(return_value=payload)):
         result = asyncio.run(extract_shipment_document(b"fake-image-bytes"))
 
