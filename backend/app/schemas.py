@@ -798,6 +798,7 @@ class WeeklySummaryWine(BaseModel):
     sku_code: str
     sku_name: str
     default_price: float | None = None
+    is_bottle: bool = False
     total_quantity: int
     orders: list[WeeklySummaryCustomerOrder] = []
     wine_total: float | None = None
@@ -807,7 +808,10 @@ class WeeklySummarySupplier(BaseModel):
     supplier_id: int | None = None
     supplier_name: str
     wines: list[WeeklySummaryWine] = []
+    # *_quantity blijft de som van alle eenheden; dozen/flessen apart ernaast.
     supplier_total_quantity: int = 0
+    supplier_total_boxes: int = 0
+    supplier_total_bottles: int = 0
     supplier_total_value: float | None = None
 
 
@@ -815,6 +819,7 @@ class WeeklySummaryCustomerLine(BaseModel):
     sku_id: int
     sku_code: str
     sku_name: str
+    is_bottle: bool = False
     quantity: int
     effective_price: float | None = None
     line_total: float | None = None
@@ -826,6 +831,8 @@ class WeeklySummaryCustomer(BaseModel):
     customer_name: str
     lines: list[WeeklySummaryCustomerLine] = []
     customer_total_quantity: int = 0
+    customer_total_boxes: int = 0
+    customer_total_bottles: int = 0
     customer_total_value: float | None = None
 
 
@@ -837,18 +844,22 @@ class WeeklySummaryResponse(BaseModel):
     suppliers: list[WeeklySummarySupplier] = []
     customers: list[WeeklySummaryCustomer] = []
     grand_total_quantity: int = 0
+    grand_total_boxes: int = 0
+    grand_total_bottles: int = 0
     grand_total_value: float | None = None
 
 
 class MonthlyBoxesMonth(BaseModel):
     month: str  # "YYYY-MM"
     boxes: int
+    bottles: int = 0
 
 
 class MonthlyBoxesOrganization(BaseModel):
     organization_id: int | None
     organization_name: str
     total_boxes: int
+    total_bottles: int = 0
     months: list[MonthlyBoxesMonth] = []
 
 

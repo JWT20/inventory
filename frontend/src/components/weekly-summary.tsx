@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { unitLabel, formatBoxesBottles } from "@/lib/units";
 
 interface CustomerOrder {
   customer_name: string;
@@ -27,6 +28,7 @@ interface Wine {
   sku_code: string;
   sku_name: string;
   default_price: number | null;
+  is_bottle: boolean;
   total_quantity: number;
   orders: CustomerOrder[];
   wine_total: number | null;
@@ -37,6 +39,8 @@ interface SupplierGroup {
   supplier_name: string;
   wines: Wine[];
   supplier_total_quantity: number;
+  supplier_total_boxes: number;
+  supplier_total_bottles: number;
   supplier_total_value: number | null;
 }
 
@@ -44,6 +48,7 @@ interface CustomerLine {
   sku_id: number;
   sku_code: string;
   sku_name: string;
+  is_bottle: boolean;
   quantity: number;
   effective_price: number | null;
   line_total: number | null;
@@ -55,6 +60,8 @@ interface CustomerGroup {
   customer_name: string;
   lines: CustomerLine[];
   customer_total_quantity: number;
+  customer_total_boxes: number;
+  customer_total_bottles: number;
   customer_total_value: number | null;
 }
 
@@ -68,6 +75,8 @@ interface WeeklySummary {
   suppliers: SupplierGroup[];
   customers: CustomerGroup[];
   grand_total_quantity: number;
+  grand_total_boxes: number;
+  grand_total_bottles: number;
   grand_total_value: number | null;
 }
 
@@ -227,7 +236,7 @@ export function WeeklySummaryPage() {
                   <div>
                     <span className="font-semibold">{cust.customer_name}</span>
                     <span className="ml-2 text-sm text-muted-foreground">
-                      {cust.customer_total_quantity} dozen
+                      {formatBoxesBottles(cust.customer_total_boxes, cust.customer_total_bottles)}
                     </span>
                   </div>
                   <div className="flex items-center gap-3">
@@ -248,7 +257,7 @@ export function WeeklySummaryPage() {
                       <TableHeader>
                         <TableRow className="border-border/50">
                           <TableHead className="h-8 text-xs">Wijn</TableHead>
-                          <TableHead className="h-8 text-xs text-right">Aantal dozen</TableHead>
+                          <TableHead className="h-8 text-xs text-right">Aantal</TableHead>
                           <TableHead className="h-8 text-xs text-right">Prijs</TableHead>
                           <TableHead className="h-8 text-xs text-right">Totaal</TableHead>
                         </TableRow>
@@ -263,7 +272,9 @@ export function WeeklySummaryPage() {
                                 <p className="text-xs text-muted-foreground italic mt-0.5">{line.remarks}</p>
                               )}
                             </TableCell>
-                            <TableCell className="py-1.5 text-right">{line.quantity}x</TableCell>
+                            <TableCell className="py-1.5 text-right">
+                              {line.quantity} {unitLabel(line.is_bottle, line.quantity)}
+                            </TableCell>
                             <TableCell className="py-1.5 text-right text-muted-foreground">
                               {formatPrice(line.effective_price)}
                             </TableCell>
@@ -284,7 +295,7 @@ export function WeeklySummaryPage() {
             <div className="flex justify-between items-center font-semibold">
               <span>Totaal</span>
               <div className="flex items-center gap-4">
-                <span>{data.grand_total_quantity} dozen</span>
+                <span>{formatBoxesBottles(data.grand_total_boxes, data.grand_total_bottles)}</span>
                 {data.grand_total_value != null && (
                   <span>{formatPrice(data.grand_total_value)}</span>
                 )}
@@ -315,7 +326,7 @@ export function WeeklySummaryPage() {
                   <div>
                     <span className="font-semibold">{supplier.supplier_name}</span>
                     <span className="ml-2 text-sm text-muted-foreground">
-                      {supplier.supplier_total_quantity} dozen
+                      {formatBoxesBottles(supplier.supplier_total_boxes, supplier.supplier_total_bottles)}
                     </span>
                   </div>
                   <div className="flex items-center gap-3">
@@ -342,7 +353,9 @@ export function WeeklySummaryPage() {
                             </span>
                           </div>
                           <div className="text-right">
-                            <span className="text-sm">{wine.total_quantity} dozen</span>
+                            <span className="text-sm">
+                              {wine.total_quantity} {unitLabel(wine.is_bottle, wine.total_quantity)}
+                            </span>
                             {wine.wine_total != null && (
                               <span className="ml-3 text-sm font-medium">
                                 {formatPrice(wine.wine_total)}
@@ -354,7 +367,7 @@ export function WeeklySummaryPage() {
                           <TableHeader>
                             <TableRow className="border-border/50">
                               <TableHead className="h-8 text-xs">Klant</TableHead>
-                              <TableHead className="h-8 text-xs text-right">Aantal dozen</TableHead>
+                              <TableHead className="h-8 text-xs text-right">Aantal</TableHead>
                               <TableHead className="h-8 text-xs text-right">Prijs</TableHead>
                               <TableHead className="h-8 text-xs text-right">Totaal</TableHead>
                             </TableRow>
@@ -368,7 +381,9 @@ export function WeeklySummaryPage() {
                                     <p className="text-xs text-muted-foreground italic mt-0.5">{order.remarks}</p>
                                   )}
                                 </TableCell>
-                                <TableCell className="py-1.5 text-right">{order.quantity}x</TableCell>
+                                <TableCell className="py-1.5 text-right">
+                                  {order.quantity} {unitLabel(wine.is_bottle, order.quantity)}
+                                </TableCell>
                                 <TableCell className="py-1.5 text-right text-muted-foreground">
                                   {formatPrice(order.effective_price)}
                                 </TableCell>
@@ -391,7 +406,7 @@ export function WeeklySummaryPage() {
             <div className="flex justify-between items-center font-semibold">
               <span>Totaal</span>
               <div className="flex items-center gap-4">
-                <span>{data.grand_total_quantity} dozen</span>
+                <span>{formatBoxesBottles(data.grand_total_boxes, data.grand_total_bottles)}</span>
                 {data.grand_total_value != null && (
                   <span>{formatPrice(data.grand_total_value)}</span>
                 )}

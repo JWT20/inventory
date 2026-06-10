@@ -68,7 +68,7 @@ def test_closed_partial_counts_booked_only(client, db, courier_token, sample_org
     org = orgs[0]
     assert org["organization_id"] == sample_org.id
     assert org["total_boxes"] == 10
-    assert org["months"] == [{"month": "2026-03", "boxes": 10}]
+    assert org["months"] == [{"month": "2026-03", "boxes": 10, "bottles": 0}]
 
 
 def test_groups_by_finalized_month(client, db, courier_token, sample_org):
@@ -86,10 +86,37 @@ def test_groups_by_finalized_month(client, db, courier_token, sample_org):
     org = resp.json()["organizations"][0]
     # Months sorted newest first.
     assert org["months"] == [
-        {"month": "2026-04", "boxes": 7},
-        {"month": "2026-03", "boxes": 17},
+        {"month": "2026-04", "boxes": 7, "bottles": 0},
+        {"month": "2026-03", "boxes": 17, "bottles": 0},
     ]
     assert org["total_boxes"] == 24
+
+
+def test_bottles_counted_separately(client, db, courier_token, sample_org):
+    box_sku = SKU(sku_code="SKU-MIX-BOX", name="Doos Wijn")
+    bottle_sku = SKU(sku_code="SKU-MIX-FLES", name="Cava 0,0", is_bottle=True)
+    db.add_all([box_sku, bottle_sku])
+    db.flush()
+    customer = Customer(name="Cust Mix", organization_id=sample_org.id)
+    db.add(customer)
+    db.flush()
+    order = _make_order(
+        db, sample_org, "MIX", status="completed",
+        finalized_at=datetime.datetime(2026, 3, 10),
+    )
+    _make_line(db, order, box_sku, customer, quantity=4, booked_count=4)
+    _make_line(db, order, bottle_sku, customer, quantity=3, booked_count=2)
+    db.commit()
+
+    resp = client.get(
+        "/api/orders/reports/monthly-boxes",
+        headers=auth_header(courier_token),
+    )
+    assert resp.status_code == 200
+    org = resp.json()["organizations"][0]
+    assert org["total_boxes"] == 4
+    assert org["total_bottles"] == 2
+    assert org["months"] == [{"month": "2026-03", "boxes": 4, "bottles": 2}]
 
 
 def test_active_and_draft_orders_excluded(client, db, courier_token, sample_org):
