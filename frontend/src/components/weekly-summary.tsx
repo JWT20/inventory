@@ -69,8 +69,6 @@ type GroupBy = "supplier" | "customer";
 
 interface WeeklySummary {
   week: string;
-  deadline: string;
-  deadline_extended: boolean;
   group_by: GroupBy;
   suppliers: SupplierGroup[];
   customers: CustomerGroup[];
@@ -302,13 +300,6 @@ export function WeeklySummaryPage() {
               </div>
             </div>
           </Card>
-
-          {data.deadline && (
-            <p className="text-xs text-muted-foreground text-center">
-              Deadline: {new Date(data.deadline).toLocaleDateString("nl-NL", { weekday: "long", day: "numeric", month: "long" })} om {new Date(data.deadline).toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" })}
-              {data.deadline_extended && " (verlengd i.v.m. feestdag)"}
-            </p>
-          )}
         </div>
       )}
 
@@ -413,13 +404,6 @@ export function WeeklySummaryPage() {
               </div>
             </div>
           </Card>
-
-          {data.deadline && (
-            <p className="text-xs text-muted-foreground text-center">
-              Deadline: {new Date(data.deadline).toLocaleDateString("nl-NL", { weekday: "long", day: "numeric", month: "long" })} om {new Date(data.deadline).toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" })}
-              {data.deadline_extended && " (verlengd i.v.m. feestdag)"}
-            </p>
-          )}
         </div>
       )}
     </>

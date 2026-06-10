@@ -119,9 +119,9 @@ def test_bottles_counted_separately(client, db, courier_token, sample_org):
     assert org["months"] == [{"month": "2026-03", "boxes": 4, "bottles": 2}]
 
 
-def test_active_and_draft_orders_excluded(client, db, courier_token, sample_org):
+def test_active_and_pending_orders_excluded(client, db, courier_token, sample_org):
     _seed(db, sample_org, "ACT", "active", booked=4, finalized_at=None)
-    _seed(db, sample_org, "DRF", "draft", booked=0, finalized_at=None)
+    _seed(db, sample_org, "PND", "pending_approval", booked=0, finalized_at=None)
 
     resp = client.get(
         "/api/orders/reports/monthly-boxes",

@@ -319,8 +319,8 @@ export const api = {
     return request(`/orders${query ? `?${query}` : ""}`);
   },
   getOrder: (id: number) => request(`/orders/${id}`),
-  activateOrder: (id: number) =>
-    request(`/orders/${id}/activate`, { method: "POST" }),
+  approveOrder: (id: number, week?: string) =>
+    json(`/orders/${id}/approve`, "POST", week ? { week } : {}),
   closeOrder: (id: number) =>
     request(`/orders/${id}/close`, { method: "POST" }),
   deleteOrder: (id: number) => request(`/orders/${id}`, { method: "DELETE" }),
@@ -340,9 +340,6 @@ export const api = {
         organizationId ? `?organization_id=${organizationId}` : ""
       }`,
     ),
-  getDeadline: (week?: string) =>
-    request(`/orders/deadline${week ? `?week=${week}` : ""}`),
-
   // Receiving - book (1 scan = 1 besteleenheid = 1 booking)
   bookBox: (blob: Blob, orderId: number, scanMode: "box" | "bottle" = "box") => {
     const form = new FormData();

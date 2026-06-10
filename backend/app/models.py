@@ -312,7 +312,7 @@ class CustomerSKU(Base):
     sku: Mapped["SKU"] = relationship()
 
 
-VALID_ORDER_STATUSES = ("draft", "pending_images", "active", "completed", "cancelled", "closed")
+VALID_ORDER_STATUSES = ("pending_approval", "pending_images", "active", "completed", "cancelled", "closed")
 
 
 class Order(Base):
@@ -331,7 +331,7 @@ class Order(Base):
         ForeignKey("users.id"), nullable=True
     )
     reference: Mapped[str] = mapped_column(String(100), unique=True, index=True)
-    status: Mapped[str] = mapped_column(String(20), default="draft")
+    status: Mapped[str] = mapped_column(String(20), default="pending_approval")
     remarks: Mapped[str] = mapped_column(Text, default="", server_default="")
     delivery_week: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(

@@ -26,6 +26,10 @@ class TestCreateOrder:
         assert len(data["lines"]) == 1
         assert data["total_boxes"] == 5
         assert data["total_bottles"] == 0
+        # New orders await merchant approval; the delivery week is assigned
+        # at approval time.
+        assert data["status"] == "pending_approval"
+        assert data["delivery_week"] is None
 
     def test_mixed_order_splits_box_and_bottle_totals(
         self, client, db, owner_user, owner_token, sample_org
@@ -259,29 +263,6 @@ class TestDeliveryDayScoping:
         )
         assert resp.status_code == 200
         assert resp.json()["lines"][0]["delivery_day"] == "wednesday"
-
-
-class TestDeadlineDeliveryDays:
-    def test_customer_deadline_returns_possible_delivery_days(
-        self, client, db, customer_user, customer_token, sample_org
-    ):
-        customer = Customer(
-            name="deadline klant",
-            organization_id=sample_org.id,
-            delivery_day="monday",
-        )
-        customer.delivery_days = ["monday", "tuesday"]
-        db.add(customer)
-        db.commit()
-        customer_user.customer_id = customer.id
-        db.commit()
-
-        resp = client.get("/api/orders/deadline", headers=auth_header(customer_token))
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["customer_delivery_day"] == "monday"
-        assert data["customer_delivery_days"] == ["monday", "tuesday"]
 
 
 class TestWeeklyPickPhotos:
@@ -556,14 +537,16 @@ class TestGetOrder:
         assert resp.status_code == 404
 
 
-class TestActivateOrder:
-    def test_activate_order_without_images_succeeds(self, client, db, owner_user, owner_token, sample_org):
-        customer = Customer(name="klant", organization_id=sample_org.id)
-        sku = SKU(sku_code="WINE-004", name="Test Wine 4")
+class TestApproveOrder:
+    def _create_order(self, client, db, owner_token, sample_org, sku_code, with_image=False):
+        customer = Customer(name=f"klant {sku_code}", organization_id=sample_org.id)
+        sku = SKU(sku_code=sku_code, name=f"Wijn {sku_code}")
         db.add_all([customer, sku])
         db.commit()
+        if with_image:
+            db.add(ReferenceImage(sku_id=sku.id, image_path=f"reference_images/{sku_code}.jpg"))
+            db.commit()
 
-        # Create order
         resp = client.post(
             "/api/orders",
             json={
@@ -572,36 +555,132 @@ class TestActivateOrder:
             },
             headers=auth_header(owner_token),
         )
-        order_id = resp.json()["id"]
+        assert resp.status_code == 200
+        return resp.json()["id"]
+
+    def test_approve_with_images_activates_and_sets_delivery_week(
+        self, client, db, owner_token, sample_org
+    ):
+        import datetime
+
+        order_id = self._create_order(
+            client, db, owner_token, sample_org, "WINE-004", with_image=True
+        )
 
         resp = client.post(
-            f"/api/orders/{order_id}/activate",
+            f"/api/orders/{order_id}/approve",
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "active"
+        today = datetime.date.today()
+        assert data["delivery_week"] == (
+            f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"
+        )
+
+    def test_approve_without_images_goes_to_pending_images(
+        self, client, db, owner_token, sample_org
+    ):
+        order_id = self._create_order(client, db, owner_token, sample_org, "WINE-005")
+
+        resp = client.post(
+            f"/api/orders/{order_id}/approve",
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "pending_images"
+        assert data["delivery_week"] is not None
+
+        # Second approve activates explicitly (images stay optional; missing
+        # photos are captured at scan time).
+        resp = client.post(
+            f"/api/orders/{order_id}/approve",
             headers=auth_header(owner_token),
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == "active"
 
-    def test_courier_cannot_activate_order(self, client, db, owner_user, owner_token, courier_token, sample_org):
-        customer = Customer(name="klant2", organization_id=sample_org.id)
-        sku = SKU(sku_code="WINE-005", name="Test Wine 5")
-        db.add_all([customer, sku])
-        db.commit()
+    def test_approve_with_explicit_week(self, client, db, owner_token, sample_org):
+        order_id = self._create_order(
+            client, db, owner_token, sample_org, "WINE-104", with_image=True
+        )
 
         resp = client.post(
-            "/api/orders",
-            json={
-                "organization_id": sample_org.id,
-                "lines": [{"customer_id": customer.id, "sku_id": sku.id, "quantity": 1}],
-            },
+            f"/api/orders/{order_id}/approve",
+            json={"week": "2026-W30"},
             headers=auth_header(owner_token),
         )
-        order_id = resp.json()["id"]
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "active"
+        assert data["delivery_week"] == "2026-W30"
+
+    def test_approve_with_invalid_week_rejected(
+        self, client, db, owner_token, sample_org
+    ):
+        order_id = self._create_order(client, db, owner_token, sample_org, "WINE-105")
 
         resp = client.post(
-            f"/api/orders/{order_id}/activate",
+            f"/api/orders/{order_id}/approve",
+            json={"week": "week-30"},
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 400
+
+    def test_courier_sees_pending_approval_read_only(
+        self, client, db, owner_token, courier_token, sample_org
+    ):
+        order_id = self._create_order(client, db, owner_token, sample_org, "WINE-106")
+
+        resp = client.get("/api/orders", headers=auth_header(courier_token))
+        assert resp.status_code == 200
+        match = next(o for o in resp.json() if o["id"] == order_id)
+        assert match["status"] == "pending_approval"
+
+        resp = client.get(f"/api/orders/{order_id}", headers=auth_header(courier_token))
+        assert resp.status_code == 200
+
+    def test_courier_cannot_approve_order(
+        self, client, db, owner_token, courier_token, sample_org
+    ):
+        order_id = self._create_order(client, db, owner_token, sample_org, "WINE-006")
+
+        resp = client.post(
+            f"/api/orders/{order_id}/approve",
             headers=auth_header(courier_token),
         )
         assert resp.status_code == 403
+
+    def test_customer_cannot_approve_own_order(
+        self, client, db, owner_token, customer_token, sample_org
+    ):
+        order_id = self._create_order(client, db, owner_token, sample_org, "WINE-007")
+
+        resp = client.post(
+            f"/api/orders/{order_id}/approve",
+            headers=auth_header(customer_token),
+        )
+        assert resp.status_code == 403
+
+    def test_active_order_cannot_be_approved_again(
+        self, client, db, owner_token, sample_org
+    ):
+        order_id = self._create_order(
+            client, db, owner_token, sample_org, "WINE-008", with_image=True
+        )
+        resp = client.post(
+            f"/api/orders/{order_id}/approve",
+            headers=auth_header(owner_token),
+        )
+        assert resp.json()["status"] == "active"
+
+        resp = client.post(
+            f"/api/orders/{order_id}/approve",
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 400
 
 
 class TestSKUCodeGeneration:

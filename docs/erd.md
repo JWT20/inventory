@@ -73,7 +73,7 @@ erDiagram
         int organization_id FK "nullable"
         int created_by FK "nullable"
         varchar reference UK "indexed"
-        varchar status "draft | pending_images | active | completed | cancelled"
+        varchar status "pending_approval | pending_images | active | completed | cancelled"
         datetime created_at
         datetime updated_at
     }

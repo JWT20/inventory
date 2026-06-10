@@ -3,7 +3,7 @@
 Covers:
   - The recompute_active helper (unit, against the in-memory DB).
   - The Organization PATCH endpoint accepting the new flag.
-  - The activate_order endpoint no longer requiring reference images.
+  - The approve_order endpoint not requiring reference images.
   - The DELETE /api/skus/{id}/images/{img_id} endpoint flipping active.
 """
 
@@ -141,10 +141,10 @@ class TestOrganizationFlagToggle:
 
 
 # ---------------------------------------------------------------------------
-# Order activation no longer requires reference images
+# Order approval does not require reference images
 # ---------------------------------------------------------------------------
 
-class TestOrderActivationWithoutImages:
+class TestOrderApprovalWithoutImages:
     def _setup_order(self, db, org: Organization) -> Order:
         customer = Customer(name="Restaurant X", organization_id=org.id)
         sku = SKU(sku_code="ORDER-NOIMG", name="Order Wine", organization_id=org.id)
@@ -154,7 +154,7 @@ class TestOrderActivationWithoutImages:
         order = Order(
             organization_id=org.id,
             reference="ORD-1",
-            status="draft",
+            status="pending_approval",
         )
         db.add(order)
         db.flush()
@@ -172,18 +172,20 @@ class TestOrderActivationWithoutImages:
         db.refresh(order)
         return order
 
-    def test_activation_succeeds_without_images(self, client, db, owner_user, owner_token, sample_org):
+    def test_approval_succeeds_without_images(self, client, db, owner_user, owner_token, sample_org):
         order = self._setup_order(db, sample_org)
 
         resp = client.post(
-            f"/api/orders/{order.id}/activate",
+            f"/api/orders/{order.id}/approve",
             headers=auth_header(owner_token),
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json()["status"] == "active"
+        # No reference images yet: approved, waiting for photos.
+        assert resp.json()["status"] == "pending_images"
 
         db.refresh(order)
-        assert order.status == "active"
+        assert order.status == "pending_images"
+        assert order.delivery_week is not None
 
 
 # ---------------------------------------------------------------------------
