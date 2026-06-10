@@ -600,6 +600,8 @@ def _build_customer_response(
 
     customers_out: list[WeeklySummaryCustomer] = []
     grand_total_qty = 0
+    grand_total_boxes = 0
+    grand_total_bottles = 0
     grand_total_val = 0.0
 
     for (cust_id, cust_name), sku_map in sorted(
@@ -607,6 +609,8 @@ def _build_customer_response(
     ):
         lines_out: list[WeeklySummaryCustomerLine] = []
         cust_qty = 0
+        cust_boxes = 0
+        cust_bottles = 0
         cust_val = 0.0
         for sku_id, agg in sorted(
             sku_map.items(), key=lambda kv: kv[1]["sku"].name.lower()
@@ -618,12 +622,17 @@ def _build_customer_response(
                 sku_id=sku_id,
                 sku_code=agg["sku"].sku_code,
                 sku_name=agg["sku"].name,
+                is_bottle=agg["sku"].is_bottle,
                 quantity=qty,
                 effective_price=ep,
                 line_total=lt,
                 remarks=agg["remarks"],
             ))
             cust_qty += qty
+            if agg["sku"].is_bottle:
+                cust_bottles += qty
+            else:
+                cust_boxes += qty
             if lt is not None:
                 cust_val += lt
 
@@ -632,9 +641,13 @@ def _build_customer_response(
             customer_name=cust_name,
             lines=lines_out,
             customer_total_quantity=cust_qty,
+            customer_total_boxes=cust_boxes,
+            customer_total_bottles=cust_bottles,
             customer_total_value=round(cust_val, 2) if cust_val else None,
         ))
         grand_total_qty += cust_qty
+        grand_total_boxes += cust_boxes
+        grand_total_bottles += cust_bottles
         grand_total_val += cust_val
 
     return WeeklySummaryResponse(
@@ -645,6 +658,8 @@ def _build_customer_response(
         suppliers=[],
         customers=customers_out,
         grand_total_quantity=grand_total_qty,
+        grand_total_boxes=grand_total_boxes,
+        grand_total_bottles=grand_total_bottles,
         grand_total_value=round(grand_total_val, 2) if grand_total_val else None,
     )
 
@@ -671,14 +686,16 @@ def monthly_booked_boxes(
         db.query(
             Order.organization_id.label("org_id"),
             Order.finalized_at.label("finalized_at"),
-            func.coalesce(func.sum(OrderLine.booked_count), 0).label("boxes"),
+            SKU.is_bottle.label("is_bottle"),
+            func.coalesce(func.sum(OrderLine.booked_count), 0).label("units"),
         )
         .join(OrderLine, OrderLine.order_id == Order.id)
+        .join(SKU, OrderLine.sku_id == SKU.id)
         .filter(
             Order.status.in_(("completed", "closed")),
             Order.finalized_at.isnot(None),
         )
-        .group_by(Order.id, Order.organization_id, Order.finalized_at)
+        .group_by(Order.id, Order.organization_id, Order.finalized_at, SKU.is_bottle)
     )
 
     if user.is_platform_admin or user.role == "courier":
@@ -689,13 +706,16 @@ def monthly_booked_boxes(
     else:
         raise HTTPException(403, "Geen toegang tot dit overzicht")
 
-    # Bucket booked boxes into (organization, "YYYY-MM").
-    buckets: dict[int | None, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    # Bucket booked units into (organization, "YYYY-MM"), boxes and bottles apart.
+    buckets: dict[int | None, dict[str, dict[str, int]]] = defaultdict(
+        lambda: defaultdict(lambda: {"boxes": 0, "bottles": 0})
+    )
     for row in query.all():
-        if not row.boxes or row.finalized_at is None:
+        if not row.units or row.finalized_at is None:
             continue
         month = row.finalized_at.strftime("%Y-%m")
-        buckets[row.org_id][month] += int(row.boxes)
+        unit = "bottles" if row.is_bottle else "boxes"
+        buckets[row.org_id][month][unit] += int(row.units)
 
     if not buckets:
         return MonthlyBoxesResponse(organizations=[])
@@ -717,14 +737,15 @@ def monthly_booked_boxes(
             else "Zonder handelaar"
         )
         month_rows = [
-            MonthlyBoxesMonth(month=m, boxes=b)
-            for m, b in sorted(months.items(), reverse=True)
+            MonthlyBoxesMonth(month=m, boxes=v["boxes"], bottles=v["bottles"])
+            for m, v in sorted(months.items(), reverse=True)
         ]
         organizations.append(
             MonthlyBoxesOrganization(
                 organization_id=org_id,
                 organization_name=org_name,
-                total_boxes=sum(months.values()),
+                total_boxes=sum(v["boxes"] for v in months.values()),
+                total_bottles=sum(v["bottles"] for v in months.values()),
                 months=month_rows,
             )
         )
@@ -853,11 +874,15 @@ def weekly_order_summary(
     # Build response
     suppliers_out: list[WeeklySummarySupplier] = []
     grand_total_qty = 0
+    grand_total_boxes = 0
+    grand_total_bottles = 0
     grand_total_val = 0.0
 
     for (sup_id, sup_name), sku_map in sorted(supplier_groups.items(), key=lambda x: x[0][1]):
         wines_out: list[WeeklySummaryWine] = []
         sup_qty = 0
+        sup_boxes = 0
+        sup_bottles = 0
         sup_val = 0.0
 
         for sku_id, entries in sku_map.items():
@@ -903,11 +928,16 @@ def weekly_order_summary(
                 sku_code=sku_obj.sku_code,
                 sku_name=sku_obj.name,
                 default_price=entries[0]["default_price"],
+                is_bottle=sku_obj.is_bottle,
                 total_quantity=wine_qty,
                 orders=orders_out,
                 wine_total=round(wine_total, 2) if wine_total else None,
             ))
             sup_qty += wine_qty
+            if sku_obj.is_bottle:
+                sup_bottles += wine_qty
+            else:
+                sup_boxes += wine_qty
             sup_val += wine_total
 
         suppliers_out.append(WeeklySummarySupplier(
@@ -915,9 +945,13 @@ def weekly_order_summary(
             supplier_name=sup_name,
             wines=wines_out,
             supplier_total_quantity=sup_qty,
+            supplier_total_boxes=sup_boxes,
+            supplier_total_bottles=sup_bottles,
             supplier_total_value=round(sup_val, 2) if sup_val else None,
         ))
         grand_total_qty += sup_qty
+        grand_total_boxes += sup_boxes
+        grand_total_bottles += sup_bottles
         grand_total_val += sup_val
 
     return WeeklySummaryResponse(
@@ -928,6 +962,8 @@ def weekly_order_summary(
         suppliers=suppliers_out,
         customers=[],
         grand_total_quantity=grand_total_qty,
+        grand_total_boxes=grand_total_boxes,
+        grand_total_bottles=grand_total_bottles,
         grand_total_value=round(grand_total_val, 2) if grand_total_val else None,
     )
 
