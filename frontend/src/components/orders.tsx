@@ -31,11 +31,17 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronDown, Minus, Plus } from "lucide-react";
+import {
+  unitLabel,
+  formatBoxesBottles,
+  formatBookedBoxesBottles,
+} from "@/lib/units";
 
 interface SKUOption {
   id: number;
   sku_code: string;
   name: string;
+  is_bottle?: boolean;
   category?: string;
   attributes?: Record<string, string>;
 }
@@ -60,6 +66,7 @@ interface OrderLine {
   quantity: number;
   booked_count: number;
   has_image: boolean;
+  is_bottle: boolean;
   show_prices: boolean;
   unit_price: number | null;
   discount_type: string | null;
@@ -135,6 +142,8 @@ interface Order {
   lines: OrderLine[];
   total_boxes: number;
   booked_boxes: number;
+  total_bottles: number;
+  booked_bottles: number;
   visible_total: number | null;
   hidden_lines_count: number;
 }
@@ -320,14 +329,20 @@ export function OrdersPage() {
   const remainingBoxes = (order: Order) =>
     Math.max(order.total_boxes - order.booked_boxes, 0);
 
+  const remainingBottles = (order: Order) =>
+    Math.max(order.total_bottles - order.booked_bottles, 0);
+
+  const remainingUnits = (order: Order) =>
+    remainingBoxes(order) + remainingBottles(order);
+
   const isOpenWorkOrder = (order: Order) =>
-    order.status === "active" && remainingBoxes(order) > 0;
+    order.status === "active" && remainingUnits(order) > 0;
 
   const isHistoryOrder = (order: Order) =>
     order.status === "completed" ||
     order.status === "cancelled" ||
     order.status === "closed" ||
-    remainingBoxes(order) === 0;
+    remainingUnits(order) === 0;
 
   const isPendingOrder = (order: Order) =>
     order.status === "draft" || order.status === "pending_images";
@@ -397,15 +412,19 @@ export function OrdersPage() {
       const [bDay] = getOrderDeliveryDays(b);
       const dayDiff = (DELIVERY_DAY_ORDER[aDay] ?? 9) - (DELIVERY_DAY_ORDER[bDay] ?? 9);
       if (dayDiff !== 0) return dayDiff;
-      return remainingBoxes(b) - remainingBoxes(a);
+      return remainingUnits(b) - remainingUnits(a);
     });
 
   const weekStats = (weekOrders: Order[]) => {
     const openOrders = weekOrders.filter(
-      (order) => order.status === "active" && remainingBoxes(order) > 0,
+      (order) => order.status === "active" && remainingUnits(order) > 0,
     );
     return {
       openBoxes: openOrders.reduce((sum, order) => sum + remainingBoxes(order), 0),
+      openBottles: openOrders.reduce(
+        (sum, order) => sum + remainingBottles(order),
+        0,
+      ),
       openOrders: openOrders.length,
     };
   };
@@ -440,8 +459,8 @@ export function OrdersPage() {
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <span>
           {isCustomer
-            ? `${o.total_boxes} ${o.total_boxes === 1 ? "doos" : "dozen"}`
-            : `${o.booked_boxes}/${o.total_boxes} dozen geboekt`}
+            ? formatBoxesBottles(o.total_boxes, o.total_bottles)
+            : `${formatBookedBoxesBottles(o.booked_boxes, o.total_boxes, o.booked_bottles, o.total_bottles)} geboekt`}
         </span>
         <span className="ml-auto flex gap-1">
           {getOrderDeliveryDays(o).map((day) => (
@@ -497,8 +516,8 @@ export function OrdersPage() {
               <p className="truncate text-sm font-medium">{order.reference}</p>
               <p className="truncate text-xs text-muted-foreground">
                 {isCustomer
-                  ? `${order.total_boxes} ${order.total_boxes === 1 ? "doos" : "dozen"}`
-                  : `${order.customer_name ?? "—"} · ${order.booked_boxes}/${order.total_boxes} dozen`}
+                  ? formatBoxesBottles(order.total_boxes, order.total_bottles)
+                  : `${order.customer_name ?? "—"} · ${formatBookedBoxesBottles(order.booked_boxes, order.total_boxes, order.booked_bottles, order.total_bottles)}`}
               </p>
             </div>
             {!isCustomer && (
@@ -616,7 +635,10 @@ export function OrdersPage() {
                   ? `${currentGroup?.orders.length ?? 0} order${
                       (currentGroup?.orders.length ?? 0) === 1 ? "" : "s"
                     }${currentGroup ? ` · levering ${currentGroup.range}` : ""}`
-                  : `${weekStats(currentGroup?.orders ?? []).openBoxes} dozen open · ${
+                  : `${formatBoxesBottles(
+                      weekStats(currentGroup?.orders ?? []).openBoxes,
+                      weekStats(currentGroup?.orders ?? []).openBottles,
+                    )} open · ${
                       weekStats(currentGroup?.orders ?? []).openOrders
                     } orders${currentGroup ? ` · levering ${currentGroup.range}` : ""}`}
               </p>
@@ -645,9 +667,10 @@ export function OrdersPage() {
             {overdueGroups.length > 0 &&
               renderCollapsedGroup(
                 "Achterstallig",
-                `${groupStats(overdueGroups).openBoxes} dozen open · ${
-                  groupStats(overdueGroups).openOrders
-                } orders`,
+                `${formatBoxesBottles(
+                  groupStats(overdueGroups).openBoxes,
+                  groupStats(overdueGroups).openBottles,
+                )} open · ${groupStats(overdueGroups).openOrders} orders`,
                 showOverdue,
                 () => setShowOverdue((value) => !value),
                 overdueGroups.map((group) => renderWeekGroup(group, true)),
@@ -669,9 +692,10 @@ export function OrdersPage() {
                 "Volgende weken",
                 isCustomer
                   ? `${upcomingGroups.reduce((n, g) => n + g.orders.length, 0)} orders`
-                  : `${groupStats(upcomingGroups).openBoxes} dozen open · ${
-                      groupStats(upcomingGroups).openOrders
-                    } orders`,
+                  : `${formatBoxesBottles(
+                      groupStats(upcomingGroups).openBoxes,
+                      groupStats(upcomingGroups).openBottles,
+                    )} open · ${groupStats(upcomingGroups).openOrders} orders`,
                 showUpcoming,
                 () => setShowUpcoming((value) => !value),
                 upcomingGroups.map((group) => renderWeekGroup(group, true)),
@@ -910,6 +934,33 @@ function ManualOrderDialog({
             if (selectedCustomerId === null) return null;
             const customer = allCustomers.find((c) => c.id === selectedCustomerId);
             if (!customer) return null;
+            const isBottleSku = (skuId: number) =>
+              allSkus.find((s) => s.id === skuId)?.is_bottle ?? false;
+            const boxLines = currentLines.filter((l) => !isBottleSku(l.sku_id));
+            const bottleLines = currentLines.filter((l) => isBottleSku(l.sku_id));
+            const renderSkuLine = (line: CustomerSkuLine) => {
+              const sku = allSkus.find((s) => s.id === line.sku_id);
+              if (!sku) return null;
+              return (
+                <div key={line.sku_id} className="flex items-center gap-2">
+                  <Checkbox
+                    checked={line.checked}
+                    onCheckedChange={() => toggleSkuLine(line.sku_id)}
+                  />
+                  <span
+                    className="text-sm flex-1 truncate"
+                    title={`${sku.name} (${sku.sku_code})`}
+                  >
+                    {sku.name}
+                  </span>
+                  <OrderQuantityControl
+                    value={line.quantity}
+                    disabled={!line.checked}
+                    onChange={(qty) => updateSkuQuantity(line.sku_id, qty)}
+                  />
+                </div>
+              );
+            };
             return (
               <div className="border border-border rounded-lg">
                 <div className="px-3 py-2 bg-muted rounded-t-lg flex items-center justify-between gap-2">
@@ -935,35 +986,25 @@ function ManualOrderDialog({
                     <p className="text-xs text-muted-foreground">
                       Geen bekende producten — voeg hieronder toe
                     </p>
+                  ) : bottleLines.length === 0 ? (
+                    boxLines.map(renderSkuLine)
                   ) : (
-                    currentLines.map((line) => {
-                      const sku = allSkus.find((s) => s.id === line.sku_id);
-                      if (!sku) return null;
-                      return (
-                        <div
-                          key={line.sku_id}
-                          className="flex items-center gap-2"
-                        >
-                          <Checkbox
-                            checked={line.checked}
-                            onCheckedChange={() => toggleSkuLine(line.sku_id)}
-                          />
-                          <span
-                            className="text-sm flex-1 truncate"
-                            title={`${sku.name} (${sku.sku_code})`}
-                          >
-                            {sku.name}
-                          </span>
-                          <OrderQuantityControl
-                            value={line.quantity}
-                            disabled={!line.checked}
-                            onChange={(qty) =>
-                              updateSkuQuantity(line.sku_id, qty)
-                            }
-                          />
+                    <>
+                      {boxLines.length > 0 && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-semibold text-muted-foreground">
+                            Dozen
+                          </p>
+                          {boxLines.map(renderSkuLine)}
                         </div>
-                      );
-                    })
+                      )}
+                      <div className="space-y-1 pt-1">
+                        <p className="text-xs font-semibold text-muted-foreground">
+                          Flessen
+                        </p>
+                        {bottleLines.map(renderSkuLine)}
+                      </div>
+                    </>
                   )}
                   {/* Add other SKU — only available to non-customer roles */}
                   {user?.role !== "customer" && (
@@ -985,6 +1026,7 @@ function ManualOrderDialog({
                             .map((s) => (
                               <SelectItem key={s.id} value={String(s.id)}>
                                 {s.name} ({s.sku_code})
+                                {s.is_bottle ? " · fles" : ""}
                               </SelectItem>
                             ))}
                         </SelectContent>
@@ -1148,11 +1190,14 @@ function OrderDetailDialog({
 
   async function handleClose() {
     if (!order) return;
-    const open = Math.max(order.total_boxes - order.booked_boxes, 0);
+    const openBoxes = Math.max(order.total_boxes - order.booked_boxes, 0);
+    const openBottles = Math.max(order.total_bottles - order.booked_bottles, 0);
     if (
       !confirm(
         `Order ${order.reference} sluiten?` +
-          (open > 0 ? ` Er blijven ${open} dozen open die niet meer geboekt worden.` : ""),
+          (openBoxes + openBottles > 0
+            ? ` Er blijven ${formatBoxesBottles(openBoxes, openBottles)} open die niet meer geboekt worden.`
+            : ""),
       )
     )
       return;
@@ -1251,7 +1296,14 @@ function OrderDetailDialog({
           </p>
           {!isCustomer && (
             <p className="text-sm text-muted-foreground">
-              Voortgang: {order.booked_boxes}/{order.total_boxes} dozen geboekt
+              Voortgang:{" "}
+              {formatBookedBoxesBottles(
+                order.booked_boxes,
+                order.total_boxes,
+                order.booked_bottles,
+                order.total_bottles,
+              )}{" "}
+              geboekt
             </p>
           )}
 
@@ -1303,14 +1355,22 @@ function OrderDetailDialog({
                       <Badge variant="secondary" className="text-xs px-1 py-0">
                         {DELIVERY_DAY_LABELS[line.delivery_day] ?? line.delivery_day}
                       </Badge>
+                      {line.is_bottle && (
+                        <>
+                          {" "}
+                          <Badge variant="secondary" className="text-xs px-1 py-0">
+                            Fles
+                          </Badge>
+                        </>
+                      )}
                     </p>
                   </div>
                   <div className="text-right flex items-center gap-2">
                     <div>
                       <p>
                         {isCustomer
-                          ? `${line.quantity} ${line.quantity === 1 ? "doos" : "dozen"}`
-                          : `${line.booked_count}/${line.quantity} dozen`}
+                          ? `${line.quantity} ${unitLabel(line.is_bottle, line.quantity)}`
+                          : `${line.booked_count}/${line.quantity} ${unitLabel(line.is_bottle, line.quantity)}`}
                       </p>
                       {line.show_prices && line.effective_price != null && (
                         <p className="text-xs text-muted-foreground">

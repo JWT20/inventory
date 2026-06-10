@@ -366,7 +366,7 @@ def list_sku_options(
     don't pull large SKUResponse payloads. Returns all matching SKUs — the
     projection is cheap, so there is no truncating page limit.
     """
-    query = db.query(SKU.id, SKU.sku_code, SKU.name)
+    query = db.query(SKU.id, SKU.sku_code, SKU.name, SKU.is_bottle)
     if active_only:
         query = query.filter(SKU.active.is_(True))
     if not user.is_platform_admin:
@@ -379,7 +379,8 @@ def list_sku_options(
         query = query.filter(SKU.organization_id == organization_id)
     rows = query.order_by(SKU.name).all()
     return [
-        SKUOption(id=r.id, sku_code=r.sku_code, name=r.name) for r in rows
+        SKUOption(id=r.id, sku_code=r.sku_code, name=r.name, is_bottle=r.is_bottle)
+        for r in rows
     ]
 
 

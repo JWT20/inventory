@@ -216,6 +216,7 @@ class SKUOption(BaseModel):
     id: int
     sku_code: str
     name: str
+    is_bottle: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -366,6 +367,7 @@ class OrderLineResponse(BaseModel):
     quantity: int
     booked_count: int
     has_image: bool
+    is_bottle: bool = False
     show_prices: bool = True
     unit_price: float | None = None
     discount_type: str | None = None
@@ -389,8 +391,11 @@ class OrderResponse(BaseModel):
     updated_at: datetime
     customer_name: str | None = None
     lines: list[OrderLineResponse] = []
+    # Box and bottle lines are separate order units; the totals never mix.
     total_boxes: int = 0
     booked_boxes: int = 0
+    total_bottles: int = 0
+    booked_bottles: int = 0
     visible_total: float | None = None
     hidden_lines_count: int = 0
 
