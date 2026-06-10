@@ -14,11 +14,14 @@ from app.auth import hash_password
 from app.database import SessionLocal
 from app.models import Customer, CustomerSKU, Organization, SKU, User
 
+# (code, name, description, is_bottle)
 SAMPLE_SKUS = [
-    ("CHAT-GRAN-ROO-750", "Château Grand Rouge", "Bordeaux blend, rood, 750ml"),
-    ("DOMA-BLAN-WIT-750", "Domaine Blanc", "Chardonnay, wit, 750ml"),
-    ("PROS-BRUT-SPA-750", "Prosecco Brut", "Mousserend, 750ml"),
-    ("RIOJ-RESE-ROO-750", "Rioja Reserva", "Tempranillo, rood, 750ml"),
+    ("CHAT-GRAN-ROO-750", "Château Grand Rouge", "Bordeaux blend, rood, 750ml", False),
+    ("DOMA-BLAN-WIT-750", "Domaine Blanc", "Chardonnay, wit, 750ml", False),
+    ("PROS-BRUT-SPA-750", "Prosecco Brut", "Mousserend, 750ml", False),
+    ("RIOJ-RESE-ROO-750", "Rioja Reserva", "Tempranillo, rood, 750ml", False),
+    # Los fles-product: per fles besteld/gescand, niet per doos.
+    ("CAVA-ZERO-SPA-750", "Cava 0,0", "Alcoholvrij mousserend, 750ml", True),
 ]
 
 # (username, password, role, needs_org, is_customer)
@@ -45,7 +48,7 @@ def main() -> None:
         if admin is not None and admin.organization_id is None:
             admin.organization_id = org.id
 
-        for code, name, desc in SAMPLE_SKUS:
+        for code, name, desc, is_bottle in SAMPLE_SKUS:
             if db.query(SKU).filter_by(sku_code=code).first() is None:
                 db.add(
                     SKU(
@@ -55,6 +58,7 @@ def main() -> None:
                         category="wine",
                         active=True,
                         organization_id=org.id,
+                        is_bottle=is_bottle,
                     )
                 )
         db.commit()

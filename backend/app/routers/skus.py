@@ -198,7 +198,7 @@ async def _process_reference_image(
                     image,
                     code=WINE_CHECK_FAILED,
                     message=(
-                        "Dit beeld werd niet herkend als wijndoos "
+                        "Dit beeld werd niet herkend als wijndoos of fles "
                         f"({description})."
                     ),
                 )

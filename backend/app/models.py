@@ -391,7 +391,7 @@ class OrderLine(Base):
 
 
 class Booking(Base):
-    """1 scan = 1 box = 1 booking."""
+    """1 scan = 1 besteleenheid (doos of fles) = 1 booking."""
     __tablename__ = "bookings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
