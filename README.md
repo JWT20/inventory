@@ -166,12 +166,11 @@ python -m scripts.backfill_active_from_images
 
 ### 2. Create an order (Orders tab)
 1. **Manual form**: Create an order with inline product details per line
-2. The system auto-matches or creates SKUs and sets the order status:
-   - `draft` — all SKUs already have reference images
-   - `pending_images` — one or more SKUs still need reference photos
+2. The order starts as `pending_approval`: it awaits merchant approval before the courier sees it
 
-### 3. Activate the order
-- Activate the order (status → `active`). Reference images are NOT required at this point — procurement is order-driven, so the bottle often hasn't physically arrived yet.
+### 3. Approve the order
+- A merchant (owner/member) approves the order. The delivery week is fixed to the ISO week of approval.
+- Status becomes `active`, or `pending_images` when SKUs still miss reference photos. Reference images are NOT required to activate — procurement is order-driven, so the bottle often hasn't physically arrived yet.
 - Only active orders appear in the scanner workflow
 
 ### 4. Scan & book (Scan & Boek tab)
@@ -219,10 +218,9 @@ python -m scripts.backfill_active_from_images
 |--------|------|------|-------------|
 | POST | `/api/orders` | Merchant/Admin | Create order manually |
 | GET | `/api/orders` | Any | List orders (merchants see own, admins see all) |
-| GET | `/api/orders/deadline` | Any | Current order deadline context |
 | GET | `/api/orders/weekly-summary` | Any | Weekly summary |
 | GET | `/api/orders/{id}` | Any | Get order with lines |
-| POST | `/api/orders/{id}/activate` | Merchant/Admin | Activate order (requires all SKUs to have images) |
+| POST | `/api/orders/{id}/approve` | Merchant/Admin | Approve order (assigns delivery week, activates) |
 | PATCH | `/api/orders/{id}` | Merchant/Admin | Update order metadata |
 | POST | `/api/orders/{id}/lines` | Merchant/Admin | Add line |
 | PATCH | `/api/orders/{id}/lines/{line_id}` | Merchant/Admin | Update line |
@@ -283,7 +281,7 @@ python -m scripts.backfill_active_from_images
 
 All business operations publish events to Kafka topic `warehouse_events`, which Apache Pinot ingests for real-time analytics.
 
-**Event types:** `user_login`, `user_created`, `user_deleted`, `sku_created`, `sku_updated`, `sku_deleted`, `reference_image_uploaded`, `reference_image_deleted`, `order_created_from_csv`, `order_created_manual`, `order_activated`, `order_deleted`, `box_identified`, `box_booked`, `product_created_inline`, `vision_identify`
+**Event types:** `user_login`, `user_created`, `user_deleted`, `sku_created`, `sku_updated`, `sku_deleted`, `reference_image_uploaded`, `reference_image_deleted`, `order_created_from_csv`, `order_created_manual`, `order_approved`, `order_deleted`, `box_identified`, `box_booked`, `product_created_inline`, `vision_identify`
 
 **Event schema:**
 ```json
@@ -337,7 +335,7 @@ backend/                FastAPI application
     routers/
       auth.py           Login, user CRUD
       skus.py           SKU CRUD, reference image upload
-      orders.py         Order CRUD, weekly/deadline views, order lines, bookings
+      orders.py         Order CRUD, weekly views, order lines, bookings
       receiving.py      Box identification, booking, inline product creation
       vision.py         Ad-hoc vision identification
       inventory.py      Inbound shipments + stock movement/valuation endpoints
@@ -364,7 +362,7 @@ frontend/               React + Vite + Tailwind + Shadcn/ui
     components/
       login.tsx         Login form
       receive.tsx       Scanner UI (order select → scan → booking result)
-      orders.tsx        Order management (create, update, activate, line edits)
+      orders.tsx        Order management (create, update, approve, line edits)
       skus.tsx          Product management (CRUD, reference image upload)
       customers.tsx     Customer management
       accounts.tsx      User management (admin only)
@@ -395,7 +393,7 @@ User ──< Order ──< OrderLine >── SKU ──< ReferenceImage
                    User ──< Booking (scanned_by)
 ```
 
-**Order statuses:** `draft` → `pending_images` → `active` → `completed` (or `cancelled`)
+**Order statuses:** `pending_approval` → `pending_images` → `active` → `completed` (or `closed`/`cancelled`)
 
 ## Deployment
 

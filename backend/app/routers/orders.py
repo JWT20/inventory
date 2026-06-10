@@ -25,7 +25,6 @@ from app.models import (
 )
 from app.schemas import (
     BookingResponse,
-    DeadlineResponse,
     ManualOrderCreate,
     MonthlyBoxesMonth,
     MonthlyBoxesOrganization,
@@ -43,7 +42,6 @@ from app.schemas import (
     WeeklySummarySupplier,
     WeeklySummaryWine,
 )
-from app.services.deadlines import get_order_deadline, get_next_deadline
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -242,6 +240,11 @@ def _default_delivery_day(customer: Customer) -> str:
     return customer.delivery_days[0]
 
 
+def _current_iso_week() -> str:
+    today = datetime.date.today()
+    return f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"
+
+
 @router.post("", response_model=OrderResponse)
 def create_order(
     body: ManualOrderCreate,
@@ -274,14 +277,15 @@ def create_order(
                 )
 
     ref = f"ORD-{uuid.uuid4().hex[:8].upper()}"
-    delivery_week, _, _ = get_next_deadline()
+    # New orders await merchant approval; the delivery week is assigned at
+    # the moment of approval, not at creation.
     order = Order(
         organization_id=org_id,
         created_by=user.id,
         reference=ref,
-        status="draft",
+        status="pending_approval",
         remarks=body.remarks,
-        delivery_week=delivery_week,
+        delivery_week=None,
     )
     db.add(order)
     db.flush()
@@ -331,12 +335,6 @@ def create_order(
     # Auto-populate customer_skus catalog
     _upsert_customer_skus(db, customer_sku_pairs)
 
-    # Determine status
-    all_have_images = all(
-        len(s.reference_images) > 0 for s in sku_cache.values()
-    )
-    order.status = "active" if all_have_images else "pending_images"
-
     db.commit()
     db.refresh(order)
 
@@ -377,11 +375,11 @@ def list_orders(
     elif user.role == "courier":
         if include_history:
             query = query.filter(Order.status.in_((
-                "draft", "pending_images", "active",
+                "pending_images", "active",
                 "completed", "cancelled", "closed",
             )))
         else:
-            query = query.filter(Order.status.in_(("draft", "pending_images", "active")))
+            query = query.filter(Order.status.in_(("pending_images", "active")))
     elif user.role == "customer":
         if not user.customer_id:
             return []
@@ -402,73 +400,6 @@ def list_orders(
 
     orders = query.order_by(Order.created_at.desc()).offset(offset).limit(limit).all()
     return [_order_to_response(o, db) for o in orders]
-
-
-# ---------------------------------------------------------------------------
-# Order deadline
-# ---------------------------------------------------------------------------
-
-
-DELIVERY_DAY_OFFSETS = {
-    "monday": 0,
-    "tuesday": 1,
-    "wednesday": 2,
-    "thursday": 3,
-    "friday": 4,
-}
-
-
-@router.get("/deadline", response_model=DeadlineResponse)
-def get_deadline(
-    week: str = Query(None, description="ISO week, bijv. '2026-W15'. Standaard: huidige week."),
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """Get the order deadline. Without a week param, returns the next upcoming deadline.
-
-    If the current week's deadline has passed, automatically shows next week's.
-    Includes delivery dates (wed/thu/fri) for the week and the customer's
-    personal delivery date if applicable.
-    """
-    if week:
-        try:
-            deadline_dt, extended = get_order_deadline(week)
-        except ValueError:
-            raise HTTPException(400, f"Ongeldig weekformaat: '{week}'. Gebruik bijv. '2026-W15'.")
-    else:
-        week, deadline_dt, extended = get_next_deadline()
-
-    # Calculate delivery dates for this week (wed/thu/fri)
-    monday = datetime.datetime.strptime(week + "-1", "%G-W%V-%u").date()
-    wed = (monday + datetime.timedelta(days=2)).isoformat()
-    thu = (monday + datetime.timedelta(days=3)).isoformat()
-    fri = (monday + datetime.timedelta(days=4)).isoformat()
-
-    # If user is a customer, resolve their personal delivery date
-    customer_delivery_day = None
-    customer_delivery_days: list[str] = []
-    customer_delivery_date = None
-    if user.role == "customer" and user.customer_id:
-        customer = db.get(Customer, user.customer_id)
-        if customer:
-            customer_delivery_day = _default_delivery_day(customer)
-            customer_delivery_days = customer.delivery_days
-            offset = DELIVERY_DAY_OFFSETS.get(customer_delivery_day, 3)
-            customer_delivery_date = (monday + datetime.timedelta(days=offset)).isoformat()
-
-    now = datetime.datetime.now()
-    return DeadlineResponse(
-        week=week,
-        deadline=deadline_dt.isoformat(),
-        deadline_extended=extended,
-        is_past=now > deadline_dt,
-        delivery_wednesday=wed,
-        delivery_thursday=thu,
-        delivery_friday=fri,
-        customer_delivery_day=customer_delivery_day,
-        customer_delivery_days=customer_delivery_days,
-        customer_delivery_date=customer_delivery_date,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -572,8 +503,6 @@ def weekly_pick_photos(
 
 def _build_customer_response(
     week: str,
-    deadline_dt: datetime.datetime,
-    deadline_extended: bool,
     enriched: list[dict],
 ) -> WeeklySummaryResponse:
     """Pivot enriched lines into Customer -> SKU lines for invoicing."""
@@ -655,8 +584,6 @@ def _build_customer_response(
 
     return WeeklySummaryResponse(
         week=week,
-        deadline=deadline_dt.isoformat(),
-        deadline_extended=deadline_extended,
         group_by="customer",
         suppliers=[],
         customers=customers_out,
@@ -791,7 +718,9 @@ def weekly_order_summary(
             selectinload(OrderLine.order),
         )
         .filter(
-            Order.status.in_(("draft", "pending_images", "active")),
+            # Only approved orders count toward the weekly summary; orders
+            # awaiting approval have no delivery week yet.
+            Order.status.in_(("pending_images", "active")),
             or_(
                 Order.delivery_week == week,
                 # Fallback for legacy orders without delivery_week
@@ -804,13 +733,9 @@ def weekly_order_summary(
 
     lines = query.all()
 
-    deadline_dt, deadline_extended = get_order_deadline(week)
-
     if not lines:
         return WeeklySummaryResponse(
             week=week,
-            deadline=deadline_dt.isoformat(),
-            deadline_extended=deadline_extended,
             group_by=group_by,
             suppliers=[],
             customers=[],
@@ -864,9 +789,7 @@ def weekly_order_summary(
         })
 
     if group_by == "customer":
-        return _build_customer_response(
-            week, deadline_dt, deadline_extended, enriched,
-        )
+        return _build_customer_response(week, enriched)
 
     # Group: supplier -> sku -> list of (customer_name, quantity, effective_price)
     supplier_groups: dict[tuple[int | None, str], dict[int, list]] = defaultdict(lambda: defaultdict(list))
@@ -959,8 +882,6 @@ def weekly_order_summary(
 
     return WeeklySummaryResponse(
         week=week,
-        deadline=deadline_dt.isoformat(),
-        deadline_extended=deadline_extended,
         group_by="supplier",
         suppliers=suppliers_out,
         customers=[],
@@ -994,40 +915,53 @@ def get_order(
     return _order_to_response(order, db)
 
 
-@router.post("/{order_id}/activate", response_model=OrderResponse)
-def activate_order(
+@router.post("/{order_id}/approve", response_model=OrderResponse)
+def approve_order(
     order_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Activate an order.
+    """Approve an order so the courier can start working on it.
 
-    Reference images are no longer required at activation time. Wines that
-    arrive at the warehouse without a reference photo are surfaced at scan
-    time, where the worker can capture the photo on the spot (the bottle is
-    in their hands). This keeps procurement-driven order flow unblocked
-    while still gating the matching step on having something to match.
+    On approval the delivery week is fixed to the ISO week of today: an
+    order approved on Friday is delivered that same week. The order becomes
+    ``active``, or ``pending_images`` when SKU reference images are still
+    missing.
+
+    A ``pending_images`` order can be approved again once that is resolved
+    (or deliberately without images: wines that arrive at the warehouse
+    without a reference photo are surfaced at scan time, where the worker
+    can capture the photo on the spot). The delivery week assigned at first
+    approval is kept in that case.
     """
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, "Order niet gevonden")
 
-    # Only platform admin or org owner can activate
-    if not user.is_platform_admin and user.role != "owner":
-        raise HTTPException(403, "Alleen eigenaren kunnen orders activeren")
+    if not user.is_platform_admin and user.role not in ("owner", "member"):
+        raise HTTPException(403, "Alleen handelaren kunnen orders goedkeuren")
     if not user.is_platform_admin and order.organization_id != user.organization_id:
         raise HTTPException(403, "Geen toegang tot deze order")
 
-    if order.status not in ("draft", "pending_images"):
-        raise HTTPException(400, f"Order kan niet geactiveerd worden (status: {order.status})")
+    if order.status not in ("pending_approval", "pending_images"):
+        raise HTTPException(400, f"Order kan niet goedgekeurd worden (status: {order.status})")
 
-    order.status = "active"
+    if order.status == "pending_approval":
+        order.delivery_week = _current_iso_week()
+        all_have_images = all(
+            len(line.sku.reference_images) > 0 for line in order.lines
+        )
+        order.status = "active" if all_have_images else "pending_images"
+    else:
+        # pending_images → active: explicit activation, images optional.
+        order.status = "active"
+
     db.commit()
     db.refresh(order)
 
     publish_event(
-        "order_activated",
-        details={"order_reference": order.reference},
+        "order_approved",
+        details={"order_reference": order.reference, "new_status": order.status},
         user=user,
         resource_type="order",
         resource_id=order.id,
@@ -1137,8 +1071,8 @@ def delete_order(
 # Order line management
 # ---------------------------------------------------------------------------
 
-EDITABLE_STATUSES = ("draft", "pending_images")
-ADDABLE_STATUSES = ("draft", "pending_images", "active")
+EDITABLE_STATUSES = ("pending_approval", "pending_images")
+ADDABLE_STATUSES = ("pending_approval", "pending_images", "active")
 
 
 def _get_editable_order(order_id: int, db: Session, user: User) -> Order:
@@ -1155,20 +1089,23 @@ def _get_editable_order(order_id: int, db: Session, user: User) -> Order:
 
 
 def _recompute_order_status(order: Order) -> None:
-    """Recompute order status based on SKU images and booking progress."""
-    if order.status in ("completed", "cancelled", "closed"):
+    """Recompute order status based on SKU images and booking progress.
+
+    Orders awaiting approval stay pending_approval regardless of line edits;
+    approval is an explicit merchant action.
+    """
+    if order.status in ("completed", "cancelled", "closed", "pending_approval"):
         return
     all_have_images = all(len(l.sku.reference_images) > 0 for l in order.lines)
     all_booked = all(l.booked_count >= l.quantity for l in order.lines)
-    if all_booked and order.status == "active":
-        order.status = "completed"
-        order.mark_finalized()
-    elif order.status == "active":
-        pass  # stay active
-    elif all_have_images:
-        order.status = "active" if order.status == "active" else "draft"
-    else:
-        order.status = "pending_images"
+    if order.status == "active":
+        if all_booked:
+            order.status = "completed"
+            order.mark_finalized()
+        return
+    # Approved but waiting for images: promote once every SKU has one.
+    if all_have_images:
+        order.status = "active"
 
 
 @router.post("/{order_id}/lines", response_model=OrderResponse)
@@ -1178,7 +1115,7 @@ def add_order_line(
     db: Session = Depends(get_db),
     user: User = Depends(require_can_create_orders),
 ):
-    """Add a line to an order. Allowed on draft, pending_images, and active orders."""
+    """Add a line to an order. Allowed on pending_approval, pending_images, and active orders."""
     order = _get_editable_order(order_id, db, user)
 
     if order.status not in ADDABLE_STATUSES:
@@ -1261,7 +1198,7 @@ def update_order_line(
 ):
     """Update quantity of an order line.
 
-    - Draft/pending_images: quantity can be freely changed (>= 1).
+    - Pending_approval/pending_images: quantity can be freely changed (>= 1).
     - Active: quantity can only be increased (not decreased below booked_count).
     """
     order = _get_editable_order(order_id, db, user)
@@ -1316,7 +1253,7 @@ def delete_order_line(
     db: Session = Depends(get_db),
     user: User = Depends(require_can_create_orders),
 ):
-    """Delete an order line. Only allowed on draft/pending_images orders with no bookings."""
+    """Delete an order line. Only allowed on pending_approval/pending_images orders with no bookings."""
     order = _get_editable_order(order_id, db, user)
 
     if order.status not in EDITABLE_STATUSES:

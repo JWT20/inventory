@@ -75,18 +75,6 @@ interface OrderLine {
   line_total: number | null;
 }
 
-interface DeadlineInfo {
-  week: string;
-  deadline: string;
-  deadline_extended: boolean;
-  is_past: boolean;
-  delivery_wednesday: string;
-  delivery_thursday: string;
-  delivery_friday: string;
-  customer_delivery_days: string[];
-  customer_delivery_date: string | null;
-}
-
 const DELIVERY_DAY_LABELS: Record<string, string> = {
   monday: "Ma",
   tuesday: "Di",
@@ -103,7 +91,6 @@ const DELIVERY_DAY_LABELS_LONG: Record<string, string> = {
   friday: "Vrijdag",
 };
 
-const EXTENDED_DELIVERY_DAYS = ["monday", "tuesday"];
 const DELIVERY_DAY_ORDER: Record<string, number> = {
   monday: 0,
   tuesday: 1,
@@ -155,7 +142,7 @@ interface CustomerSkuLine {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  draft: "Concept",
+  pending_approval: "Wacht op goedkeuring",
   pending_images: "Wacht op beelden",
   active: "Actief",
   completed: "Voltooid",
@@ -164,7 +151,7 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_VARIANT: Record<string, "active" | "inactive"> = {
-  draft: "inactive",
+  pending_approval: "inactive",
   pending_images: "inactive",
   active: "active",
   completed: "active",
@@ -196,7 +183,6 @@ export function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [showManual, setShowManual] = useState(false);
-  const [deadline, setDeadline] = useState<DeadlineInfo | null>(null);
   const [showOverdue, setShowOverdue] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showUpcoming, setShowUpcoming] = useState(false);
@@ -204,15 +190,11 @@ export function OrdersPage() {
 
   const load = useCallback(async () => {
     try {
-      const [ordersData, deadlineData] = await Promise.all([
-        api.listOrders(undefined, {
-          includeHistory: user?.role === "courier",
-          limit: user?.role === "courier" ? 150 : 100,
-        }),
-        api.getDeadline(),
-      ]);
+      const ordersData = await api.listOrders(undefined, {
+        includeHistory: user?.role === "courier",
+        limit: user?.role === "courier" ? 150 : 100,
+      });
       setOrders(ordersData);
-      setDeadline(deadlineData);
     } catch {
       toast.error("Kan orders niet laden");
     } finally {
@@ -233,26 +215,6 @@ export function OrdersPage() {
       user.role === "owner" ||
       user.role === "member" ||
       user.role === "customer");
-
-  const formatDeadline = (dl: DeadlineInfo) => {
-    const d = new Date(dl.deadline);
-    return d.toLocaleDateString("nl-NL", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
-  const formatDate = (iso: string) => {
-    const d = new Date(iso + "T00:00:00");
-    return d.toLocaleDateString("nl-NL", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-    });
-  };
 
   const DELIVERY_DAY_LABELS_FULL: Record<string, string> = {
     monday: "maandag",
@@ -344,8 +306,10 @@ export function OrdersPage() {
     order.status === "closed" ||
     remainingUnits(order) === 0;
 
+  const isApprovalOrder = (order: Order) => order.status === "pending_approval";
+
   const isPendingOrder = (order: Order) =>
-    order.status === "draft" || order.status === "pending_images";
+    order.status === "pending_approval" || order.status === "pending_images";
 
   const missingImageCount = (order: Order) =>
     order.lines.filter((l) => !l.has_image).length;
@@ -372,13 +336,17 @@ export function OrdersPage() {
 
   // For customers: split by week (current/future vs past), ignore status entirely
   // and hide cancelled orders. For everyone else: keep the open/history split,
-  // and pull pending (draft/pending_images) orders out into their own bucket.
+  // pull orders awaiting approval into a "Te beoordelen" action bucket and
+  // pending_images orders into their own bucket.
   const visibleOrders = isCustomer
     ? orders.filter((o) => o.status !== "cancelled")
     : orders;
   const orderWeek = (o: Order) => o.delivery_week || getISOWeek(o.created_at);
 
-  const pendingOrders = isCustomer ? [] : visibleOrders.filter(isPendingOrder);
+  const approvalOrders = isCustomer ? [] : visibleOrders.filter(isApprovalOrder);
+  const pendingOrders = isCustomer
+    ? []
+    : visibleOrders.filter((o) => isPendingOrder(o) && !isApprovalOrder(o));
   const pendingGroups = buildWeekGroups(pendingOrders);
 
   const nonPendingOrders = isCustomer
@@ -440,7 +408,7 @@ export function OrdersPage() {
     >
       <div className="flex justify-between items-center mb-1">
         <span className="font-semibold">{o.reference}</span>
-        {!isCustomer && (
+        {(!isCustomer || o.status === "pending_approval") && (
           <Badge variant={STATUS_VARIANT[o.status] ?? "inactive"}>
             {STATUS_LABELS[o.status] ?? o.status}
           </Badge>
@@ -571,43 +539,6 @@ export function OrdersPage() {
 
   return (
     <>
-      {deadline && (
-        <Card className={`p-3 mb-4 ${deadline.is_past ? "border-muted" : "border-primary/50"}`}>
-          <div className="text-sm space-y-1">
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="font-medium">Bestel voor: </span>
-                <span className={deadline.is_past ? "text-muted-foreground" : ""}>
-                  {formatDeadline(deadline)}
-                </span>
-                {deadline.deadline_extended && (
-                  <span className="text-amber-500 ml-2">(verlengd i.v.m. feestdag)</span>
-                )}
-              </div>
-              {deadline.is_past && (
-                <Badge variant="inactive">Gesloten</Badge>
-              )}
-            </div>
-            <div className="text-muted-foreground">
-              {deadline.customer_delivery_date ? (
-                <span>
-                  Jouw levering: {formatDate(deadline.customer_delivery_date)}
-                </span>
-              ) : (
-                <span>
-                  Levering week {deadline.week.split("-W")[1]}: woensdag t/m vrijdag
-                </span>
-              )}
-            </div>
-            {deadline.customer_delivery_days?.some((day) => EXTENDED_DELIVERY_DAYS.includes(day)) && (
-              <div className="text-amber-600">
-                Maandag of dinsdag levering alleen in overleg met Jurjen.
-              </div>
-            )}
-          </div>
-        </Card>
-      )}
-
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Orders</h2>
         {canCreate && (
@@ -626,6 +557,24 @@ export function OrdersPage() {
           </p>
         ) : (
           <>
+            {approvalOrders.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-sm font-semibold">Te beoordelen</span>
+                  <span className="text-xs text-muted-foreground">
+                    {approvalOrders.length} order
+                    {approvalOrders.length === 1 ? "" : "s"} wacht op goedkeuring
+                  </span>
+                  <div className="flex-1 border-t border-border" />
+                </div>
+                <div className="space-y-3">
+                  {[...approvalOrders]
+                    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+                    .map((o) => renderOrderCard(o))}
+                </div>
+              </div>
+            )}
+
             <div className="rounded-md border border-border bg-muted/30 px-4 py-3">
               <p className="text-sm font-semibold">
                 Week {currentWeek.split("-W")[1]}
@@ -1161,28 +1110,37 @@ function OrderDetailDialog({
 
   const isAdmin = user?.is_platform_admin;
   const isOwner = user?.role === "owner";
+  const isMember = user?.role === "member";
   const canManage = isAdmin || isOwner;
   const isCustomer = user?.role === "customer";
 
   const skusWithoutImages = order.lines.filter((l) => !l.has_image);
-  const canActivate =
-    (order.status === "draft" || order.status === "pending_images") &&
-    skusWithoutImages.length === 0 &&
-    canManage;
+  // Owners and members approve new orders; a pending_images order can be
+  // activated once every SKU has a reference image.
+  const canApprove =
+    (order.status === "pending_approval" ||
+      (order.status === "pending_images" && skusWithoutImages.length === 0)) &&
+    (canManage || isMember);
+  const approveLabel =
+    order.status === "pending_approval" ? "Goedkeuren" : "Order activeren";
   const canClose =
     (order.status === "active" || order.status === "pending_images") &&
-    (canManage || user?.role === "member" || user?.role === "courier");
+    (canManage || isMember || user?.role === "courier");
 
-  async function activate() {
+  async function approve() {
     if (!order) return;
     setActivating(true);
     try {
-      await api.activateOrder(order.id);
-      toast.success("Order geactiveerd");
+      await api.approveOrder(order.id);
+      toast.success(
+        order.status === "pending_approval"
+          ? "Order goedgekeurd"
+          : "Order geactiveerd",
+      );
       onUpdated();
       onClose();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Activatie mislukt");
+      toast.error(err instanceof Error ? err.message : "Goedkeuren mislukt");
     } finally {
       setActivating(false);
     }
@@ -1277,7 +1235,7 @@ function OrderDetailDialog({
         <DialogHeader>
           <DialogTitle>
             Order {order.reference}
-            {!isCustomer && (
+            {(!isCustomer || order.status === "pending_approval") && (
               <Badge
                 variant={STATUS_VARIANT[order.status] ?? "inactive"}
                 className="ml-2"
@@ -1445,13 +1403,13 @@ function OrderDetailDialog({
             </p>
           )}
 
-          {canActivate && (
+          {canApprove && (
             <Button
               className="w-full"
-              onClick={activate}
+              onClick={approve}
               disabled={activating}
             >
-              {activating ? "Activeren..." : "Order activeren"}
+              {activating ? "Bezig..." : approveLabel}
             </Button>
           )}
 

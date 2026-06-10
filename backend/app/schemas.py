@@ -842,8 +842,6 @@ class WeeklySummaryCustomer(BaseModel):
 
 class WeeklySummaryResponse(BaseModel):
     week: str
-    deadline: str
-    deadline_extended: bool = False
     group_by: Literal["supplier", "customer"] = "supplier"
     suppliers: list[WeeklySummarySupplier] = []
     customers: list[WeeklySummaryCustomer] = []
@@ -869,16 +867,3 @@ class MonthlyBoxesOrganization(BaseModel):
 
 class MonthlyBoxesResponse(BaseModel):
     organizations: list[MonthlyBoxesOrganization] = []
-
-
-class DeadlineResponse(BaseModel):
-    week: str
-    deadline: str
-    deadline_extended: bool = False
-    is_past: bool = False
-    delivery_wednesday: str = ""
-    delivery_thursday: str = ""
-    delivery_friday: str = ""
-    customer_delivery_day: str | None = None
-    customer_delivery_days: list[str] = []
-    customer_delivery_date: str | None = None
