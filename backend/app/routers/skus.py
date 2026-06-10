@@ -296,6 +296,7 @@ def _sku_to_response(sku: SKU) -> SKUResponse:
         attributes=sku.attributes_dict,
         supplier_id=sku.supplier_id,
         supplier_name=sku.supplier.name if sku.supplier else None,
+        is_bottle=sku.is_bottle,
         created_at=sku.created_at,
         updated_at=sku.updated_at,
         image_count=len(sku.reference_images),
@@ -414,6 +415,7 @@ def create_sku(
         category=data.category,
         organization_id=user.organization_id,
         supplier_id=data.supplier_id,
+        is_bottle=data.is_bottle,
     )
     sku.set_attributes(data.attributes)
     db.add(sku)
@@ -467,6 +469,9 @@ def update_sku(
 
     if "supplier_id" in changed_fields:
         sku.supplier_id = data.supplier_id
+
+    if "is_bottle" in changed_fields and data.is_bottle is not None:
+        sku.is_bottle = data.is_bottle
 
     if data.attributes is not None:
         sku.set_attributes(data.attributes)
