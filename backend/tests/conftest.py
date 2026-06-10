@@ -108,6 +108,20 @@ def db():
         session.close()
 
 
+@pytest.fixture(autouse=True)
+def stub_langfuse_prompts(monkeypatch):
+    """LLM prompts live only in Langfuse (no code fallback); the test suite
+    runs without Langfuse, so stub the required-prompt fetch with a canned
+    string. Tests that need the unavailable-prompt path patch the caller."""
+
+    def _fake_prompt(name: str) -> str:
+        return f"[test-prompt:{name}]"
+
+    monkeypatch.setattr(
+        "app.services.embedding.get_prompt_required", _fake_prompt
+    )
+
+
 # ---------------------------------------------------------------------------
 # FastAPI TestClient
 # ---------------------------------------------------------------------------

@@ -19,16 +19,17 @@ def test_langfuse_disabled_when_no_keys():
         assert result is None
 
 
-def test_get_prompt_returns_fallback_when_disabled():
-    """get_prompt returns the fallback string when Langfuse is not configured."""
+def test_get_prompt_required_raises_when_disabled():
+    """get_prompt_required fails loudly when Langfuse is not configured —
+    prompts have no code fallback."""
     import app.services.langfuse_client as lf
     lf._langfuse = None
     lf._initialized = False
 
     with patch.object(lf.settings, "langfuse_public_key", ""), \
          patch.object(lf.settings, "langfuse_secret_key", ""):
-        result = lf.get_prompt("classify-and-describe", fallback="my fallback prompt")
-        assert result == "my fallback prompt"
+        with pytest.raises(lf.PromptUnavailableError):
+            lf.get_prompt_required("classify-and-describe")
 
 
 def test_langfuse_shutdown_when_not_initialized():
