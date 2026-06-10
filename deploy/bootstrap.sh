@@ -79,6 +79,76 @@ ufw allow 80/tcp
 ufw allow 443/tcp
 ufw --force enable
 
+echo "==> Unattended-upgrades: night-only window + auto-reboot + netdata refresh"
+apt-get install -y unattended-upgrades
+
+# 1. Move the auto-upgrade off business hours. The stock apt-daily(-upgrade) timers
+#    fire mid-morning (~06:46 here), and a systemd/udev upgrade at that time re-execs
+#    systemd and reshuffles cgroups right as people start working. Run download at
+#    03:00 and install at 03:30 instead, when nobody is using the app.
+for timer in apt-daily apt-daily-upgrade; do
+  install -d "/etc/systemd/system/${timer}.timer.d"
+done
+cat > /etc/systemd/system/apt-daily.timer.d/override.conf <<'EOF'
+[Timer]
+# Clear the stock twice-daily schedule, then download updates at 03:00 UTC.
+# TimeZone=UTC keeps the window stable regardless of the server's local timezone.
+# RandomizedDelaySec= (empty) clears the base unit's 12h value before setting 30m;
+# without the clear, older systemd versions may keep the larger value.
+# Persistent=false prevents catch-up runs after a daytime reboot, which would
+# trigger an unattended upgrade during business hours.
+OnCalendar=
+OnCalendar=*-*-* 03:00
+RandomizedDelaySec=
+RandomizedDelaySec=30m
+Persistent=false
+TimeZone=UTC
+EOF
+cat > /etc/systemd/system/apt-daily-upgrade.timer.d/override.conf <<'EOF'
+[Timer]
+# Install the downloaded updates at 03:30 UTC, after the download window.
+OnCalendar=
+OnCalendar=*-*-* 03:30
+RandomizedDelaySec=
+RandomizedDelaySec=15m
+Persistent=false
+TimeZone=UTC
+EOF
+
+# 2. Let unattended-upgrades reboot when a kernel/systemd upgrade requires it, so
+#    services never keep running against half-replaced libsystemd/cgroup state.
+#    Reboot at 05:00, even if a user is logged in. Automatic-Reboot-Time is an
+#    absolute wall-clock time handed to `shutdown -r`: the install run can start
+#    as late as 03:45 (03:30 + RandomizedDelaySec) and then take a few minutes,
+#    so a tighter time risks finishing *after* it -- which puts the target in the
+#    past and lets the reboot slip to the next day. Keep generous headroom; the
+#    app is idle at night, so a later reboot costs nothing.
+cat > /etc/apt/apt.conf.d/52unattended-upgrades-local <<'EOF'
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+Unattended-Upgrade::Automatic-Reboot-Time "05:00";
+EOF
+
+# 3. Belt-and-braces for upgrades that do NOT trigger a reboot: hand netdata a fresh
+#    start after every package transaction. After a systemd/udev upgrade netdata's
+#    cgroup collector can hold stale handles and hammer the Docker API, so dockerd +
+#    containerd burn ~140% CPU until netdata is restarted. try-restart is a no-op
+#    when netdata is not running, so this stays safe on hosts without it.
+cat > /etc/apt/apt.conf.d/99restart-netdata <<'EOF'
+// Post-Invoke (not Post-Invoke-Success) fires even when a dpkg transaction
+// exits non-zero -- e.g. a failed postinst that still replaced shared libs.
+// Post-Invoke-Success would silently skip the restart on partial failures,
+// leaving netdata with stale cgroup handles. try-restart is a no-op when
+// netdata is not installed, so this is safe on hosts without netdata.
+DPkg::Post-Invoke { "systemctl try-restart netdata >/dev/null 2>&1 || true"; };
+EOF
+
+systemctl daemon-reload
+# try-restart leaves the script alive if a timer is in failed state (e.g. a
+# prior dpkg lock error); plain restart would exit non-zero and abort
+# bootstrap at the last step under set -euo pipefail.
+systemctl try-restart apt-daily.timer apt-daily-upgrade.timer
+
 cat <<'NEXT'
 
 ==> bootstrap complete
