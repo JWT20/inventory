@@ -412,6 +412,7 @@ async def _build_preview_lines(
                     sku_id=c_id,
                     sku_code=c_code,
                     sku_name=c_name,
+                    is_bottle=is_bottle_by_id.get(c_id, False),
                     confidence=llm_confidence,
                 )]
                 needs_confirmation = True
@@ -437,6 +438,7 @@ async def _build_preview_lines(
             matched_sku_id=matched_id,
             matched_sku_code=matched_code,
             matched_sku_name=matched_name,
+            is_bottle=bool(matched_id is not None and is_bottle_by_id.get(matched_id)),
             needs_confirmation=needs_confirmation,
             match_source=match_source,
             candidate_matches=candidate_matches,

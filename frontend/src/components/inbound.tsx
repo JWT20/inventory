@@ -18,6 +18,7 @@ import {
 interface ExtractedLine {
   supplier_code: string;
   description: string;
+  // In besteleenheden van de gematchte SKU: dozen, of flessen als is_bottle.
   quantity_boxes: number;
   quantity: number;
   quantity_unit: "boxes" | "pieces" | "unknown";
@@ -25,9 +26,26 @@ interface ExtractedLine {
   matched_sku_id: number | null;
   matched_sku_code: string | null;
   matched_sku_name: string | null;
+  is_bottle: boolean;
 }
 
 const BOTTLES_PER_BOX = 6;
+
+// Mirrors backend _resolve_inbound_quantity for interactive (her)koppelen in
+// de preview: een fles-SKU telt pieces 1-op-1 en kan dozen/onbekend niet zelf
+// omrekenen (0 → operator vult het aantal flessen in); een doos-SKU houdt de
+// bestaande deling door BOTTLES_PER_BOX.
+function resolveQuantityForUnit(
+  quantity: number,
+  unit: ExtractedLine["quantity_unit"],
+  isBottle: boolean,
+): number {
+  if (quantity <= 0) return 0;
+  if (isBottle) return unit === "pieces" ? quantity : 0;
+  if (unit === "boxes") return quantity;
+  if (unit === "pieces") return Math.floor(quantity / BOTTLES_PER_BOX);
+  return 0;
+}
 
 function extractedLabel(line: ExtractedLine): string {
   if (line.quantity <= 0) return "—";
@@ -37,6 +55,16 @@ function extractedLabel(line: ExtractedLine): string {
 }
 
 function mismatchReason(line: ExtractedLine): string | null {
+  if (line.is_bottle) {
+    if (line.quantity_unit === "pieces" && line.quantity > 0) {
+      if (line.quantity_boxes !== line.quantity) return "handmatig aangepast";
+      return null;
+    }
+    if (line.quantity > 0) {
+      return "fles-product: eenheid onduidelijk — voer het aantal flessen in";
+    }
+    return null;
+  }
   if (line.quantity_unit === "unknown" && line.quantity > 0) {
     return "eenheid onbekend — controleer";
   }
@@ -60,6 +88,7 @@ interface SKUOption {
   name: string;
   active: boolean;
   supplier_name: string | null;
+  is_bottle: boolean;
 }
 
 /**
@@ -182,6 +211,7 @@ function SkuCombobox({
                   >
                     <span className="line-clamp-1">
                       {sku.sku_code} - {sku.name}
+                      {sku.is_bottle ? " · fles" : ""}
                     </span>
                     {sku.supplier_name && (
                       <span className="text-[10px] text-muted-foreground">
@@ -322,11 +352,18 @@ export function InboundPage() {
     setPreview((prev) => {
       if (!prev) return prev;
       const nextLines = [...prev.lines];
+      const current = nextLines[lineIndex];
       nextLines[lineIndex] = {
-        ...nextLines[lineIndex],
+        ...current,
         matched_sku_id: null,
         matched_sku_code: null,
         matched_sku_name: null,
+        is_bottle: false,
+        // Een fles-telling is zonder fles-SKU niet meer geldig; val terug op
+        // de doos-interpretatie tot er opnieuw gekoppeld wordt.
+        quantity_boxes: current.is_bottle
+          ? resolveQuantityForUnit(current.quantity, current.quantity_unit, false)
+          : current.quantity_boxes,
       };
       return { ...prev, lines: nextLines };
     });
@@ -486,6 +523,16 @@ export function InboundPage() {
       }
     }
 
+    // Een andere besteleenheid (doos ↔ fles) maakt de eerdere omrekening
+    // ongeldig: herbereken dan met de eenheid van de gekozen SKU. Bij een
+    // gelijkblijvende eenheid blijft een handmatig aangepast aantal staan.
+    const unitChanged = line.is_bottle !== sku.is_bottle;
+    const resolvedQty = resolveQuantityForUnit(
+      line.quantity,
+      line.quantity_unit,
+      sku.is_bottle,
+    );
+
     setPreview((prev) => {
       if (!prev) return prev;
       const nextLines = [...prev.lines];
@@ -494,11 +541,21 @@ export function InboundPage() {
         matched_sku_id: sku.id,
         matched_sku_code: sku.sku_code,
         matched_sku_name: sku.name,
+        is_bottle: sku.is_bottle,
+        quantity_boxes: unitChanged ? resolvedQty : nextLines[lineIndex].quantity_boxes,
       };
       return { ...prev, lines: nextLines };
     });
     setEditing(lineIndex, false);
-    if (mappingPersisted) {
+    if (sku.is_bottle && unitChanged && resolvedQty === 0 && line.quantity > 0) {
+      toast(
+        `Gekoppeld aan ${sku.sku_code} — fles-product, maar de pakbon noemt geen flessen-aantal. Voer het aantal flessen handmatig in.`,
+      );
+    } else if (sku.is_bottle && unitChanged) {
+      toast.success(
+        `Gekoppeld aan ${sku.sku_code} — fles-product: aantal herberekend naar ${resolvedQty} flessen${mappingPersisted ? " (onthouden voor volgende pakbonnen)" : ""}`,
+      );
+    } else if (mappingPersisted) {
       toast.success(`Gekoppeld aan ${sku.sku_code} (onthouden voor volgende pakbonnen)`);
     } else {
       toast.success(`Gekoppeld aan ${sku.sku_code} (niet onthouden: ${persistenceSkippedReason})`);
@@ -768,7 +825,7 @@ export function InboundPage() {
                           >
                             +
                           </button>
-                          <span className="text-sm ml-1">dozen</span>
+                          <span className="text-sm ml-1">{line.is_bottle ? "flessen" : "dozen"}</span>
                         </div>
                       </div>
                     </div>
@@ -785,7 +842,7 @@ export function InboundPage() {
                     <div className="flex items-center gap-2 mt-1">
                       <p className="text-xs">
                         {line.matched_sku_code
-                          ? `Match: ${line.matched_sku_code} - ${line.matched_sku_name}`
+                          ? `Match: ${line.matched_sku_code} - ${line.matched_sku_name}${line.is_bottle ? " · fles" : ""}`
                           : "Geen SKU-match"}
                       </p>
                       {line.matched_sku_code && !ignored && !editing && (

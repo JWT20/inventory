@@ -109,6 +109,155 @@ def test_extract_preview_maps_using_supplier_mapping(
     assert body["lines"][0]["matched_sku_code"] == "MAPPED-001"
 
 
+def test_extract_preview_bottle_mapping_counts_pieces_one_to_one(
+    client, db, admin_token, tmp_path
+):
+    """A line mapped to a bottle SKU keeps the bottle count (no division by 6)."""
+    bottle_sku = SKU(
+        sku_code="FLES-CAVA",
+        name="Cava 0,0",
+        organization_id=None,
+        is_bottle=True,
+    )
+    db.add(bottle_sku)
+    db.flush()
+    db.add(SupplierSKUMapping(
+        organization_id=None,
+        supplier_name="ANFORS",
+        supplier_code="CAVA-12",
+        sku_id=bottle_sku.id,
+    ))
+    db.commit()
+
+    mocked = {
+        "supplier_name": "Anfors",
+        "reference": "PKB-FLES",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [
+            {
+                "supplier_code": "CAVA-12",
+                "description": "Cava alcoholvrij",
+                "quantity": 12,
+                "quantity_unit": "pieces",
+                "confidence": 0.9,
+            }
+        ],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(admin_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={"document_type": "pakbon", "supplier_name": "Anfors"},
+        )
+
+    assert resp.status_code == 200
+    line = resp.json()["lines"][0]
+    assert line["matched_sku_code"] == "FLES-CAVA"
+    assert line["is_bottle"] is True
+    assert line["quantity_boxes"] == 12  # flessen 1-op-1, niet 12 // 6 == 2
+    assert line["quantity_unit"] == "pieces"
+    assert line["needs_confirmation"] is False
+
+
+def test_extract_preview_bottle_mapping_box_unit_needs_confirmation(
+    client, db, admin_token, tmp_path
+):
+    """Boxes/colli on a bottle SKU is ambiguous: 0 booked, operator confirms."""
+    bottle_sku = SKU(
+        sku_code="FLES-CAVA2",
+        name="Cava 0,0",
+        organization_id=None,
+        is_bottle=True,
+    )
+    db.add(bottle_sku)
+    db.flush()
+    db.add(SupplierSKUMapping(
+        organization_id=None,
+        supplier_name="ANFORS",
+        supplier_code="CAVA-DS",
+        sku_id=bottle_sku.id,
+    ))
+    db.commit()
+
+    mocked = {
+        "supplier_name": "Anfors",
+        "reference": "PKB-FLES2",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [
+            {
+                "supplier_code": "CAVA-DS",
+                "description": "Cava alcoholvrij",
+                "quantity": 2,
+                "quantity_unit": "boxes",
+                "confidence": 0.9,
+            }
+        ],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(admin_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={"document_type": "pakbon", "supplier_name": "Anfors"},
+        )
+
+    assert resp.status_code == 200
+    line = resp.json()["lines"][0]
+    assert line["is_bottle"] is True
+    assert line["quantity_boxes"] == 0
+    assert line["quantity_unit"] == "unknown"
+    assert line["needs_confirmation"] is True
+
+
+def test_extract_preview_box_lines_report_is_bottle_false(
+    client, db, admin_token, sample_sku, tmp_path
+):
+    db.add(SupplierSKUMapping(
+        organization_id=None,
+        supplier_name="ANFORS",
+        supplier_code="WINE-BOX",
+        sku_id=sample_sku.id,
+    ))
+    db.commit()
+
+    mocked = {
+        "supplier_name": "Anfors",
+        "reference": "PKB-BOX",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [
+            {
+                "supplier_code": "WINE-BOX",
+                "description": "Gewone wijn",
+                "quantity": 12,
+                "quantity_unit": "pieces",
+                "confidence": 0.9,
+            }
+        ],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(admin_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={"document_type": "pakbon", "supplier_name": "Anfors"},
+        )
+
+    assert resp.status_code == 200
+    line = resp.json()["lines"][0]
+    assert line["is_bottle"] is False
+    assert line["quantity_boxes"] == 2  # doos-SKU houdt de deling door 6
+
+
 def test_extract_preview_uses_case_insensitive_supplier_mapping(
     client, db, admin_token, sample_sku, tmp_path
 ):

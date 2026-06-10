@@ -582,6 +582,8 @@ class ShipmentResponse(BaseModel):
 class ShipmentExtractedLine(BaseModel):
     supplier_code: str = ""
     description: str = ""
+    # quantity_boxes is in besteleenheden van de gematchte SKU: dozen voor een
+    # doos-SKU, flessen voor een fles-SKU (is_bottle=True).
     quantity_boxes: int = Field(0, ge=0)
     quantity: int = Field(0, ge=0)
     quantity_unit: Literal["boxes", "pieces", "unknown"] = "unknown"
@@ -589,6 +591,7 @@ class ShipmentExtractedLine(BaseModel):
     matched_sku_id: int | None = None
     matched_sku_code: str | None = None
     matched_sku_name: str | None = None
+    is_bottle: bool = False
     needs_confirmation: bool = False
     match_source: Literal["supplier_mapping", "llm_suggestion", "unresolved"] = "unresolved"
     candidate_matches: list["ShipmentMatchCandidate"] = []
@@ -598,6 +601,7 @@ class ShipmentMatchCandidate(BaseModel):
     sku_id: int
     sku_code: str
     sku_name: str
+    is_bottle: bool = False
     confidence: float = Field(0.0, ge=0, le=1)
 
 
