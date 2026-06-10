@@ -25,6 +25,37 @@ class TestCreateOrder:
         assert data["organization_name"] == sample_org.name
         assert len(data["lines"]) == 1
         assert data["total_boxes"] == 5
+        assert data["total_bottles"] == 0
+
+    def test_mixed_order_splits_box_and_bottle_totals(
+        self, client, db, owner_user, owner_token, sample_org
+    ):
+        customer = Customer(name="fles klant", organization_id=sample_org.id)
+        box_sku = SKU(sku_code="BOX-001", name="Doos Wijn")
+        bottle_sku = SKU(sku_code="FLES-001", name="Cava 0,0", is_bottle=True)
+        db.add_all([customer, box_sku, bottle_sku])
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [
+                    {"customer_id": customer.id, "sku_id": box_sku.id, "quantity": 3},
+                    {"customer_id": customer.id, "sku_id": bottle_sku.id, "quantity": 2},
+                ],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_boxes"] == 3
+        assert data["booked_boxes"] == 0
+        assert data["total_bottles"] == 2
+        assert data["booked_bottles"] == 0
+        lines_by_code = {l["sku_code"]: l for l in data["lines"]}
+        assert lines_by_code["BOX-001"]["is_bottle"] is False
+        assert lines_by_code["FLES-001"]["is_bottle"] is True
 
     def test_customer_creates_order(self, client, db, customer_user, customer_token, sample_org):
         customer = Customer(name="klant record", organization_id=sample_org.id)

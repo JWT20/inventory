@@ -66,7 +66,7 @@ class TestListSKUOptions:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
-        assert set(data[0].keys()) == {"id", "sku_code", "name"}
+        assert set(data[0].keys()) == {"id", "sku_code", "name", "is_bottle"}
         assert data[0]["sku_code"] == "WINE-001"
 
     def test_options_active_only(self, client, db, courier_token, sample_sku):
