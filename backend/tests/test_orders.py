@@ -776,6 +776,40 @@ class TestDeleteOrderLine:
         db.expire_all()
         assert db.get(Order, order_id) is None
 
+    def test_customer_cannot_delete_order_via_last_line(
+        self, client, db, customer_user, customer_token, sample_org
+    ):
+        # Customer creates an own one-line order, then tries to wipe it by
+        # removing the last line — must be blocked like DELETE /orders/{id}.
+        sku = SKU(sku_code="WINE-DL-C", name="Klantwijn")
+        db.add(sku)
+        db.commit()
+        customer = Customer(name="eigen klant", organization_id=sample_org.id)
+        db.add(customer)
+        db.commit()
+        db.refresh(customer)
+        customer_user.customer_id = customer.id
+        db.add(CustomerSKU(customer_id=customer.id, sku_id=sku.id))
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={"lines": [{"customer_id": customer.id, "sku_id": sku.id, "quantity": 1}]},
+            headers=auth_header(customer_token),
+        )
+        assert resp.status_code == 200
+        order_id = resp.json()["id"]
+        order = db.get(Order, order_id)
+        line_id = order.lines[0].id
+
+        resp = client.delete(
+            f"/api/orders/{order_id}/lines/{line_id}",
+            headers=auth_header(customer_token),
+        )
+        assert resp.status_code == 403
+        db.expire_all()
+        assert db.get(Order, order_id) is not None
+
 
 class TestDeleteOrder:
     """Merchant order deletion with guards."""

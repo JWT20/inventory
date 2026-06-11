@@ -1059,6 +1059,27 @@ def update_order(
     return _order_to_response(order, db)
 
 
+def _assert_can_delete_order(order: Order, user: User) -> None:
+    """Guard order deletion. Only platform admins and merchants (owner/member)
+    of the owning organization may delete, and only while the order is still
+    being prepared with nothing scanned yet. Customers may never delete orders.
+    """
+    if user.is_platform_admin:
+        return
+    if user.role not in ("owner", "member"):
+        raise HTTPException(403, "Geen toegang om deze order te verwijderen")
+    if user.organization_id and order.organization_id != user.organization_id:
+        raise HTTPException(403, "Geen toegang tot deze order")
+    if order.status not in EDITABLE_STATUSES:
+        raise HTTPException(
+            409, f"Order kan niet verwijderd worden (status: {order.status})"
+        )
+    if any(line.booked_count > 0 for line in order.lines):
+        raise HTTPException(
+            409, "Kan order niet verwijderen — er zijn al dozen gescand"
+        )
+
+
 @router.delete("/{order_id}", status_code=204)
 def delete_order(
     order_id: int,
@@ -1075,20 +1096,7 @@ def delete_order(
     if not order:
         raise HTTPException(404, "Order niet gevonden")
 
-    if not user.is_platform_admin:
-        if user.role not in ("owner", "member"):
-            raise HTTPException(403, "Geen toegang om deze order te verwijderen")
-        if user.organization_id and order.organization_id != user.organization_id:
-            raise HTTPException(403, "Geen toegang tot deze order")
-        if order.status not in EDITABLE_STATUSES:
-            raise HTTPException(
-                409,
-                f"Order kan niet verwijderd worden (status: {order.status})",
-            )
-        if any(line.booked_count > 0 for line in order.lines):
-            raise HTTPException(
-                409, "Kan order niet verwijderen — er zijn al dozen gescand"
-            )
+    _assert_can_delete_order(order, user)
 
     reference = order.reference
     db.delete(order)
@@ -1314,8 +1322,10 @@ def delete_order_line(
             409, f"Kan regel niet verwijderen — er zijn al {line.booked_count} dozen gescand"
         )
 
-    # Removing the final line means the merchant wants the whole order gone.
+    # Removing the final line means the whole order is gone — same restriction
+    # as deleting the order outright, so customers cannot bypass it here.
     if len(order.lines) <= 1:
+        _assert_can_delete_order(order, user)
         reference = order.reference
         order_pk = order.id
         db.delete(order)
