@@ -402,6 +402,18 @@ class OrderResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class OrderLineDeleteResponse(BaseModel):
+    """Result of deleting an order line.
+
+    When the deleted line was the last one, the whole order is removed and
+    ``order_deleted`` is true with ``order`` left empty. Otherwise ``order``
+    holds the updated order.
+    """
+
+    order_deleted: bool = False
+    order: OrderResponse | None = None
+
+
 class WeeklyPickPhotoResponse(BaseModel):
     order_line_id: int
     sku_id: int
