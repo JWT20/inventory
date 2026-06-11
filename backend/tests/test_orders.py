@@ -716,3 +716,168 @@ class TestSKUCodeGeneration:
             "volume": "750",
         }
         assert generate_wine_display_name(attrs) == "Château Grand Cru Rouge Rood"
+
+
+class TestDeleteOrderLine:
+    """Removing order lines, including the last-line-deletes-order behaviour."""
+
+    def _make_order(self, client, db, owner_token, sample_org, n_lines=2):
+        customer = Customer(name="wisklant", organization_id=sample_org.id)
+        skus = [SKU(sku_code=f"WINE-DL-{i}", name=f"Wijn {i}") for i in range(n_lines)]
+        db.add_all([customer, *skus])
+        db.commit()
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [
+                    {"customer_id": customer.id, "sku_id": s.id, "quantity": 1}
+                    for s in skus
+                ],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        return resp.json()["id"]
+
+    def test_delete_non_last_line_keeps_order(
+        self, client, db, owner_user, owner_token, sample_org
+    ):
+        order_id = self._make_order(client, db, owner_token, sample_org, n_lines=2)
+        order = db.get(Order, order_id)
+        line_id = order.lines[0].id
+
+        resp = client.delete(
+            f"/api/orders/{order_id}/lines/{line_id}",
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["order_deleted"] is False
+        assert body["order"]["id"] == order_id
+        assert len(body["order"]["lines"]) == 1
+        assert db.get(Order, order_id) is not None
+
+    def test_delete_last_line_deletes_order(
+        self, client, db, owner_user, owner_token, sample_org
+    ):
+        order_id = self._make_order(client, db, owner_token, sample_org, n_lines=1)
+        order = db.get(Order, order_id)
+        line_id = order.lines[0].id
+
+        resp = client.delete(
+            f"/api/orders/{order_id}/lines/{line_id}",
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["order_deleted"] is True
+        assert body["order"] is None
+        db.expire_all()
+        assert db.get(Order, order_id) is None
+
+    def test_customer_cannot_delete_order_via_last_line(
+        self, client, db, customer_user, customer_token, sample_org
+    ):
+        # Customer creates an own one-line order, then tries to wipe it by
+        # removing the last line — must be blocked like DELETE /orders/{id}.
+        sku = SKU(sku_code="WINE-DL-C", name="Klantwijn")
+        db.add(sku)
+        db.commit()
+        customer = Customer(name="eigen klant", organization_id=sample_org.id)
+        db.add(customer)
+        db.commit()
+        db.refresh(customer)
+        customer_user.customer_id = customer.id
+        db.add(CustomerSKU(customer_id=customer.id, sku_id=sku.id))
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={"lines": [{"customer_id": customer.id, "sku_id": sku.id, "quantity": 1}]},
+            headers=auth_header(customer_token),
+        )
+        assert resp.status_code == 200
+        order_id = resp.json()["id"]
+        order = db.get(Order, order_id)
+        line_id = order.lines[0].id
+
+        resp = client.delete(
+            f"/api/orders/{order_id}/lines/{line_id}",
+            headers=auth_header(customer_token),
+        )
+        assert resp.status_code == 403
+        db.expire_all()
+        assert db.get(Order, order_id) is not None
+
+
+class TestDeleteOrder:
+    """Merchant order deletion with guards."""
+
+    def _make_order(self, client, db, owner_token, sample_org):
+        customer = Customer(name="delklant", organization_id=sample_org.id)
+        sku = SKU(sku_code="WINE-DO-1", name="Wijn DO")
+        db.add_all([customer, sku])
+        db.commit()
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [{"customer_id": customer.id, "sku_id": sku.id, "quantity": 1}],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        return resp.json()["id"]
+
+    def test_owner_deletes_own_pending_order(
+        self, client, db, owner_user, owner_token, sample_org
+    ):
+        order_id = self._make_order(client, db, owner_token, sample_org)
+        resp = client.delete(
+            f"/api/orders/{order_id}", headers=auth_header(owner_token)
+        )
+        assert resp.status_code == 204
+        db.expire_all()
+        assert db.get(Order, order_id) is None
+
+    def test_owner_cannot_delete_active_order(
+        self, client, db, owner_user, owner_token, sample_org
+    ):
+        order_id = self._make_order(client, db, owner_token, sample_org)
+        order = db.get(Order, order_id)
+        order.status = "active"
+        db.commit()
+
+        resp = client.delete(
+            f"/api/orders/{order_id}", headers=auth_header(owner_token)
+        )
+        assert resp.status_code == 409
+        db.expire_all()
+        assert db.get(Order, order_id) is not None
+
+    def test_owner_cannot_delete_order_with_bookings(
+        self, client, db, owner_user, owner_token, sample_org
+    ):
+        order_id = self._make_order(client, db, owner_token, sample_org)
+        order = db.get(Order, order_id)
+        order.lines[0].booked_count = 1
+        db.commit()
+
+        resp = client.delete(
+            f"/api/orders/{order_id}", headers=auth_header(owner_token)
+        )
+        assert resp.status_code == 409
+        db.expire_all()
+        assert db.get(Order, order_id) is not None
+
+    def test_customer_cannot_delete_order(
+        self, client, db, owner_token, customer_token, sample_org
+    ):
+        order_id = self._make_order(client, db, owner_token, sample_org)
+        resp = client.delete(
+            f"/api/orders/{order_id}", headers=auth_header(customer_token)
+        )
+        assert resp.status_code == 403
+        db.expire_all()
+        assert db.get(Order, order_id) is not None

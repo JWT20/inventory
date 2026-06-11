@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
-from app.auth import get_current_user, require_admin, require_can_create_orders
+from app.auth import get_current_user, require_can_create_orders
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
@@ -31,6 +31,7 @@ from app.schemas import (
     MonthlyBoxesOrganization,
     MonthlyBoxesResponse,
     OrderLineAdd,
+    OrderLineDeleteResponse,
     OrderLineResponse,
     OrderLineUpdate,
     OrderResponse,
@@ -1058,16 +1059,44 @@ def update_order(
     return _order_to_response(order, db)
 
 
+def _assert_can_delete_order(order: Order, user: User) -> None:
+    """Guard order deletion. Only platform admins and merchants (owner/member)
+    of the owning organization may delete, and only while the order is still
+    being prepared with nothing scanned yet. Customers may never delete orders.
+    """
+    if user.is_platform_admin:
+        return
+    if user.role not in ("owner", "member"):
+        raise HTTPException(403, "Geen toegang om deze order te verwijderen")
+    if user.organization_id and order.organization_id != user.organization_id:
+        raise HTTPException(403, "Geen toegang tot deze order")
+    if order.status not in EDITABLE_STATUSES:
+        raise HTTPException(
+            409, f"Order kan niet verwijderd worden (status: {order.status})"
+        )
+    if any(line.booked_count > 0 for line in order.lines):
+        raise HTTPException(
+            409, "Kan order niet verwijderen — er zijn al dozen gescand"
+        )
+
+
 @router.delete("/{order_id}", status_code=204)
 def delete_order(
     order_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_can_create_orders),
 ):
-    """Delete an order and all its lines and bookings (platform admin only)."""
+    """Delete an order and all its lines.
+
+    Platform admins may delete any order. A merchant (owner/member) may delete
+    an order of their own organization while it is still being prepared
+    (pending_approval/pending_images) and nothing has been scanned yet.
+    """
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, "Order niet gevonden")
+
+    _assert_can_delete_order(order, user)
 
     reference = order.reference
     db.delete(order)
@@ -1261,14 +1290,18 @@ def update_order_line(
     return _order_to_response(order, db)
 
 
-@router.delete("/{order_id}/lines/{line_id}", response_model=OrderResponse)
+@router.delete("/{order_id}/lines/{line_id}", response_model=OrderLineDeleteResponse)
 def delete_order_line(
     order_id: int,
     line_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(require_can_create_orders),
 ):
-    """Delete an order line. Only allowed on pending_approval/pending_images orders with no bookings."""
+    """Delete an order line. Only allowed on pending_approval/pending_images orders with no bookings.
+
+    Removing the last remaining line deletes the whole order; the response then
+    has ``order_deleted`` set instead of an updated order.
+    """
     order = _get_editable_order(order_id, db, user)
 
     if order.status not in EDITABLE_STATUSES:
@@ -1289,10 +1322,23 @@ def delete_order_line(
             409, f"Kan regel niet verwijderen — er zijn al {line.booked_count} dozen gescand"
         )
 
+    # Removing the final line means the whole order is gone — same restriction
+    # as deleting the order outright, so customers cannot bypass it here.
     if len(order.lines) <= 1:
-        raise HTTPException(
-            409, "Kan de laatste regel niet verwijderen — verwijder de hele order"
+        _assert_can_delete_order(order, user)
+        reference = order.reference
+        order_pk = order.id
+        db.delete(order)
+        db.commit()
+
+        publish_event(
+            "order_deleted",
+            details={"order_reference": reference},
+            user=user,
+            resource_type="order",
+            resource_id=order_pk,
         )
+        return OrderLineDeleteResponse(order_deleted=True)
 
     db.delete(line)
     _recompute_order_status(order)
@@ -1309,7 +1355,7 @@ def delete_order_line(
         resource_type="order",
         resource_id=order.id,
     )
-    return _order_to_response(order, db)
+    return OrderLineDeleteResponse(order=_order_to_response(order, db))
 
 
 @router.get("/{order_id}/bookings", response_model=list[BookingResponse])

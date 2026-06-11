@@ -1186,6 +1186,14 @@ function OrderDetailDialog({
   const canClose =
     (order.status === "active" || order.status === "pending_images") &&
     (canManage || isMember || user?.role === "courier");
+  // Merchants may delete an order while it is still being prepared and nothing
+  // has been scanned yet; platform admins may always delete.
+  const canDelete =
+    isAdmin ||
+    ((canManage || isMember) &&
+      (order.status === "pending_approval" ||
+        order.status === "pending_images") &&
+      order.lines.every((l) => l.booked_count === 0));
 
   async function approve() {
     if (!order) return;
@@ -1228,9 +1236,24 @@ function OrderDetailDialog({
 
   async function removeLine(lineId: number) {
     if (!order) return;
+    const isLastLine = order.lines.length <= 1;
+    if (
+      isLastLine &&
+      !confirm(
+        `Dit is de laatste regel. De hele order ${order.reference} wordt verwijderd. Doorgaan?`,
+      )
+    )
+      return;
     try {
-      const updated = await api.deleteOrderLine(order.id, lineId);
-      onOrderChanged(updated);
+      const result = await api.deleteOrderLine(order.id, lineId);
+      if (result?.order_deleted) {
+        // Last line removed — the whole order is gone.
+        toast.success("Order verwijderd");
+        onUpdated();
+        onClose();
+        return;
+      }
+      onOrderChanged(result.order);
       onUpdated();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Verwijderen mislukt");
@@ -1446,7 +1469,6 @@ function OrderDetailDialog({
                           size="icon"
                           className="h-8 w-8 text-destructive"
                           aria-label="Regel verwijderen"
-                          disabled={order.lines.length <= 1}
                           onClick={() => removeLine(line.id)}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -1594,7 +1616,7 @@ function OrderDetailDialog({
             </Button>
           )}
 
-          {isAdmin && (
+          {canDelete && (
             <Button
               variant="destructive"
               className="w-full"
