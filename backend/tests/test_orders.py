@@ -1082,6 +1082,55 @@ class TestPricingWaterfall:
         # 20 * (1 - 10%) = 18.00
         assert resp.json()[0]["effective_price"] == 18.0
 
+    def test_courier_never_sees_prices_on_order(
+        self, client, db, owner_token, courier_token, sample_org
+    ):
+        """Couriers are delivery staff; they see no prices even when the
+        customer has price rights."""
+        customer = Customer(
+            name="koerier klant",
+            organization_id=sample_org.id,
+            show_prices=True,
+        )
+        sku = SKU(sku_code="WINE-COUR", name="Koerier Wijn", default_price=20)
+        db.add_all([customer, sku])
+        db.commit()
+        db.add(CustomerSKU(customer_id=customer.id, sku_id=sku.id, unit_price=12))
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [{"customer_id": customer.id, "sku_id": sku.id, "quantity": 2}],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        order_id = resp.json()["id"]
+        # Move to a courier-viewable status.
+        order = db.get(Order, order_id)
+        order.status = "active"
+        db.commit()
+
+        cour_resp = client.get(
+            f"/api/orders/{order_id}", headers=auth_header(courier_token)
+        )
+        assert cour_resp.status_code == 200
+        data = cour_resp.json()
+        line = data["lines"][0]
+        assert line["show_prices"] is False
+        assert line["unit_price"] is None
+        assert line["effective_price"] is None
+        assert line["line_total"] is None
+        assert data["visible_total"] is None
+
+        # Owner still sees the price on the same order.
+        owner_resp = client.get(
+            f"/api/orders/{order_id}", headers=auth_header(owner_token)
+        )
+        assert owner_resp.json()["lines"][0]["effective_price"] == 12.0
+
     def test_hidden_prices_stay_hidden_with_discount(
         self, client, db, owner_token, sample_org
     ):

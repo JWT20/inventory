@@ -1193,6 +1193,7 @@ function OrderDetailDialog({
   const isMember = user?.role === "member";
   const canManage = isAdmin || isOwner;
   const isCustomer = user?.role === "customer";
+  const isCourier = user?.role === "courier";
 
   const canEditLines =
     !!order &&
@@ -1523,7 +1524,7 @@ function OrderDetailDialog({
                             : "—"}
                         </p>
                       )}
-                      {!line.show_prices && !isCustomer && (
+                      {!line.show_prices && !isCustomer && !isCourier && (
                         <p className="text-xs text-muted-foreground">
                           Prijs verborgen
                         </p>
@@ -1605,7 +1606,7 @@ function OrderDetailDialog({
               <span className="font-semibold">{money.format(order.visible_total)}</span>
             </div>
           )}
-          {order.hidden_lines_count > 0 && !isCustomer && (
+          {order.hidden_lines_count > 0 && !isCustomer && !isCourier && (
             <p className="text-xs text-muted-foreground">
               {order.hidden_lines_count} orderregel(s) hebben verborgen prijzen.
             </p>

@@ -242,9 +242,9 @@ def list_customer_skus(
     )
     # show_prices is leading for customer users: a linked customer without price
     # rights must not be able to read prices via this endpoint, even though the
-    # UI already gates the fetch. Merchants/admins always see prices (they manage
-    # them).
-    hide_prices = (
+    # UI already gates the fetch. Couriers (delivery staff) never see prices.
+    # Merchants/admins always see prices (they manage them).
+    hide_prices = user.role == "courier" or (
         user.role == "customer"
         and not user.is_platform_admin
         and not customer.show_prices

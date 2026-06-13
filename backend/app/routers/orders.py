@@ -67,10 +67,15 @@ def _order_line_to_response(
     line: OrderLine,
     sku_default_prices: dict[int, float | None],
     customer_price_map: dict[tuple[int, int], CustomerSKU],
+    hide_prices: bool = False,
 ) -> OrderLineResponse:
     customer_show_prices = True
     if line.customer is not None:
         customer_show_prices = line.customer.show_prices
+    # Couriers are delivery staff, not part of the sales relationship; they
+    # never see prices regardless of the customer's show_prices setting.
+    if hide_prices:
+        customer_show_prices = False
 
     link = None
     if line.customer_id is not None:
@@ -119,7 +124,9 @@ def _order_line_to_response(
     )
 
 
-def _order_to_response(order: Order, db: Session) -> OrderResponse:
+def _order_to_response(
+    order: Order, db: Session, hide_prices: bool = False
+) -> OrderResponse:
     customer_sku_keys = {
         (line.customer_id, line.sku_id)
         for line in order.lines
@@ -148,7 +155,9 @@ def _order_to_response(order: Order, db: Session) -> OrderResponse:
         for line in order.lines
     }
     lines = [
-        _order_line_to_response(line, sku_default_prices, customer_price_map)
+        _order_line_to_response(
+            line, sku_default_prices, customer_price_map, hide_prices=hide_prices
+        )
         for line in order.lines
     ]
     visible_line_totals = [line.line_total for line in lines if line.line_total is not None]
@@ -343,7 +352,7 @@ def create_order(
         resource_id=order.id,
     )
 
-    return _order_to_response(order, db)
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
 @router.get("", response_model=list[OrderResponse])
@@ -399,7 +408,10 @@ def list_orders(
         query = query.filter(Order.delivery_week == week)
 
     orders = query.order_by(Order.created_at.desc()).offset(offset).limit(limit).all()
-    return [_order_to_response(o, db) for o in orders]
+    return [
+        _order_to_response(o, db, hide_prices=user.role == "courier")
+        for o in orders
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -919,7 +931,7 @@ def get_order(
             if user.role != "courier":
                 raise HTTPException(403, "Geen toegang tot deze order")
 
-    return _order_to_response(order, db)
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
 @router.post("/{order_id}/approve", response_model=OrderResponse)
@@ -981,7 +993,7 @@ def approve_order(
         resource_id=order.id,
     )
 
-    return _order_to_response(order, db)
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
 @router.post("/{order_id}/close", response_model=OrderResponse)
@@ -1032,7 +1044,7 @@ def close_order(
         resource_id=order.id,
     )
 
-    return _order_to_response(order, db)
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
 @router.patch("/{order_id}", response_model=OrderResponse)
@@ -1054,7 +1066,7 @@ def update_order(
     order.remarks = body.remarks
     db.commit()
     db.refresh(order)
-    return _order_to_response(order, db)
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
 def _assert_can_delete_order(order: Order, user: User) -> None:
@@ -1227,7 +1239,7 @@ def add_order_line(
         resource_type="order",
         resource_id=order.id,
     )
-    return _order_to_response(order, db)
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
 @router.patch("/{order_id}/lines/{line_id}", response_model=OrderResponse)
@@ -1285,7 +1297,7 @@ def update_order_line(
         resource_type="order",
         resource_id=order.id,
     )
-    return _order_to_response(order, db)
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
 @router.delete("/{order_id}/lines/{line_id}", response_model=OrderLineDeleteResponse)
@@ -1353,7 +1365,7 @@ def delete_order_line(
         resource_type="order",
         resource_id=order.id,
     )
-    return OrderLineDeleteResponse(order=_order_to_response(order, db))
+    return OrderLineDeleteResponse(order=_order_to_response(order, db, hide_prices=user.role == "courier"))
 
 
 @router.get("/{order_id}/bookings", response_model=list[BookingResponse])
