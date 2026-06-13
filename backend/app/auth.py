@@ -327,6 +327,19 @@ def require_can_create_orders(user: User = Depends(current_active_user)) -> User
     raise HTTPException(status.HTTP_403_FORBIDDEN, "Order creation access required")
 
 
+def require_merchant(user: User = Depends(current_active_user)) -> User:
+    """Merchant-only access: platform admin or org owner/member.
+
+    For merchant reporting/management views (e.g. the weekly order summary)
+    that expose pricing across all customers in the org. Customers (who may
+    only see their own data, and only when given price rights) and couriers
+    (delivery staff, never prices) must not reach these.
+    """
+    if user.is_platform_admin or user.role in ("owner", "member"):
+        return user
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "Merchant access required")
+
+
 # ---------------------------------------------------------------------------
 # Token helpers (used by refresh endpoint + test fixtures)
 # ---------------------------------------------------------------------------

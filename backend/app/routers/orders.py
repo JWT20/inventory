@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
-from app.auth import get_current_user, require_can_create_orders
+from app.auth import get_current_user, require_can_create_orders, require_merchant
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
@@ -701,9 +701,13 @@ def weekly_order_summary(
     week: str = Query(None, description="ISO week, bijv. '2026-W15'. Standaard: huidige week."),
     group_by: str = Query("supplier", description="Groepering: 'supplier' of 'customer'."),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_merchant),
 ):
-    """Weekly order summary grouped by supplier or by customer (for invoicing)."""
+    """Weekly order summary grouped by supplier or by customer (for invoicing).
+
+    Merchant-only: exposes pricing across all customers in the org, so customers
+    and couriers are denied (see require_merchant).
+    """
     if group_by not in ("supplier", "customer"):
         raise HTTPException(400, "group_by moet 'supplier' of 'customer' zijn")
     if not user.is_platform_admin and not user.organization_id:
