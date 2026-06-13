@@ -60,6 +60,7 @@ from app.services.embedding import (
     match_shipment_article_name,
 )
 from app.services.langfuse_client import PromptUnavailableError
+from app.services.pricing import calc_effective_price
 from app.services.storage import storage
 
 logger = logging.getLogger(__name__)
@@ -947,23 +948,6 @@ def list_inventory(
     ]
 
 
-def _calc_effective_price(
-    unit_price: float | None,
-    discount_type: str | None,
-    discount_value: float | None,
-    default_price: float | None,
-) -> float | None:
-    """Calculate effective price using the waterfall: unit_price > discount > default_price."""
-    if unit_price is not None:
-        return unit_price
-    if default_price is not None and discount_type and discount_value is not None:
-        if discount_type == "percentage":
-            return round(default_price * (1 - discount_value / 100), 2)
-        elif discount_type == "fixed":
-            return round(max(0, default_price - discount_value), 2)
-    return default_price
-
-
 @router.get("/inventory/overview", response_model=list[InventoryOverviewItem])
 def inventory_overview(
     organization_id: int | None = None,
@@ -1057,7 +1041,7 @@ def inventory_overview(
 
     can_view_prices = user.role != "courier"
     customer_prices_rows = (
-        db.query(CustomerSKU, Customer.name)
+        db.query(CustomerSKU, Customer.name, Customer.discount_percentage)
         .join(Customer, CustomerSKU.customer_id == Customer.id)
         .filter(CustomerSKU.sku_id.in_(sku_ids))
         .all()
@@ -1070,11 +1054,14 @@ def inventory_overview(
 
     # Group by sku_id
     prices_by_sku: dict[int, list[CustomerPriceResponse]] = {}
-    for cs, cname in customer_prices_rows:
+    for cs, cname, cdiscount in customer_prices_rows:
         unit = float(cs.unit_price) if cs.unit_price is not None else None
         dt = cs.discount_type
         dv = float(cs.discount_value) if cs.discount_value is not None else None
-        effective = _calc_effective_price(unit, dt, dv, sku_default_prices.get(cs.sku_id))
+        cpct = float(cdiscount) if cdiscount is not None else None
+        effective = calc_effective_price(
+            sku_default_prices.get(cs.sku_id), unit, dt, dv, cpct
+        )
         prices_by_sku.setdefault(cs.sku_id, []).append(
             CustomerPriceResponse(
                 customer_id=cs.customer_id,
@@ -1211,12 +1198,17 @@ def update_customer_sku_discount(
     unit = float(link.unit_price) if link.unit_price is not None else None
     dt = link.discount_type
     dv = float(link.discount_value) if link.discount_value is not None else None
+    cpct = (
+        float(customer.discount_percentage)
+        if customer.discount_percentage is not None
+        else None
+    )
 
     return {
         "ok": True,
         "discount_type": dt,
         "discount_value": dv,
-        "effective_price": _calc_effective_price(unit, dt, dv, default_price),
+        "effective_price": calc_effective_price(default_price, unit, dt, dv, cpct),
     }
 
 

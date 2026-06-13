@@ -79,3 +79,29 @@ def test_customer_grouping_splits_boxes_and_bottles(
     lines = {l["sku_code"]: l for l in cust["lines"]}
     assert lines["WS-BOX"]["is_bottle"] is False
     assert lines["WS-FLES"]["is_bottle"] is True
+
+
+def test_weekly_summary_denies_customer(
+    client, db, customer_user, customer_token, sample_org
+):
+    """The weekly summary exposes pricing across all customers in the org, so
+    customer-role users must not reach it (even though the UI hides the tab)."""
+    _seed_mixed_order(db, sample_org)
+    resp = client.get(
+        "/api/orders/weekly-summary",
+        params={"week": WEEK, "group_by": "customer"},
+        headers=auth_header(customer_token),
+    )
+    assert resp.status_code == 403
+
+
+def test_weekly_summary_denies_courier(
+    client, db, courier_user, courier_token, sample_org
+):
+    _seed_mixed_order(db, sample_org)
+    resp = client.get(
+        "/api/orders/weekly-summary",
+        params={"week": WEEK, "group_by": "supplier"},
+        headers=auth_header(courier_token),
+    )
+    assert resp.status_code == 403

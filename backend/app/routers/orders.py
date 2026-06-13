@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
-from app.auth import get_current_user, require_can_create_orders
+from app.auth import get_current_user, require_can_create_orders, require_merchant
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
@@ -44,6 +44,7 @@ from app.schemas import (
     WeeklySummarySupplier,
     WeeklySummaryWine,
 )
+from app.services.pricing import calc_effective_price
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -56,22 +57,6 @@ COURIER_VIEWABLE_STATUSES = (
 )
 
 
-def _calc_effective_price(
-    unit_price: float | None,
-    discount_type: str | None,
-    discount_value: float | None,
-    default_price: float | None,
-) -> float | None:
-    if unit_price is not None:
-        return unit_price
-    if default_price is not None and discount_type and discount_value is not None:
-        if discount_type == "percentage":
-            return round(default_price * (1 - discount_value / 100), 2)
-        if discount_type == "fixed":
-            return round(max(0, default_price - discount_value), 2)
-    return default_price
-
-
 def _as_float(value: Decimal | float | None) -> float | None:
     if value is None:
         return None
@@ -82,10 +67,15 @@ def _order_line_to_response(
     line: OrderLine,
     sku_default_prices: dict[int, float | None],
     customer_price_map: dict[tuple[int, int], CustomerSKU],
+    hide_prices: bool = False,
 ) -> OrderLineResponse:
     customer_show_prices = True
     if line.customer is not None:
         customer_show_prices = line.customer.show_prices
+    # Couriers are delivery staff, not part of the sales relationship; they
+    # never see prices regardless of the customer's show_prices setting.
+    if hide_prices:
+        customer_show_prices = False
 
     link = None
     if line.customer_id is not None:
@@ -94,11 +84,17 @@ def _order_line_to_response(
     unit_price = _as_float(link.unit_price) if link else None
     discount_type = link.discount_type if link else None
     discount_value = _as_float(link.discount_value) if link else None
-    effective_price = _calc_effective_price(
+    customer_discount = (
+        _as_float(line.customer.discount_percentage)
+        if line.customer is not None
+        else None
+    )
+    effective_price = calc_effective_price(
+        sku_default_prices.get(line.sku_id),
         unit_price,
         discount_type,
         discount_value,
-        sku_default_prices.get(line.sku_id),
+        customer_discount,
     )
     line_total = (
         round(effective_price * line.quantity, 2)
@@ -128,7 +124,9 @@ def _order_line_to_response(
     )
 
 
-def _order_to_response(order: Order, db: Session) -> OrderResponse:
+def _order_to_response(
+    order: Order, db: Session, hide_prices: bool = False
+) -> OrderResponse:
     customer_sku_keys = {
         (line.customer_id, line.sku_id)
         for line in order.lines
@@ -157,7 +155,9 @@ def _order_to_response(order: Order, db: Session) -> OrderResponse:
         for line in order.lines
     }
     lines = [
-        _order_line_to_response(line, sku_default_prices, customer_price_map)
+        _order_line_to_response(
+            line, sku_default_prices, customer_price_map, hide_prices=hide_prices
+        )
         for line in order.lines
     ]
     visible_line_totals = [line.line_total for line in lines if line.line_total is not None]
@@ -352,7 +352,7 @@ def create_order(
         resource_id=order.id,
     )
 
-    return _order_to_response(order, db)
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
 @router.get("", response_model=list[OrderResponse])
@@ -408,7 +408,10 @@ def list_orders(
         query = query.filter(Order.delivery_week == week)
 
     orders = query.order_by(Order.created_at.desc()).offset(offset).limit(limit).all()
-    return [_order_to_response(o, db) for o in orders]
+    return [
+        _order_to_response(o, db, hide_prices=user.role == "courier")
+        for o in orders
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -698,9 +701,13 @@ def weekly_order_summary(
     week: str = Query(None, description="ISO week, bijv. '2026-W15'. Standaard: huidige week."),
     group_by: str = Query("supplier", description="Groepering: 'supplier' of 'customer'."),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_merchant),
 ):
-    """Weekly order summary grouped by supplier or by customer (for invoicing)."""
+    """Weekly order summary grouped by supplier or by customer (for invoicing).
+
+    Merchant-only: exposes pricing across all customers in the org, so customers
+    and couriers are denied (see require_merchant).
+    """
     if group_by not in ("supplier", "customer"):
         raise HTTPException(400, "group_by moet 'supplier' of 'customer' zijn")
     if not user.is_platform_admin and not user.organization_id:
@@ -783,7 +790,14 @@ def weekly_order_summary(
         unit_price = float(link.unit_price) if link and link.unit_price is not None else None
         discount_type = link.discount_type if link else None
         discount_value = float(link.discount_value) if link and link.discount_value is not None else None
-        effective_price = _calc_effective_price(unit_price, discount_type, discount_value, default_price)
+        customer_discount = (
+            float(line.customer.discount_percentage)
+            if line.customer is not None and line.customer.discount_percentage is not None
+            else None
+        )
+        effective_price = calc_effective_price(
+            default_price, unit_price, discount_type, discount_value, customer_discount
+        )
 
         enriched.append({
             "supplier_id": supplier_id,
@@ -921,7 +935,7 @@ def get_order(
             if user.role != "courier":
                 raise HTTPException(403, "Geen toegang tot deze order")
 
-    return _order_to_response(order, db)
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
 @router.post("/{order_id}/approve", response_model=OrderResponse)
@@ -983,7 +997,7 @@ def approve_order(
         resource_id=order.id,
     )
 
-    return _order_to_response(order, db)
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
 @router.post("/{order_id}/close", response_model=OrderResponse)
@@ -1034,7 +1048,7 @@ def close_order(
         resource_id=order.id,
     )
 
-    return _order_to_response(order, db)
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
 @router.patch("/{order_id}", response_model=OrderResponse)
@@ -1056,7 +1070,7 @@ def update_order(
     order.remarks = body.remarks
     db.commit()
     db.refresh(order)
-    return _order_to_response(order, db)
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
 def _assert_can_delete_order(order: Order, user: User) -> None:
@@ -1229,7 +1243,7 @@ def add_order_line(
         resource_type="order",
         resource_id=order.id,
     )
-    return _order_to_response(order, db)
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
 @router.patch("/{order_id}/lines/{line_id}", response_model=OrderResponse)
@@ -1287,7 +1301,7 @@ def update_order_line(
         resource_type="order",
         resource_id=order.id,
     )
-    return _order_to_response(order, db)
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
 @router.delete("/{order_id}/lines/{line_id}", response_model=OrderLineDeleteResponse)
@@ -1355,7 +1369,7 @@ def delete_order_line(
         resource_type="order",
         resource_id=order.id,
     )
-    return OrderLineDeleteResponse(order=_order_to_response(order, db))
+    return OrderLineDeleteResponse(order=_order_to_response(order, db, hide_prices=user.role == "courier"))
 
 
 @router.get("/{order_id}/bookings", response_model=list[BookingResponse])
