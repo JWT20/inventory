@@ -10,6 +10,7 @@ from app.database import get_db
 from sqlalchemy.exc import IntegrityError
 
 from app.models import Customer, CustomerSKU, OrderLine, Organization, SKU, User
+from app.services.pricing import calc_effective_price
 from app.schemas import (
     CustomerCreate,
     CustomerResponse,
@@ -51,28 +52,6 @@ def _customer_to_response(customer: Customer) -> CustomerResponse:
         sku_count=len(ordered_links),
         created_at=customer.created_at,
     )
-
-
-def _calc_effective_price(
-    default_price: float | None,
-    unit_price: float | None,
-    discount_type: str | None,
-    discount_value: float | None,
-    customer_discount_pct: float | None,
-) -> float | None:
-    """Price waterfall: unit_price > sku discount > customer discount > default."""
-    if unit_price is not None:
-        return unit_price
-    if default_price is None:
-        return None
-    if discount_type and discount_value is not None:
-        if discount_type == "percentage":
-            return round(default_price * (1 - discount_value / 100), 2)
-        if discount_type == "fixed":
-            return round(max(default_price - discount_value, 0), 2)
-    if customer_discount_pct is not None:
-        return round(default_price * (1 - customer_discount_pct / 100), 2)
-    return default_price
 
 
 def _get_customer_or_404(
@@ -286,7 +265,7 @@ def list_customer_skus(
                 unit_price=unit_price,
                 discount_type=dt,
                 discount_value=dv,
-                effective_price=_calc_effective_price(
+                effective_price=calc_effective_price(
                     default_price, unit_price, dt, dv, customer_discount
                 ),
             )

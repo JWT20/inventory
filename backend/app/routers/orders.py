@@ -44,6 +44,7 @@ from app.schemas import (
     WeeklySummarySupplier,
     WeeklySummaryWine,
 )
+from app.services.pricing import calc_effective_price
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -54,22 +55,6 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 COURIER_VIEWABLE_STATUSES = (
     "pending_approval", "active", "completed", "cancelled", "closed",
 )
-
-
-def _calc_effective_price(
-    unit_price: float | None,
-    discount_type: str | None,
-    discount_value: float | None,
-    default_price: float | None,
-) -> float | None:
-    if unit_price is not None:
-        return unit_price
-    if default_price is not None and discount_type and discount_value is not None:
-        if discount_type == "percentage":
-            return round(default_price * (1 - discount_value / 100), 2)
-        if discount_type == "fixed":
-            return round(max(0, default_price - discount_value), 2)
-    return default_price
 
 
 def _as_float(value: Decimal | float | None) -> float | None:
@@ -94,11 +79,17 @@ def _order_line_to_response(
     unit_price = _as_float(link.unit_price) if link else None
     discount_type = link.discount_type if link else None
     discount_value = _as_float(link.discount_value) if link else None
-    effective_price = _calc_effective_price(
+    customer_discount = (
+        _as_float(line.customer.discount_percentage)
+        if line.customer is not None
+        else None
+    )
+    effective_price = calc_effective_price(
+        sku_default_prices.get(line.sku_id),
         unit_price,
         discount_type,
         discount_value,
-        sku_default_prices.get(line.sku_id),
+        customer_discount,
     )
     line_total = (
         round(effective_price * line.quantity, 2)
@@ -783,7 +774,14 @@ def weekly_order_summary(
         unit_price = float(link.unit_price) if link and link.unit_price is not None else None
         discount_type = link.discount_type if link else None
         discount_value = float(link.discount_value) if link and link.discount_value is not None else None
-        effective_price = _calc_effective_price(unit_price, discount_type, discount_value, default_price)
+        customer_discount = (
+            float(line.customer.discount_percentage)
+            if line.customer is not None and line.customer.discount_percentage is not None
+            else None
+        )
+        effective_price = calc_effective_price(
+            default_price, unit_price, discount_type, discount_value, customer_discount
+        )
 
         enriched.append({
             "supplier_id": supplier_id,

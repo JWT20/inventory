@@ -52,6 +52,12 @@ interface CustomerOption {
   sku_ids: number[];
   delivery_day: string;
   delivery_days: string[];
+  show_prices: boolean;
+}
+
+interface CustomerSkuPrice {
+  sku_id: number;
+  effective_price: number | null;
 }
 
 interface OrderLine {
@@ -727,6 +733,7 @@ function ManualOrderDialog({
   const [allCustomers, setAllCustomers] = useState<CustomerOption[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
   const [currentLines, setCurrentLines] = useState<CustomerSkuLine[]>([]);
+  const [customerPrices, setCustomerPrices] = useState<CustomerSkuPrice[]>([]);
   const [currentDeliveryDay, setCurrentDeliveryDay] = useState<string>("thursday");
   const [submitting, setSubmitting] = useState(false);
   const [customerSearch, setCustomerSearch] = useState("");
@@ -745,6 +752,14 @@ function ManualOrderDialog({
     }));
     setCurrentLines(lines);
     setCurrentDeliveryDay(defaultDeliveryDayFor(customer));
+    // Fetch this customer's real prices for the form preview. Only when the
+    // merchant has allowed this customer to see prices; otherwise leave empty.
+    setCustomerPrices([]);
+    if (customer.show_prices) {
+      api
+        .listCustomerSKUs(customer.id)
+        .then((skus: CustomerSkuPrice[]) => setCustomerPrices(skus));
+    }
   }
 
   useEffect(() => {
@@ -834,6 +849,7 @@ function ManualOrderDialog({
       onClose();
       setSelectedCustomerId(null);
       setCurrentLines([]);
+      setCustomerPrices([]);
       setCurrentDeliveryDay("thursday");
       setCustomerSearch("");
       setRemarks("");
@@ -934,6 +950,10 @@ function ManualOrderDialog({
             const renderSkuLine = (line: CustomerSkuLine) => {
               const sku = allSkus.find((s) => s.id === line.sku_id);
               if (!sku) return null;
+              const price = customer.show_prices
+                ? customerPrices.find((p) => p.sku_id === line.sku_id)
+                    ?.effective_price
+                : null;
               return (
                 <div key={line.sku_id} className="flex items-center gap-2">
                   <Checkbox
@@ -946,6 +966,11 @@ function ManualOrderDialog({
                   >
                     {sku.name}
                   </span>
+                  {price != null && (
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">
+                      {money.format(price)} p/st
+                    </span>
+                  )}
                   <OrderQuantityControl
                     value={line.quantity}
                     disabled={!line.checked}

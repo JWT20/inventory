@@ -881,3 +881,165 @@ class TestDeleteOrder:
         assert resp.status_code == 403
         db.expire_all()
         assert db.get(Order, order_id) is not None
+
+
+class TestPricingWaterfall:
+    """The order form preview, confirmed order lines, and the customer
+    assortment endpoint must all resolve the same effective price."""
+
+    def test_general_customer_discount_applied_on_order_line(
+        self, client, db, owner_token, sample_org
+    ):
+        customer = Customer(
+            name="kortingsklant",
+            organization_id=sample_org.id,
+            show_prices=True,
+            discount_percentage=10,
+        )
+        sku = SKU(sku_code="WINE-DISC", name="Korting Wijn", default_price=20)
+        db.add_all([customer, sku])
+        db.commit()
+        db.add(CustomerSKU(customer_id=customer.id, sku_id=sku.id))
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [{"customer_id": customer.id, "sku_id": sku.id, "quantity": 2}],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        line = resp.json()["lines"][0]
+        # 20 * (1 - 10%) = 18.00
+        assert line["effective_price"] == 18.0
+        assert line["line_total"] == 36.0
+
+    def test_fixed_unit_price_beats_general_discount(
+        self, client, db, owner_token, sample_org
+    ):
+        customer = Customer(
+            name="vaste prijs klant",
+            organization_id=sample_org.id,
+            show_prices=True,
+            discount_percentage=10,
+        )
+        sku = SKU(sku_code="WINE-FIXED", name="Vaste Prijs Wijn", default_price=20)
+        db.add_all([customer, sku])
+        db.commit()
+        # A fixed per-customer unit price overrides the general discount.
+        db.add(CustomerSKU(customer_id=customer.id, sku_id=sku.id, unit_price=15))
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [{"customer_id": customer.id, "sku_id": sku.id, "quantity": 1}],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["lines"][0]["effective_price"] == 15.0
+
+    def test_product_discount_beats_general_discount(
+        self, client, db, owner_token, sample_org
+    ):
+        customer = Customer(
+            name="productkorting klant",
+            organization_id=sample_org.id,
+            show_prices=True,
+            discount_percentage=10,
+        )
+        sku = SKU(sku_code="WINE-PDISC", name="Productkorting Wijn", default_price=20)
+        db.add_all([customer, sku])
+        db.commit()
+        # A product-specific discount takes precedence over the general one.
+        db.add(
+            CustomerSKU(
+                customer_id=customer.id,
+                sku_id=sku.id,
+                discount_type="percentage",
+                discount_value=25,
+            )
+        )
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [{"customer_id": customer.id, "sku_id": sku.id, "quantity": 1}],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        # 20 * (1 - 25%) = 15.00, not the 18.00 the general 10% would give.
+        assert resp.json()["lines"][0]["effective_price"] == 15.0
+
+    def test_form_preview_matches_confirmed_order(
+        self, client, db, owner_token, sample_org
+    ):
+        """The price the customer sees on the form (/customers/{id}/skus)
+        equals the price on the confirmed order line."""
+        customer = Customer(
+            name="pariteit klant",
+            organization_id=sample_org.id,
+            show_prices=True,
+            discount_percentage=15,
+        )
+        sku = SKU(sku_code="WINE-PAR", name="Pariteit Wijn", default_price=20)
+        db.add_all([customer, sku])
+        db.commit()
+        db.add(CustomerSKU(customer_id=customer.id, sku_id=sku.id))
+        db.commit()
+
+        form_resp = client.get(
+            f"/api/customers/{customer.id}/skus",
+            headers=auth_header(owner_token),
+        )
+        assert form_resp.status_code == 200
+        form_price = form_resp.json()[0]["effective_price"]
+
+        order_resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [{"customer_id": customer.id, "sku_id": sku.id, "quantity": 1}],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert order_resp.status_code == 200
+        order_price = order_resp.json()["lines"][0]["effective_price"]
+
+        assert form_price == order_price == 17.0
+
+    def test_hidden_prices_stay_hidden_with_discount(
+        self, client, db, owner_token, sample_org
+    ):
+        customer = Customer(
+            name="verborgen kortingsklant",
+            organization_id=sample_org.id,
+            show_prices=False,
+            discount_percentage=10,
+        )
+        sku = SKU(sku_code="WINE-HID", name="Verborgen Wijn", default_price=20)
+        db.add_all([customer, sku])
+        db.commit()
+        db.add(CustomerSKU(customer_id=customer.id, sku_id=sku.id))
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [{"customer_id": customer.id, "sku_id": sku.id, "quantity": 2}],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        line = resp.json()["lines"][0]
+        assert line["show_prices"] is False
+        assert line["effective_price"] is None
+        assert line["line_total"] is None
