@@ -240,6 +240,15 @@ def list_customer_skus(
         if customer.discount_percentage is not None
         else None
     )
+    # show_prices is leading for customer users: a linked customer without price
+    # rights must not be able to read prices via this endpoint, even though the
+    # UI already gates the fetch. Merchants/admins always see prices (they manage
+    # them).
+    hide_prices = (
+        user.role == "customer"
+        and not user.is_platform_admin
+        and not customer.show_prices
+    )
 
     links = (
         db.query(CustomerSKU, SKU)
@@ -255,6 +264,16 @@ def list_customer_skus(
         unit_price = float(link.unit_price) if link.unit_price is not None else None
         dt = link.discount_type
         dv = float(link.discount_value) if link.discount_value is not None else None
+
+        if hide_prices:
+            result.append(
+                CustomerSKUResponse(
+                    sku_id=sku.id,
+                    sku_code=sku.sku_code,
+                    sku_name=sku.name,
+                )
+            )
+            continue
 
         result.append(
             CustomerSKUResponse(

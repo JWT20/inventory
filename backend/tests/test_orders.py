@@ -1015,6 +1015,73 @@ class TestPricingWaterfall:
 
         assert form_price == order_price == 17.0
 
+    def test_form_endpoint_hides_prices_from_customer_without_rights(
+        self, client, db, customer_user, customer_token, owner_token, sample_org
+    ):
+        """A linked customer without price rights must not read prices via
+        /customers/{id}/skus, even calling the API directly."""
+        customer = Customer(
+            name="geen prijsrechten",
+            organization_id=sample_org.id,
+            show_prices=False,
+            discount_percentage=10,
+        )
+        sku = SKU(sku_code="WINE-SEC", name="Beveiligde Wijn", default_price=20)
+        db.add_all([customer, sku])
+        db.commit()
+        db.add(CustomerSKU(customer_id=customer.id, sku_id=sku.id, unit_price=12))
+        db.commit()
+        customer_user.customer_id = customer.id
+        db.commit()
+
+        # Customer sees no price fields.
+        cust_resp = client.get(
+            f"/api/customers/{customer.id}/skus",
+            headers=auth_header(customer_token),
+        )
+        assert cust_resp.status_code == 200
+        row = cust_resp.json()[0]
+        assert row["default_price"] is None
+        assert row["unit_price"] is None
+        assert row["discount_type"] is None
+        assert row["discount_value"] is None
+        assert row["effective_price"] is None
+
+        # Merchant still sees prices (they manage them).
+        owner_resp = client.get(
+            f"/api/customers/{customer.id}/skus",
+            headers=auth_header(owner_token),
+        )
+        assert owner_resp.status_code == 200
+        owner_row = owner_resp.json()[0]
+        assert owner_row["unit_price"] == 12.0
+        assert owner_row["effective_price"] == 12.0
+
+    def test_form_endpoint_shows_prices_to_customer_with_rights(
+        self, client, db, customer_user, customer_token, sample_org
+    ):
+        customer = Customer(
+            name="met prijsrechten",
+            organization_id=sample_org.id,
+            show_prices=True,
+            discount_percentage=10,
+        )
+        sku = SKU(sku_code="WINE-SEC2", name="Zichtbare Wijn", default_price=20)
+        db.add_all([customer, sku])
+        db.commit()
+        db.add(CustomerSKU(customer_id=customer.id, sku_id=sku.id))
+        db.commit()
+        customer_user.customer_id = customer.id
+        db.commit()
+
+        resp = client.get(
+            f"/api/customers/{customer.id}/skus",
+            headers=auth_header(customer_token),
+        )
+        assert resp.status_code == 200
+        # 20 * (1 - 10%) = 18.00
+        assert resp.json()[0]["effective_price"] == 18.0
+
     def test_hidden_prices_stay_hidden_with_discount(
         self, client, db, owner_token, sample_org
     ):

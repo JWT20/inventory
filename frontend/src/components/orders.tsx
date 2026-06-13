@@ -734,6 +734,9 @@ function ManualOrderDialog({
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
   const [currentLines, setCurrentLines] = useState<CustomerSkuLine[]>([]);
   const [customerPrices, setCustomerPrices] = useState<CustomerSkuPrice[]>([]);
+  // Tracks the customer whose prices we last requested, so a slow response for a
+  // previously selected customer can't overwrite the current one's prices.
+  const priceReqCustomerId = useRef<number | null>(null);
   const [currentDeliveryDay, setCurrentDeliveryDay] = useState<string>("thursday");
   const [submitting, setSubmitting] = useState(false);
   const [customerSearch, setCustomerSearch] = useState("");
@@ -755,10 +758,14 @@ function ManualOrderDialog({
     // Fetch this customer's real prices for the form preview. Only when the
     // merchant has allowed this customer to see prices; otherwise leave empty.
     setCustomerPrices([]);
+    priceReqCustomerId.current = customer.id;
     if (customer.show_prices) {
-      api
-        .listCustomerSKUs(customer.id)
-        .then((skus: CustomerSkuPrice[]) => setCustomerPrices(skus));
+      api.listCustomerSKUs(customer.id).then((skus: CustomerSkuPrice[]) => {
+        // Ignore a stale response if the user has since picked another customer.
+        if (priceReqCustomerId.current === customer.id) {
+          setCustomerPrices(skus);
+        }
+      });
     }
   }
 
