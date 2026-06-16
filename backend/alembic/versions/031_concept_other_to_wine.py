@@ -36,13 +36,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        """
-        UPDATE skus SET category = 'other'
-        WHERE category = 'wine'
-          AND id IN (
-            SELECT sku_id FROM sku_attributes
-            WHERE key = 'source' AND value = 'inbound_scan'
-          )
-        """
-    )
+    # Intentionally a no-op. The upgrade only touched rows that were
+    # category='other' at that moment; after the migration new concepts are
+    # created as 'wine' and existing ones get completed, so there is no marker
+    # to tell those apart from the rows this migration changed. Blanket-
+    # reverting every inbound concept to 'other' would wrongly demote them, so
+    # this data backfill is treated as not reversible.
+    pass
