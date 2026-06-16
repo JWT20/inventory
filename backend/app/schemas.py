@@ -187,8 +187,6 @@ class SKUCreate(BaseModel):
 
 
 class SKUUpdate(BaseModel):
-    name: str | None = None
-    category: str | None = None
     attributes: dict[str, str] | None = None
     active: bool | None = None
     supplier_id: int | None = None

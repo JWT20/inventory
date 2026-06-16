@@ -1346,11 +1346,14 @@ def create_concept_product(
         raise HTTPException(status_code=409, detail="SKU with this code exists in another organization")
 
     concept_name = (description or "").strip() or f"Concept {code}"
+    # A concept is an unfinished wine, not a generic product: it stays inactive
+    # until the merchant fills in the wine attributes. category="wine" makes the
+    # editor show the wine fields directly and makes is_complete require them.
     sku = SKU(
         sku_code=code,
         name=concept_name,
         description=concept_name,
-        category="other",
+        category="wine",
         active=False,
         organization_id=target_org_id,
     )

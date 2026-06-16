@@ -39,9 +39,10 @@ def org_auto_inactivates_without_images(org: Organization | None) -> bool:
 def is_complete(sku: SKU) -> bool:
     """Whether a SKU has all the fields needed to be sold/picked.
 
-    Wines need every required wine attribute. Other products (including
-    inbound concept SKUs, which start as category "other") need a real name
-    that is not the auto-generated ``Concept <code>`` placeholder.
+    Wines need every required wine attribute — inbound concepts are unfinished
+    wines, so a bare name is not enough; the merchant must fill the wine fields.
+    Non-wine products need a real name that is not the auto-generated
+    ``Concept <code>`` placeholder.
     """
     name = (sku.name or "").strip()
     if not name or name == f"Concept {sku.sku_code}":

@@ -100,6 +100,8 @@ class TestCreateConceptProduct:
         data = resp.json()
         assert data["sku_code"] == "SUP-001"
         assert data["active"] is False
+        # A concept is an unfinished wine, not a generic "other" product.
+        assert data["category"] == "wine"
         assert data["attributes"]["status"] == "concept"
         assert data["attributes"]["source"] == "inbound_scan"
 
