@@ -683,6 +683,82 @@ class TestApproveOrder:
         assert resp.status_code == 400
 
 
+class TestApproveSplitUnimaged:
+    def _create_mixed_order(self, client, db, owner_token, sample_org):
+        """One order, one customer, two SKUs: one with image, one without."""
+        customer = Customer(name="klant split", organization_id=sample_org.id)
+        sku_img = SKU(sku_code="SPLIT-IMG", name="Wijn met beeld")
+        sku_noimg = SKU(sku_code="SPLIT-NOIMG", name="Wijn zonder beeld")
+        db.add_all([customer, sku_img, sku_noimg])
+        db.commit()
+        db.add(ReferenceImage(sku_id=sku_img.id, image_path="reference_images/split.jpg"))
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [
+                    {"customer_id": customer.id, "sku_id": sku_img.id, "quantity": 2},
+                    {"customer_id": customer.id, "sku_id": sku_noimg.id, "quantity": 5},
+                ],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        return resp.json()["id"], sku_img.id, sku_noimg.id
+
+    def test_split_moves_unimaged_lines_to_sibling(
+        self, client, db, owner_token, sample_org
+    ):
+        order_id, sku_img_id, sku_noimg_id = self._create_mixed_order(
+            client, db, owner_token, sample_org
+        )
+
+        resp = client.post(
+            f"/api/orders/{order_id}/approve",
+            json={"split_unimaged": True},
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        # Original keeps only the imaged line and goes active.
+        assert data["status"] == "active"
+        assert [l["sku_id"] for l in data["lines"]] == [sku_img_id]
+
+        # A sibling order holds the unimaged line, waiting for photos.
+        siblings = [
+            o
+            for o in client.get("/api/orders", headers=auth_header(owner_token)).json()
+            if o["id"] != order_id
+        ]
+        assert len(siblings) == 1
+        sibling = siblings[0]
+        assert sibling["status"] == "pending_images"
+        assert [l["sku_id"] for l in sibling["lines"]] == [sku_noimg_id]
+        # Line details carried over.
+        moved = sibling["lines"][0]
+        assert moved["quantity"] == 5
+        assert sibling["delivery_week"] == data["delivery_week"]
+
+    def test_split_noop_when_all_lines_unimaged(
+        self, client, db, owner_token, sample_org
+    ):
+        order_id = TestApproveOrder()._create_order(
+            client, db, owner_token, sample_org, "ALLNOIMG"
+        )
+        resp = client.post(
+            f"/api/orders/{order_id}/approve",
+            json={"split_unimaged": True},
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        # Nothing to peel off (would leave the order empty): stays as one order.
+        assert resp.json()["status"] == "pending_images"
+        all_orders = client.get("/api/orders", headers=auth_header(owner_token)).json()
+        assert len(all_orders) == 1
+
+
 class TestSKUCodeGeneration:
     def test_sku_code_format(self):
         from app.schemas import generate_wine_sku_code

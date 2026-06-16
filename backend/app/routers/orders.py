@@ -976,14 +976,22 @@ def approve_order(
 
     if order.status == "pending_approval":
         order.delivery_week = week or _current_iso_week()
+    elif week:
+        # pending_images → active: explicit activation, images optional.
+        order.delivery_week = week
+
+    # Optionally peel off the lines that still lack a reference image onto a new
+    # sibling order, so the rest of this order can go active right away.
+    sibling: Order | None = None
+    if body and body.split_unimaged:
+        sibling = _split_unimaged_lines(order, db)
+
+    if order.status == "pending_approval":
         all_have_images = all(
             len(line.sku.reference_images) > 0 for line in order.lines
         )
         order.status = "active" if all_have_images else "pending_images"
     else:
-        # pending_images → active: explicit activation, images optional.
-        if week:
-            order.delivery_week = week
         order.status = "active"
 
     db.commit()
@@ -991,13 +999,56 @@ def approve_order(
 
     publish_event(
         "order_approved",
-        details={"order_reference": order.reference, "new_status": order.status},
+        details={
+            "order_reference": order.reference,
+            "new_status": order.status,
+            "split_order_reference": sibling.reference if sibling else None,
+        },
         user=user,
         resource_type="order",
         resource_id=order.id,
     )
 
     return _order_to_response(order, db, hide_prices=user.role == "courier")
+
+
+def _split_unimaged_lines(order: Order, db: Session) -> "Order | None":
+    """Move lines whose SKU lacks a reference image to a new sibling order.
+
+    Only unbooked lines move; a line that already has bookings stays put so no
+    picking progress is lost. Returns the new ``pending_images`` order, or None
+    when there is nothing to split (no unimaged lines, or every line is unimaged
+    so the original would be left empty).
+    """
+    to_move = [
+        line
+        for line in order.lines
+        if len(line.sku.reference_images) == 0 and line.booked_count == 0
+    ]
+    if not to_move or len(to_move) == len(order.lines):
+        return None
+
+    sibling = Order(
+        organization_id=order.organization_id,
+        created_by=order.created_by,
+        reference=f"ORD-{uuid.uuid4().hex[:8].upper()}",
+        status="pending_images",
+        remarks=(f"Afgesplitst van {order.reference} (SKU's zonder beeld)").strip(),
+        delivery_week=order.delivery_week,
+    )
+    db.add(sibling)
+    db.flush()
+
+    for line in to_move:
+        line.order_id = sibling.id
+
+    # The lines collections are now stale; reload them so the caller sees each
+    # order's real remaining lines (the status check depends on it).
+    db.flush()
+    db.expire(order, ["lines"])
+    db.expire(sibling, ["lines"])
+
+    return sibling
 
 
 @router.post("/{order_id}/close", response_model=OrderResponse)

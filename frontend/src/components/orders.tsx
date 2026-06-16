@@ -1210,14 +1210,19 @@ function OrderDetailDialog({
   if (!order) return null;
 
   const skusWithoutImages = order.lines.filter((l) => !l.has_image);
-  // Owners and members approve new orders; a pending_images order can be
-  // activated once every SKU has a reference image.
+  const hasUnimaged = skusWithoutImages.length > 0;
+  // Owners and members approve new orders. A pending_images order can also be
+  // activated without photos: missing images are captured at scan time, so the
+  // courier is not blocked. Splitting (below) is the tidier alternative.
   const canApprove =
-    (order.status === "pending_approval" ||
-      (order.status === "pending_images" && skusWithoutImages.length === 0)) &&
+    (order.status === "pending_approval" || order.status === "pending_images") &&
     (canManage || isMember);
   const approveLabel =
     order.status === "pending_approval" ? "Goedkeuren" : "Order activeren";
+  // Only worth offering the split when some, but not all, lines lack an image:
+  // splitting off every line would leave the original empty.
+  const canSplit =
+    canApprove && hasUnimaged && skusWithoutImages.length < order.lines.length;
   const canClose =
     (order.status === "active" || order.status === "pending_images") &&
     (canManage || isMember || user?.role === "courier");
@@ -1230,18 +1235,21 @@ function OrderDetailDialog({
         order.status === "pending_images") &&
       order.lines.every((l) => l.booked_count === 0));
 
-  async function approve() {
+  async function approve(splitUnimaged = false) {
     if (!order) return;
     setActivating(true);
     try {
       await api.approveOrder(
         order.id,
         order.status === "pending_approval" ? approveWeek : undefined,
+        splitUnimaged,
       );
       toast.success(
-        order.status === "pending_approval"
-          ? "Order goedgekeurd"
-          : "Order geactiveerd",
+        splitUnimaged
+          ? "Order geactiveerd; SKU's zonder beeld op aparte order gezet"
+          : order.status === "pending_approval"
+            ? "Order goedgekeurd"
+            : "Order geactiveerd",
       );
       onUpdated();
       onClose();
@@ -1630,13 +1638,34 @@ function OrderDetailDialog({
             </div>
           )}
 
+          {canApprove && hasUnimaged && (
+            <p className="text-xs text-muted-foreground">
+              {skusWithoutImages.length} product(en) zonder beeld. Je kunt de
+              order zo activeren (foto bij scannen) of de producten zonder beeld
+              op een aparte order zetten.
+            </p>
+          )}
+
           {canApprove && (
             <Button
               className="w-full"
-              onClick={approve}
+              onClick={() => approve(false)}
               disabled={activating}
             >
               {activating ? "Bezig..." : approveLabel}
+            </Button>
+          )}
+
+          {canSplit && (
+            <Button
+              variant="secondary"
+              className="w-full"
+              onClick={() => approve(true)}
+              disabled={activating}
+            >
+              {activating
+                ? "Bezig..."
+                : "Activeer + zet SKU's zonder beeld op aparte order"}
             </Button>
           )}
 

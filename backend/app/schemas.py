@@ -187,6 +187,8 @@ class SKUCreate(BaseModel):
 
 
 class SKUUpdate(BaseModel):
+    name: str | None = None
+    category: str | None = None
     attributes: dict[str, str] | None = None
     active: bool | None = None
     supplier_id: int | None = None
@@ -451,6 +453,10 @@ class OrderUpdate(BaseModel):
 class OrderApprove(BaseModel):
     # ISO week to deliver in, e.g. "2026-W24". Defaults to the week of approval.
     week: str | None = None
+    # When True, lines whose SKU still lacks a reference image are moved to a
+    # new sibling order (pending_images) so the original order can go active
+    # immediately. Lines that already have bookings stay put.
+    split_unimaged: bool = False
 
 
 class OrderLineUpdate(BaseModel):

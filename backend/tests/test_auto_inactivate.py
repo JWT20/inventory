@@ -33,11 +33,22 @@ def _make_org(db, *, auto_inactivate: bool, slug: str = "wijn-van-jurjen") -> Or
     return org
 
 
-def _make_sku(db, org: Organization | None, code: str, *, active: bool = True) -> SKU:
+def _make_sku(
+    db,
+    org: Organization | None,
+    code: str,
+    *,
+    active: bool = True,
+    complete: bool = False,
+) -> SKU:
+    """Create a SKU. By default it is *incomplete* (a wine missing its required
+    attributes), so its active flag is governed purely by the image rule — that
+    is what these tests exercise. Pass complete=True for a sellable product."""
     sku = SKU(
         sku_code=code,
         name=code,
         active=active,
+        category=None if complete else "wine",
         organization_id=org.id if org else None,
     )
     db.add(sku)
@@ -94,6 +105,45 @@ class TestRecomputeActive:
         db.commit()
         assert sku.active is False
 
+    def test_opted_in_complete_non_wine_is_active_without_image(self, db):
+        # A finished concept product (real name, non-wine) is sellable even
+        # without a photo: the courier can capture one at scan time.
+        org = _make_org(db, auto_inactivate=True)
+        sku = _make_sku(db, org, "DONE-1", active=False, complete=True)
+        recompute_active(sku, db)
+        db.commit()
+        assert sku.active is True
+
+    def test_opted_in_complete_wine_is_active_without_image(self, db):
+        org = _make_org(db, auto_inactivate=True)
+        sku = SKU(
+            sku_code="WINE-DONE",
+            name="Barolo 2019",
+            active=False,
+            category="wine",
+            organization_id=org.id,
+        )
+        sku.set_attributes(
+            {
+                "producent": "Vietti",
+                "wijnaam": "Barolo",
+                "wijntype": "rood",
+                "volume": "0.75",
+            }
+        )
+        db.add(sku)
+        db.commit()
+        recompute_active(sku, db)
+        db.commit()
+        assert sku.active is True
+
+    def test_opted_in_incomplete_wine_without_image_is_inactive(self, db):
+        org = _make_org(db, auto_inactivate=True)
+        sku = _make_sku(db, org, "WINE-TODO", active=True)  # wine, no attrs
+        recompute_active(sku, db)
+        db.commit()
+        assert sku.active is False
+
     def test_non_opted_in_org_is_left_alone(self, db):
         org = _make_org(db, auto_inactivate=False, slug="other-org")
         sku = _make_sku(db, org, "S-5", active=True)
@@ -107,6 +157,63 @@ class TestRecomputeActive:
         recompute_active(sku, db)
         db.commit()
         assert sku.active is True
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/skus/{id} flips a finished concept to active (no photo needed)
+# ---------------------------------------------------------------------------
+
+class TestUpdateCompletesConcept:
+    def _concept(self, db, org: Organization) -> SKU:
+        sku = SKU(
+            sku_code="CONCEPT-1",
+            name="Concept CONCEPT-1",
+            description="Concept CONCEPT-1",
+            category="other",
+            active=False,
+            organization_id=org.id,
+        )
+        sku.set_attributes({"status": "concept", "source": "inbound_scan"})
+        db.add(sku)
+        db.commit()
+        db.refresh(sku)
+        return sku
+
+    def test_naming_concept_activates_without_image(
+        self, client, db, owner_token, sample_org
+    ):
+        sample_org.auto_inactivate_no_images = True
+        db.commit()
+        sku = self._concept(db, sample_org)
+
+        resp = client.patch(
+            f"/api/skus/{sku.id}",
+            json={"name": "Echte Wijnnaam"},
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["active"] is True
+
+        db.refresh(sku)
+        assert sku.active is True
+        # No longer a concept once complete.
+        assert sku.attributes_dict.get("status") == "done"
+
+    def test_placeholder_name_keeps_concept_inactive(
+        self, client, db, owner_token, sample_org
+    ):
+        sample_org.auto_inactivate_no_images = True
+        db.commit()
+        sku = self._concept(db, sample_org)
+
+        # Touching another field without giving a real name leaves it inactive.
+        resp = client.patch(
+            f"/api/skus/{sku.id}",
+            json={"attributes": {"note": "nog afmaken"}},
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["active"] is False
 
 
 # ---------------------------------------------------------------------------
