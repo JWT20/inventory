@@ -319,8 +319,11 @@ export const api = {
     return request(`/orders${query ? `?${query}` : ""}`);
   },
   getOrder: (id: number) => request(`/orders/${id}`),
-  approveOrder: (id: number, week?: string) =>
-    json(`/orders/${id}/approve`, "POST", week ? { week } : {}),
+  approveOrder: (id: number, week?: string, splitUnimaged = false) =>
+    json(`/orders/${id}/approve`, "POST", {
+      ...(week ? { week } : {}),
+      ...(splitUnimaged ? { split_unimaged: true } : {}),
+    }),
   addOrderLine: (
     orderId: number,
     data: { customer_id: number; sku_id: number; quantity: number; delivery_day?: string },

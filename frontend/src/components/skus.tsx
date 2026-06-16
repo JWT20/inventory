@@ -306,6 +306,8 @@ function SKUDialog({
     !!user &&
     (user.is_platform_admin || user.role === "owner" || user.role === "member");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState("wine");
   const [producent, setProducent] = useState("");
   const [wijnaam, setWijnaam] = useState("");
   const [wijntype, setWijntype] = useState("");
@@ -313,6 +315,11 @@ function SKUDialog({
   const [supplierId, setSupplierId] = useState<number | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [isBottle, setIsBottle] = useState(false);
+
+  const isWine = category === "wine";
+  // An inbound concept product comes in as a non-wine SKU; completing it means
+  // giving it a real name (and optionally turning it into a wine).
+  const editingConcept = !!sku && sku.category !== "wine";
 
   // Helper to build attributes dict from individual state fields
   const getAttributes = () => ({
@@ -338,6 +345,8 @@ function SKUDialog({
     }
     if (open && sku) {
       const a = sku.attributes || {};
+      setName(sku.name || "");
+      setCategory(sku.category || "wine");
       setProducent(a.producent || "");
       setWijnaam(a.wijnaam || "");
       setWijntype(a.wijntype || "");
@@ -347,6 +356,8 @@ function SKUDialog({
       setCurrentId(sku.id);
       loadImages(sku.id);
     } else if (open) {
+      setName("");
+      setCategory("wine");
       setProducent("");
       setWijnaam("");
       setWijntype("");
@@ -408,7 +419,10 @@ function SKUDialog({
       let skuId = currentId;
       if (skuId) {
         await api.updateSKU(skuId, {
-          attributes: getAttributes(),
+          category,
+          // Wines derive their name from attributes; other products carry an
+          // explicit name (this is how an inbound concept gets completed).
+          ...(isWine ? { attributes: getAttributes() } : { name: name.trim() }),
           supplier_id: supplierId,
           is_bottle: isBottle,
         });
@@ -594,6 +608,39 @@ function SKUDialog({
         </SheetHeader>
 
         <form onSubmit={submit} className="space-y-3">
+          {editingConcept && (
+            <>
+              <div className="space-y-1">
+                <Label className="text-xs">Naam</Label>
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Productnaam"
+                  required={!isWine}
+                  disabled={isCourier}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Categorie</Label>
+                <Select
+                  value={category}
+                  onValueChange={setCategory}
+                  disabled={isCourier}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="other">Overig</SelectItem>
+                    <SelectItem value="wine">Wijn</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )}
+
+          {isWine && (
+          <>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-xs">Producent</Label>
@@ -638,6 +685,8 @@ function SKUDialog({
               />
             </div>
           </div>
+          </>
+          )}
           <div className="space-y-1">
             <Label className="text-xs">Leverancier</Label>
             <Select

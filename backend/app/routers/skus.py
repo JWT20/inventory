@@ -46,7 +46,7 @@ from app.services.embedding import (
     normalize_upload_to_jpeg,
 )
 from PIL import UnidentifiedImageError
-from app.services.product_status import recompute_active
+from app.services.product_status import is_complete, recompute_active
 from app.services.storage import storage
 
 logger = logging.getLogger(__name__)
@@ -465,7 +465,9 @@ def update_sku(
 
     changed_fields = data.model_dump(exclude_unset=True)
 
-    if data.active is not None:
+    # Explicit active wins; otherwise it is recomputed below for opted-in orgs.
+    active_set_explicitly = data.active is not None
+    if active_set_explicitly:
         sku.active = data.active
 
     if "supplier_id" in changed_fields:
@@ -473,6 +475,17 @@ def update_sku(
 
     if "is_bottle" in changed_fields and data.is_bottle is not None:
         sku.is_bottle = data.is_bottle
+
+    # A merchant finishing an inbound concept product can rename it and set its
+    # category (concept SKUs come in as category "other").
+    if "category" in changed_fields and data.category is not None:
+        sku.category = data.category
+
+    if "name" in changed_fields and data.name is not None:
+        name = data.name.strip()
+        if not name:
+            raise HTTPException(400, "name mag niet leeg zijn")
+        sku.name = name
 
     if data.attributes is not None:
         sku.set_attributes(data.attributes)
@@ -486,6 +499,14 @@ def update_sku(
                     raise HTTPException(400, f"SKU code '{new_code}' bestaat al")
                 sku.sku_code = new_code
                 sku.name = generate_wine_display_name(attrs)
+
+    # Re-evaluate the derived active flag now that fields may have changed, so a
+    # finished concept goes active without needing a photo. Once it is complete
+    # it is no longer a concept.
+    if not active_set_explicitly:
+        recompute_active(sku, db)
+    if is_complete(sku) and sku.attributes_dict.get("status") == "concept":
+        sku.set_attribute("status", "done")
 
     db.commit()
     db.refresh(sku)
