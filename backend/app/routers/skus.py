@@ -476,29 +476,24 @@ def update_sku(
     if "is_bottle" in changed_fields and data.is_bottle is not None:
         sku.is_bottle = data.is_bottle
 
-    # A merchant finishing an inbound concept product can rename it and set its
-    # category (concept SKUs come in as category "other").
-    if "category" in changed_fields and data.category is not None:
-        sku.category = data.category
-
-    if "name" in changed_fields and data.name is not None:
-        name = data.name.strip()
-        if not name:
-            raise HTTPException(400, "name mag niet leeg zijn")
-        sku.name = name
-
     if data.attributes is not None:
         sku.set_attributes(data.attributes)
-        # Regenerate sku_code and name for wine SKUs when attributes change
+        # Regenerate sku_code and name for wine SKUs when attributes change.
+        # A merchant finishing an inbound concept (a wine missing its fields)
+        # fills these in here; that is what flips it active without a photo.
         if sku.category == "wine":
             attrs = sku.attributes_dict
             if all(attrs.get(k) for k in WINE_ATTRIBUTE_KEYS):
-                new_code = generate_wine_sku_code(attrs)
-                conflict = db.query(SKU).filter(SKU.sku_code == new_code, SKU.id != sku_id).first()
-                if conflict:
-                    raise HTTPException(400, f"SKU code '{new_code}' bestaat al")
-                sku.sku_code = new_code
                 sku.name = generate_wine_display_name(attrs)
+                # Inbound concepts keep their supplier code as identity, so a
+                # later re-scan of the same code still finds this SKU instead of
+                # creating a duplicate. Other wines get the canonical wine code.
+                if attrs.get("source") != "inbound_scan":
+                    new_code = generate_wine_sku_code(attrs)
+                    conflict = db.query(SKU).filter(SKU.sku_code == new_code, SKU.id != sku_id).first()
+                    if conflict:
+                        raise HTTPException(400, f"SKU code '{new_code}' bestaat al")
+                    sku.sku_code = new_code
 
     # Re-evaluate the derived active flag now that fields may have changed, so a
     # finished concept goes active without needing a photo. Once it is complete

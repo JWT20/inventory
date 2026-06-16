@@ -164,12 +164,16 @@ class TestRecomputeActive:
 # ---------------------------------------------------------------------------
 
 class TestUpdateCompletesConcept:
+    """A concept is an unfinished wine (category="wine", status=concept). It
+    only goes active once all wine attributes are filled — a bare name is not
+    enough — and it keeps its inbound supplier code as identity."""
+
     def _concept(self, db, org: Organization) -> SKU:
         sku = SKU(
-            sku_code="CONCEPT-1",
-            name="Concept CONCEPT-1",
-            description="Concept CONCEPT-1",
-            category="other",
+            sku_code="SUP-001",
+            name="Concept SUP-001",
+            description="Concept SUP-001",
+            category="wine",
             active=False,
             organization_id=org.id,
         )
@@ -179,7 +183,7 @@ class TestUpdateCompletesConcept:
         db.refresh(sku)
         return sku
 
-    def test_naming_concept_activates_without_image(
+    def test_filling_wine_fields_activates_without_image(
         self, client, db, owner_token, sample_org
     ):
         sample_org.auto_inactivate_no_images = True
@@ -188,28 +192,38 @@ class TestUpdateCompletesConcept:
 
         resp = client.patch(
             f"/api/skus/{sku.id}",
-            json={"name": "Echte Wijnnaam"},
+            json={
+                "attributes": {
+                    "producent": "Vietti",
+                    "wijnaam": "Barolo",
+                    "wijntype": "rood",
+                    "volume": "0.75",
+                }
+            },
             headers=auth_header(owner_token),
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json()["active"] is True
+        body = resp.json()
+        assert body["active"] is True
+        # Supplier code preserved (not regenerated to the canonical wine code),
+        # so a later re-scan of SUP-001 still finds this SKU.
+        assert body["sku_code"] == "SUP-001"
 
         db.refresh(sku)
         assert sku.active is True
-        # No longer a concept once complete.
         assert sku.attributes_dict.get("status") == "done"
 
-    def test_placeholder_name_keeps_concept_inactive(
+    def test_name_only_keeps_concept_inactive(
         self, client, db, owner_token, sample_org
     ):
         sample_org.auto_inactivate_no_images = True
         db.commit()
         sku = self._concept(db, sample_org)
 
-        # Touching another field without giving a real name leaves it inactive.
+        # Only a partial attribute, no full wine fields: stays inactive.
         resp = client.patch(
             f"/api/skus/{sku.id}",
-            json={"attributes": {"note": "nog afmaken"}},
+            json={"attributes": {"producent": "Vietti"}},
             headers=auth_header(owner_token),
         )
         assert resp.status_code == 200
