@@ -338,6 +338,7 @@ export const api = {
   listBookings: (orderId: number) => request(`/orders/${orderId}/bookings`),
   weeklyPickPhotos: (week?: string) =>
     request(`/orders/weekly-pick-photos${week ? `?week=${week}` : ""}`),
+  nextPick: (orderId: number) => request(`/orders/${orderId}/next-pick`),
   weeklyOrderSummary: (week?: string, groupBy?: "supplier" | "customer") => {
     const params = new URLSearchParams();
     if (week) params.set("week", week);

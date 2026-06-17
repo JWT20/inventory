@@ -26,6 +26,7 @@ from app.models import (
 from app.schemas import (
     BookingResponse,
     ManualOrderCreate,
+    NextPickResponse,
     OrderApprove,
     MonthlyBoxesMonth,
     MonthlyBoxesOrganization,
@@ -913,6 +914,103 @@ def weekly_order_summary(
         grand_total_bottles=grand_total_bottles,
         grand_total_value=round(grand_total_val, 2) if grand_total_val else None,
     )
+
+
+def _next_pick_image_url(line: OrderLine) -> str | None:
+    """First processed reference image for this SKU, as a thumbnail URL.
+
+    Same selection as weekly_pick_photos so the suggestion photo matches the
+    rest of the pick UI.
+    """
+    image = next(
+        (
+            img
+            for img in sorted(
+                line.sku.reference_images,
+                key=lambda img: img.created_at or datetime.datetime.min,
+            )
+            if img.processing_status == "done" and img.image_path
+        ),
+        None,
+    )
+    return f"/api/thumbnails/320/{image.image_path}" if image else None
+
+
+def _to_next_pick(line: OrderLine, order: Order, source: str) -> NextPickResponse:
+    return NextPickResponse(
+        sku_id=line.sku_id,
+        sku_name=line.sku.name,
+        order_line_id=line.id,
+        image_url=_next_pick_image_url(line),
+        remaining_quantity=max(line.quantity - line.booked_count, 0),
+        source=source,
+        order_id=order.id,
+        customer_name=line.customer_name,
+    )
+
+
+def _first_open_line(order: Order, source: str) -> NextPickResponse | None:
+    """Next pickable line in order-line id order, or None if fully booked."""
+    for line in sorted(order.lines, key=lambda l: l.id):
+        if line.booked_count < line.quantity:
+            return _to_next_pick(line, order, source)
+    return None
+
+
+@router.get("/{order_id}/next-pick", response_model=NextPickResponse | None)
+def next_pick(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Suggestion photo for the next SKU to scan.
+
+    Within the order while it still has open lines; once it is fully booked,
+    falls back to the first open line of another active order in the same
+    organization and delivery week. No status gate on the context order: we
+    want a suggestion exactly when the order has just been completed.
+    """
+    pick_options = (
+        selectinload(Order.lines).selectinload(OrderLine.sku).selectinload(SKU.reference_images),
+        selectinload(Order.lines).selectinload(OrderLine.customer),
+    )
+    order = (
+        db.query(Order)
+        .filter(Order.id == order_id)
+        .options(*pick_options)
+        .first()
+    )
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+
+    # Access: platform admins and couriers see everything; an org user only
+    # their own organization. Customers have no business in the pick flow.
+    if not user.is_platform_admin and user.role != "courier":
+        if not user.organization_id or order.organization_id != user.organization_id:
+            raise HTTPException(403, "Geen toegang tot deze order")
+
+    hit = _first_open_line(order, "this_order")
+    if hit:
+        return hit
+
+    others = (
+        db.query(Order)
+        .filter(
+            Order.id != order.id,
+            Order.status == "active",
+            Order.organization_id == order.organization_id,
+            Order.delivery_week == order.delivery_week,
+        )
+        .order_by(Order.id)
+        .options(*pick_options)
+        .all()
+    )
+    for other in others:
+        hit = _first_open_line(other, "other_order")
+        if hit:
+            return hit
+
+    return None
 
 
 @router.get("/{order_id}", response_model=OrderResponse)

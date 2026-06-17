@@ -186,6 +186,17 @@ interface WeeklyPickPhoto {
   customers: string[];
 }
 
+interface NextPick {
+  sku_id: number;
+  sku_name: string;
+  order_line_id: number;
+  image_url: string | null;
+  remaining_quantity: number;
+  source: "this_order" | "other_order";
+  order_id: number;
+  customer_name: string | null;
+}
+
 /* ---------- Week helpers (same logic as weekly-summary.tsx) ---------- */
 
 function getISOWeek(date: Date): string {
@@ -603,6 +614,8 @@ function ScanStep({
   onBack: () => void;
 }) {
   const [scanning, setScanning] = useState(false);
+  const [nextPick, setNextPick] = useState<NextPick | null>(null);
+  const [nextPickLoading, setNextPickLoading] = useState(true);
   const [openProgress, setOpenProgress] = useState<{
     openBoxes: number;
     openBottles: number;
@@ -662,6 +675,19 @@ function ScanStep({
     };
   }, [order]);
 
+  // Suggestion photo of the next SKU to scan. ScanStep remounts after each
+  // "volgende scannen", so this refetches itself and stays fresh.
+  useEffect(() => {
+    let active = true;
+    setNextPickLoading(true);
+    api
+      .nextPick(order.id)
+      .then((res: NextPick | null) => { if (active) setNextPick(res); })
+      .catch(() => { if (active) setNextPick(null); })
+      .finally(() => { if (active) setNextPickLoading(false); });
+    return () => { active = false; };
+  }, [order]);
+
   useEffect(() => {
     async function startCamera() {
       try {
@@ -704,8 +730,15 @@ function ScanStep({
       return;
     }
 
+    // When the current order is already full, the suggestion points at another
+    // active order — book against that one, else the completed order is rejected
+    // (book_box requires an active context order). Matching still sweeps the
+    // whole org/week, so the box lands on whichever line it matches.
+    const bookOrderId =
+      nextPick?.source === "other_order" ? nextPick.order_id : order.id;
+
     try {
-      const confirmation: ConfirmationData = await api.bookBox(blob, order.id, scanMode);
+      const confirmation: ConfirmationData = await api.bookBox(blob, bookOrderId, scanMode);
       onBooked(confirmation);
     } catch (err: unknown) {
       if (
@@ -831,9 +864,15 @@ function ScanStep({
         size="lg"
         className="w-full text-lg h-14"
         onClick={capture}
-        disabled={scanning}
+        disabled={scanning || nextPickLoading || nextPick === null}
       >
-        {scanning ? "Herkennen..." : "Scan"}
+        {scanning
+          ? "Herkennen..."
+          : nextPickLoading
+            ? "Laden..."
+            : nextPick === null
+              ? "Niets meer te scannen"
+              : "Scan"}
       </Button>
       <button
         onClick={onBack}
@@ -841,6 +880,40 @@ function ScanStep({
       >
         Terug naar orders
       </button>
+
+      {nextPick && (
+        <Card className="p-3 mt-4">
+          <p className="text-sm font-semibold mb-2">
+            {nextPick.source === "this_order"
+              ? "Volgende in deze order"
+              : `Order vol — suggestie voor ${nextPick.customer_name ?? "andere klant"}`}
+          </p>
+          <div className="flex gap-3 items-center">
+            <div className="w-20 h-20 shrink-0 rounded-lg overflow-hidden border bg-muted">
+              {nextPick.image_url ? (
+                <img
+                  src={nextPick.image_url}
+                  alt={nextPick.sku_name}
+                  className="w-full h-full object-cover"
+                  loading="lazy"
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center px-1 text-center text-xs text-muted-foreground">
+                  Geen foto
+                </div>
+              )}
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate" title={nextPick.sku_name}>
+                {nextPick.sku_name}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                nog {nextPick.remaining_quantity}
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
     </>
   );
 }
