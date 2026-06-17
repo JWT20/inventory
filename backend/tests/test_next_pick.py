@@ -178,6 +178,18 @@ def test_next_pick_rejects_other_org_for_owner(client, db, owner_token, sample_o
     assert resp.status_code == 403
 
 
+def test_next_pick_rejects_customer_role(client, db, customer_token, sample_org):
+    sku = _make_sku(db)
+    cust = _make_customer(db, sample_org, "Alpha")
+    order = _make_order(db, sample_org, "CTX")
+    _make_line(db, order, sku, cust, quantity=3)
+    db.commit()
+
+    # Customer belongs to the org but has no business in the pick flow.
+    resp = _get(client, customer_token, order.id)
+    assert resp.status_code == 403
+
+
 def test_next_pick_unknown_order_returns_404(client, courier_token):
     resp = _get(client, courier_token, 999999)
     assert resp.status_code == 404

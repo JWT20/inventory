@@ -616,6 +616,7 @@ function ScanStep({
   const [scanning, setScanning] = useState(false);
   const [nextPick, setNextPick] = useState<NextPick | null>(null);
   const [nextPickLoading, setNextPickLoading] = useState(true);
+  const [nextPickFailed, setNextPickFailed] = useState(false);
   const [nextPickLightbox, setNextPickLightbox] = useState(false);
   const [openProgress, setOpenProgress] = useState<{
     openBoxes: number;
@@ -681,10 +682,13 @@ function ScanStep({
   useEffect(() => {
     let active = true;
     setNextPickLoading(true);
+    setNextPickFailed(false);
     api
       .nextPick(order.id)
       .then((res: NextPick | null) => { if (active) setNextPick(res); })
-      .catch(() => { if (active) setNextPick(null); })
+      // A transient suggestion failure must not block scanning the active
+      // order — fall back to scanning with order.id (see capture()).
+      .catch(() => { if (active) { setNextPick(null); setNextPickFailed(true); } })
       .finally(() => { if (active) setNextPickLoading(false); });
     return () => { active = false; };
   }, [order]);
@@ -865,13 +869,13 @@ function ScanStep({
         size="lg"
         className="w-full text-lg h-14"
         onClick={capture}
-        disabled={scanning || nextPickLoading || nextPick === null}
+        disabled={scanning || nextPickLoading || (nextPick === null && !nextPickFailed)}
       >
         {scanning
           ? "Herkennen..."
           : nextPickLoading
             ? "Laden..."
-            : nextPick === null
+            : nextPick === null && !nextPickFailed
               ? "Niets meer te scannen"
               : "Scan"}
       </Button>

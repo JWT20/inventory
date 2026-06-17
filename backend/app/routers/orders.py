@@ -985,8 +985,10 @@ def next_pick(
     if not order:
         raise HTTPException(404, "Order niet gevonden")
 
-    # Access: platform admins and couriers see everything; an org user only
-    # their own organization. Customers have no business in the pick flow.
+    # Access: platform admins and couriers see everything; org owner/member
+    # only their own organization. Customers have no business in the pick flow.
+    if user.role == "customer":
+        raise HTTPException(403, "Geen toegang tot deze order")
     if not user.is_platform_admin and user.role != "courier":
         if not user.organization_id or order.organization_id != user.organization_id:
             raise HTTPException(403, "Geen toegang tot deze order")
