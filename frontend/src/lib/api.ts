@@ -338,6 +338,8 @@ export const api = {
   listBookings: (orderId: number) => request(`/orders/${orderId}/bookings`),
   weeklyPickPhotos: (week?: string) =>
     request(`/orders/weekly-pick-photos${week ? `?week=${week}` : ""}`),
+  nextPick: (orderId: number, scanMode: "box" | "bottle" = "box") =>
+    request(`/orders/${orderId}/next-pick?scan_mode=${scanMode}`),
   weeklyOrderSummary: (week?: string, groupBy?: "supplier" | "customer") => {
     const params = new URLSearchParams();
     if (week) params.set("week", week);

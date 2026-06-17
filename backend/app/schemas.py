@@ -424,6 +424,17 @@ class WeeklyPickPhotoResponse(BaseModel):
     customers: list[str] = []
 
 
+class NextPickResponse(BaseModel):
+    sku_id: int
+    sku_name: str
+    order_line_id: int
+    image_url: str | None = None
+    remaining_quantity: int
+    source: Literal["this_order", "other_order"]
+    order_id: int
+    customer_name: str | None = None
+
+
 class ManualOrderLineCreate(BaseModel):
     customer_id: int = Field(..., gt=0)
     sku_id: int = Field(..., gt=0)

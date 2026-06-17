@@ -26,6 +26,7 @@ from app.models import (
 from app.schemas import (
     BookingResponse,
     ManualOrderCreate,
+    NextPickResponse,
     OrderApprove,
     MonthlyBoxesMonth,
     MonthlyBoxesOrganization,
@@ -55,6 +56,16 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 COURIER_VIEWABLE_STATUSES = (
     "pending_approval", "active", "completed", "cancelled", "closed",
 )
+
+# Mirrors receiving._DELIVERY_DAY_SORT so the next-pick suggestion is selected
+# in the same order book_box actually books, keeping the card truthful.
+_DELIVERY_DAY_SORT = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+}
 
 
 def _as_float(value: Decimal | float | None) -> float | None:
@@ -913,6 +924,128 @@ def weekly_order_summary(
         grand_total_bottles=grand_total_bottles,
         grand_total_value=round(grand_total_val, 2) if grand_total_val else None,
     )
+
+
+def _next_pick_image_url(line: OrderLine) -> str | None:
+    """First processed reference image for this SKU, as a thumbnail URL.
+
+    Same selection as weekly_pick_photos so the suggestion photo matches the
+    rest of the pick UI.
+    """
+    image = next(
+        (
+            img
+            for img in sorted(
+                line.sku.reference_images,
+                key=lambda img: img.created_at or datetime.datetime.min,
+            )
+            if img.processing_status == "done" and img.image_path
+        ),
+        None,
+    )
+    return f"/api/thumbnails/320/{image.image_path}" if image else None
+
+
+def _to_next_pick(line: OrderLine, order: Order, source: str) -> NextPickResponse:
+    return NextPickResponse(
+        sku_id=line.sku_id,
+        sku_name=line.sku.name,
+        order_line_id=line.id,
+        image_url=_next_pick_image_url(line),
+        remaining_quantity=max(line.quantity - line.booked_count, 0),
+        source=source,
+        order_id=order.id,
+        customer_name=line.customer_name,
+    )
+
+
+def _next_pick_sort_key(line: OrderLine, order: Order, context_order_id: int):
+    """Same ordering as receiving._select_order_line_for_scope.
+
+    Week FIFO first, then the started/context order within a week, then
+    delivery day, then line id — so the suggested line is exactly the one
+    book_box would book when that SKU is scanned.
+    """
+    return (
+        order.delivery_week or "",
+        0 if order.id == context_order_id else 1,
+        _DELIVERY_DAY_SORT.get(line.delivery_day, 9),
+        line.id,
+    )
+
+
+@router.get("/{order_id}/next-pick", response_model=NextPickResponse | None)
+def next_pick(
+    order_id: int,
+    scan_mode: str = Query("box", description="'box' of 'bottle' — selecteert de eenheid."),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Suggestion photo for the next SKU to scan, for the given scan mode.
+
+    Selects the line book_box would actually book, using the same scope and
+    ordering as receiving (week FIFO, then the started/context order within a
+    week). So even when the selected order still has open lines, an earlier
+    week of the same org is suggested first — exactly where the scan would
+    land — and the card is labelled "other_order" so it never claims "in deze
+    order" for a box that books elsewhere.
+
+    Scope mirrors receiving._open_scope_lines_query: a scheduled context order
+    sweeps every active scheduled order in the org across all weeks; an ad-hoc
+    order (no delivery_week) stays scoped to itself. No status gate on the
+    context order: we want a suggestion exactly when it has just been completed.
+    """
+    bottle = scan_mode == "bottle"
+    pick_options = (
+        selectinload(Order.lines).selectinload(OrderLine.sku).selectinload(SKU.reference_images),
+        selectinload(Order.lines).selectinload(OrderLine.customer),
+    )
+    order = (
+        db.query(Order)
+        .filter(Order.id == order_id)
+        .options(*pick_options)
+        .first()
+    )
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+
+    # Access: platform admins and couriers see everything; org owner/member
+    # only their own organization. Customers have no business in the pick flow.
+    if user.role == "customer":
+        raise HTTPException(403, "Geen toegang tot deze order")
+    if not user.is_platform_admin and user.role != "courier":
+        if not user.organization_id or order.organization_id != user.organization_id:
+            raise HTTPException(403, "Geen toegang tot deze order")
+
+    if order.delivery_week:
+        scope_orders = (
+            db.query(Order)
+            .filter(
+                Order.status == "active",
+                Order.organization_id == order.organization_id,
+                Order.delivery_week.isnot(None),
+            )
+            .options(*pick_options)
+            .all()
+        )
+    else:
+        scope_orders = [order]
+
+    candidates = [
+        (line, o)
+        for o in scope_orders
+        for line in o.lines
+        if line.booked_count < line.quantity and line.sku.is_bottle == bottle
+    ]
+    if not candidates:
+        return None
+
+    line, o = min(
+        candidates,
+        key=lambda item: _next_pick_sort_key(item[0], item[1], order.id),
+    )
+    source = "this_order" if o.id == order.id else "other_order"
+    return _to_next_pick(line, o, source)
 
 
 @router.get("/{order_id}", response_model=OrderResponse)

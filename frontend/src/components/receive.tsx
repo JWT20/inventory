@@ -186,6 +186,17 @@ interface WeeklyPickPhoto {
   customers: string[];
 }
 
+interface NextPick {
+  sku_id: number;
+  sku_name: string;
+  order_line_id: number;
+  image_url: string | null;
+  remaining_quantity: number;
+  source: "this_order" | "other_order";
+  order_id: number;
+  customer_name: string | null;
+}
+
 /* ---------- Week helpers (same logic as weekly-summary.tsx) ---------- */
 
 function getISOWeek(date: Date): string {
@@ -603,6 +614,11 @@ function ScanStep({
   onBack: () => void;
 }) {
   const [scanning, setScanning] = useState(false);
+  const [nextPick, setNextPick] = useState<NextPick | null>(null);
+  const [nextPickLoading, setNextPickLoading] = useState(true);
+  const [nextPickFailed, setNextPickFailed] = useState(false);
+  const [nextPickRetry, setNextPickRetry] = useState(0);
+  const [nextPickLightbox, setNextPickLightbox] = useState(false);
   const [openProgress, setOpenProgress] = useState<{
     openBoxes: number;
     openBottles: number;
@@ -662,6 +678,23 @@ function ScanStep({
     };
   }, [order]);
 
+  // Suggestion photo of the next SKU to scan. ScanStep remounts after each
+  // "volgende scannen", so this refetches itself and stays fresh.
+  useEffect(() => {
+    let active = true;
+    setNextPickLoading(true);
+    setNextPickFailed(false);
+    api
+      .nextPick(order.id, scanMode)
+      .then((res: NextPick | null) => { if (active) setNextPick(res); })
+      // On failure we cannot tell whether order.id is still active (it may have
+      // just been completed), so we never blind-scan against it — block with a
+      // retry instead of risking a 400 on a completed context order.
+      .catch(() => { if (active) { setNextPick(null); setNextPickFailed(true); } })
+      .finally(() => { if (active) setNextPickLoading(false); });
+    return () => { active = false; };
+  }, [order, scanMode, nextPickRetry]);
+
   useEffect(() => {
     async function startCamera() {
       try {
@@ -704,8 +737,15 @@ function ScanStep({
       return;
     }
 
+    // When the current order is already full, the suggestion points at another
+    // active order — book against that one, else the completed order is rejected
+    // (book_box requires an active context order). Matching still sweeps the
+    // whole org/week, so the box lands on whichever line it matches.
+    const bookOrderId =
+      nextPick?.source === "other_order" ? nextPick.order_id : order.id;
+
     try {
-      const confirmation: ConfirmationData = await api.bookBox(blob, order.id, scanMode);
+      const confirmation: ConfirmationData = await api.bookBox(blob, bookOrderId, scanMode);
       onBooked(confirmation);
     } catch (err: unknown) {
       if (
@@ -831,9 +871,17 @@ function ScanStep({
         size="lg"
         className="w-full text-lg h-14"
         onClick={capture}
-        disabled={scanning}
+        disabled={scanning || nextPickLoading || nextPick === null}
       >
-        {scanning ? "Herkennen..." : "Scan"}
+        {scanning
+          ? "Herkennen..."
+          : nextPickLoading
+            ? "Laden..."
+            : nextPickFailed
+              ? "Suggestie mislukt"
+              : nextPick === null
+                ? "Niets meer te scannen"
+                : "Scan"}
       </Button>
       <button
         onClick={onBack}
@@ -841,6 +889,74 @@ function ScanStep({
       >
         Terug naar orders
       </button>
+
+      {nextPickFailed && (
+        <Card className="p-3 mt-4 bg-amber-50 border-amber-200">
+          <p className="text-sm font-semibold mb-2">Suggestie laden mislukt</p>
+          <p className="text-xs text-muted-foreground mb-3">
+            Kon de volgende SKU niet ophalen. Probeer opnieuw om verder te scannen.
+          </p>
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={() => setNextPickRetry((n) => n + 1)}
+          >
+            Opnieuw proberen
+          </Button>
+        </Card>
+      )}
+
+      {nextPick && (
+        <Card className="p-3 mt-4">
+          <p className="text-sm font-semibold mb-2">
+            {nextPick.source === "this_order"
+              ? "Volgende in deze order"
+              : `Volgende — voor ${nextPick.customer_name ?? "andere klant"}`}
+          </p>
+          <div className="flex gap-3 items-center">
+            <div className="w-20 h-20 shrink-0 rounded-lg overflow-hidden border bg-muted relative">
+              {nextPick.image_url ? (
+                <>
+                  <img
+                    src={nextPick.image_url}
+                    alt={nextPick.sku_name}
+                    className="w-full h-full object-cover cursor-zoom-in"
+                    loading="lazy"
+                    onClick={() => setNextPickLightbox(true)}
+                  />
+                  <div className="absolute bottom-1 right-1 bg-black/60 text-white p-0.5 rounded-full pointer-events-none">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="11" cy="11" r="7" />
+                      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                      <line x1="11" y1="8" x2="11" y2="14" />
+                      <line x1="8" y1="11" x2="14" y2="11" />
+                    </svg>
+                  </div>
+                </>
+              ) : (
+                <div className="flex h-full items-center justify-center px-1 text-center text-xs text-muted-foreground">
+                  Geen foto
+                </div>
+              )}
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate" title={nextPick.sku_name}>
+                {nextPick.sku_name}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                nog {nextPick.remaining_quantity}
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      <ImageLightbox
+        images={nextPick?.image_url ? [nextPick.image_url] : []}
+        startIndex={0}
+        open={nextPickLightbox}
+        onClose={() => setNextPickLightbox(false)}
+      />
     </>
   );
 }
