@@ -911,7 +911,7 @@ function ScanStep({
           <p className="text-sm font-semibold mb-2">
             {nextPick.source === "this_order"
               ? "Volgende in deze order"
-              : `Order vol — suggestie voor ${nextPick.customer_name ?? "andere klant"}`}
+              : `Volgende — voor ${nextPick.customer_name ?? "andere klant"}`}
           </p>
           <div className="flex gap-3 items-center">
             <div className="w-20 h-20 shrink-0 rounded-lg overflow-hidden border bg-muted relative">

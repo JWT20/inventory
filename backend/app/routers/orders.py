@@ -57,6 +57,16 @@ COURIER_VIEWABLE_STATUSES = (
     "pending_approval", "active", "completed", "cancelled", "closed",
 )
 
+# Mirrors receiving._DELIVERY_DAY_SORT so the next-pick suggestion is selected
+# in the same order book_box actually books, keeping the card truthful.
+_DELIVERY_DAY_SORT = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+}
+
 
 def _as_float(value: Decimal | float | None) -> float | None:
     if value is None:
@@ -949,17 +959,19 @@ def _to_next_pick(line: OrderLine, order: Order, source: str) -> NextPickRespons
     )
 
 
-def _first_open_line(order: Order, source: str, bottle: bool) -> NextPickResponse | None:
-    """Next pickable line of the requested unit type, in order-line id order.
+def _next_pick_sort_key(line: OrderLine, order: Order, context_order_id: int):
+    """Same ordering as receiving._select_order_line_for_scope.
 
-    ``bottle`` mirrors the scan-mode match pool in receiving.book_box: box
-    scans only match box SKUs and vice versa, so the suggestion must filter the
-    same way or it would point the courier at a SKU they cannot book.
+    Week FIFO first, then the started/context order within a week, then
+    delivery day, then line id — so the suggested line is exactly the one
+    book_box would book when that SKU is scanned.
     """
-    for line in sorted(order.lines, key=lambda l: l.id):
-        if line.booked_count < line.quantity and line.sku.is_bottle == bottle:
-            return _to_next_pick(line, order, source)
-    return None
+    return (
+        order.delivery_week or "",
+        0 if order.id == context_order_id else 1,
+        _DELIVERY_DAY_SORT.get(line.delivery_day, 9),
+        line.id,
+    )
 
 
 @router.get("/{order_id}/next-pick", response_model=NextPickResponse | None)
@@ -971,13 +983,17 @@ def next_pick(
 ):
     """Suggestion photo for the next SKU to scan, for the given scan mode.
 
-    Within the order while it still has open lines; once it is fully booked,
-    falls back to the first open line of another active scheduled order in the
-    same organization, across all weeks — matching the booking sweep in
-    receiving._open_scope_lines_query so any suggestion is actually bookable.
-    Ad-hoc orders (no delivery_week) are self-scoped there, so they never fall
-    back to other orders here either. No status gate on the context order: we
-    want a suggestion exactly when the order has just been completed.
+    Selects the line book_box would actually book, using the same scope and
+    ordering as receiving (week FIFO, then the started/context order within a
+    week). So even when the selected order still has open lines, an earlier
+    week of the same org is suggested first — exactly where the scan would
+    land — and the card is labelled "other_order" so it never claims "in deze
+    order" for a box that books elsewhere.
+
+    Scope mirrors receiving._open_scope_lines_query: a scheduled context order
+    sweeps every active scheduled order in the org across all weeks; an ad-hoc
+    order (no delivery_week) stays scoped to itself. No status gate on the
+    context order: we want a suggestion exactly when it has just been completed.
     """
     bottle = scan_mode == "bottle"
     pick_options = (
@@ -1001,34 +1017,35 @@ def next_pick(
         if not user.organization_id or order.organization_id != user.organization_id:
             raise HTTPException(403, "Geen toegang tot deze order")
 
-    hit = _first_open_line(order, "this_order", bottle)
-    if hit:
-        return hit
+    if order.delivery_week:
+        scope_orders = (
+            db.query(Order)
+            .filter(
+                Order.status == "active",
+                Order.organization_id == order.organization_id,
+                Order.delivery_week.isnot(None),
+            )
+            .options(*pick_options)
+            .all()
+        )
+    else:
+        scope_orders = [order]
 
-    # Ad-hoc orders never join the weekly booking sweep, so a box scanned from a
-    # completed ad-hoc order is not bookable against any other order — no
-    # suggestion rather than silently switching the courier to a scheduled order.
-    if not order.delivery_week:
+    candidates = [
+        (line, o)
+        for o in scope_orders
+        for line in o.lines
+        if line.booked_count < line.quantity and line.sku.is_bottle == bottle
+    ]
+    if not candidates:
         return None
 
-    others = (
-        db.query(Order)
-        .filter(
-            Order.id != order.id,
-            Order.status == "active",
-            Order.organization_id == order.organization_id,
-            Order.delivery_week.isnot(None),
-        )
-        .order_by(Order.delivery_week, Order.id)
-        .options(*pick_options)
-        .all()
+    line, o = min(
+        candidates,
+        key=lambda item: _next_pick_sort_key(item[0], item[1], order.id),
     )
-    for other in others:
-        hit = _first_open_line(other, "other_order", bottle)
-        if hit:
-            return hit
-
-    return None
+    source = "this_order" if o.id == order.id else "other_order"
+    return _to_next_pick(line, o, source)
 
 
 @router.get("/{order_id}", response_model=OrderResponse)

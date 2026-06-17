@@ -185,6 +185,51 @@ def test_next_pick_rejects_other_org_for_owner(client, db, owner_token, sample_o
     assert resp.status_code == 403
 
 
+def test_next_pick_prefers_earlier_week_over_context_order(
+    client, db, courier_token, sample_org
+):
+    """book_box books week FIFO, so an earlier week is suggested first even
+    when the context order still has open lines — the card must agree with
+    where the scan actually lands."""
+    sku = _make_sku(db)
+    cust = _make_customer(db, sample_org, "Alpha")
+    early = _make_order(db, sample_org, "EARLY", week="2026-W20")
+    early_line = _make_line(db, early, sku, cust, quantity=2)
+    context = _make_order(db, sample_org, "CTX", week="2026-W21")
+    _make_line(db, context, sku, cust, quantity=2)
+    db.commit()
+
+    resp = _get(client, courier_token, context.id)
+    assert resp.status_code == 200
+    body = resp.json()
+    # Earlier week wins; labelled other_order, not "in deze order".
+    assert body["source"] == "other_order"
+    assert body["order_id"] == early.id
+    assert body["order_line_id"] == early_line.id
+
+
+def test_next_pick_context_order_first_within_same_week(
+    client, db, courier_token, sample_org
+):
+    """Within one week the started/context order is preferred, matching the
+    receiving tiebreak — so it is labelled this_order."""
+    sku = _make_sku(db)
+    cust = _make_customer(db, sample_org, "Alpha")
+    # Other order created first (lower id) but context must still win.
+    other = _make_order(db, sample_org, "OTHER", week="2026-W21")
+    _make_line(db, other, sku, cust, quantity=2)
+    context = _make_order(db, sample_org, "CTX", week="2026-W21")
+    context_line = _make_line(db, context, sku, cust, quantity=2)
+    db.commit()
+
+    resp = _get(client, courier_token, context.id)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "this_order"
+    assert body["order_id"] == context.id
+    assert body["order_line_id"] == context_line.id
+
+
 def test_next_pick_respects_scan_mode(client, db, courier_token, sample_org):
     box_sku = _make_sku(db, "BOX", is_bottle=False)
     bottle_sku = _make_sku(db, "BOTTLE", is_bottle=True)
