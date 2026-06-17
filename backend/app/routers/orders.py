@@ -949,10 +949,15 @@ def _to_next_pick(line: OrderLine, order: Order, source: str) -> NextPickRespons
     )
 
 
-def _first_open_line(order: Order, source: str) -> NextPickResponse | None:
-    """Next pickable line in order-line id order, or None if fully booked."""
+def _first_open_line(order: Order, source: str, bottle: bool) -> NextPickResponse | None:
+    """Next pickable line of the requested unit type, in order-line id order.
+
+    ``bottle`` mirrors the scan-mode match pool in receiving.book_box: box
+    scans only match box SKUs and vice versa, so the suggestion must filter the
+    same way or it would point the courier at a SKU they cannot book.
+    """
     for line in sorted(order.lines, key=lambda l: l.id):
-        if line.booked_count < line.quantity:
+        if line.booked_count < line.quantity and line.sku.is_bottle == bottle:
             return _to_next_pick(line, order, source)
     return None
 
@@ -960,18 +965,21 @@ def _first_open_line(order: Order, source: str) -> NextPickResponse | None:
 @router.get("/{order_id}/next-pick", response_model=NextPickResponse | None)
 def next_pick(
     order_id: int,
+    scan_mode: str = Query("box", description="'box' of 'bottle' — selecteert de eenheid."),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Suggestion photo for the next SKU to scan.
+    """Suggestion photo for the next SKU to scan, for the given scan mode.
 
     Within the order while it still has open lines; once it is fully booked,
     falls back to the first open line of another active scheduled order in the
     same organization, across all weeks — matching the booking sweep in
     receiving._open_scope_lines_query so any suggestion is actually bookable.
-    No status gate on the context order: we want a suggestion exactly when the
-    order has just been completed.
+    Ad-hoc orders (no delivery_week) are self-scoped there, so they never fall
+    back to other orders here either. No status gate on the context order: we
+    want a suggestion exactly when the order has just been completed.
     """
+    bottle = scan_mode == "bottle"
     pick_options = (
         selectinload(Order.lines).selectinload(OrderLine.sku).selectinload(SKU.reference_images),
         selectinload(Order.lines).selectinload(OrderLine.customer),
@@ -993,9 +1001,15 @@ def next_pick(
         if not user.organization_id or order.organization_id != user.organization_id:
             raise HTTPException(403, "Geen toegang tot deze order")
 
-    hit = _first_open_line(order, "this_order")
+    hit = _first_open_line(order, "this_order", bottle)
     if hit:
         return hit
+
+    # Ad-hoc orders never join the weekly booking sweep, so a box scanned from a
+    # completed ad-hoc order is not bookable against any other order — no
+    # suggestion rather than silently switching the courier to a scheduled order.
+    if not order.delivery_week:
+        return None
 
     others = (
         db.query(Order)
@@ -1010,7 +1024,7 @@ def next_pick(
         .all()
     )
     for other in others:
-        hit = _first_open_line(other, "other_order")
+        hit = _first_open_line(other, "other_order", bottle)
         if hit:
             return hit
 

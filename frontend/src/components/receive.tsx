@@ -617,6 +617,7 @@ function ScanStep({
   const [nextPick, setNextPick] = useState<NextPick | null>(null);
   const [nextPickLoading, setNextPickLoading] = useState(true);
   const [nextPickFailed, setNextPickFailed] = useState(false);
+  const [nextPickRetry, setNextPickRetry] = useState(0);
   const [nextPickLightbox, setNextPickLightbox] = useState(false);
   const [openProgress, setOpenProgress] = useState<{
     openBoxes: number;
@@ -684,14 +685,15 @@ function ScanStep({
     setNextPickLoading(true);
     setNextPickFailed(false);
     api
-      .nextPick(order.id)
+      .nextPick(order.id, scanMode)
       .then((res: NextPick | null) => { if (active) setNextPick(res); })
-      // A transient suggestion failure must not block scanning the active
-      // order — fall back to scanning with order.id (see capture()).
+      // On failure we cannot tell whether order.id is still active (it may have
+      // just been completed), so we never blind-scan against it — block with a
+      // retry instead of risking a 400 on a completed context order.
       .catch(() => { if (active) { setNextPick(null); setNextPickFailed(true); } })
       .finally(() => { if (active) setNextPickLoading(false); });
     return () => { active = false; };
-  }, [order]);
+  }, [order, scanMode, nextPickRetry]);
 
   useEffect(() => {
     async function startCamera() {
@@ -869,15 +871,17 @@ function ScanStep({
         size="lg"
         className="w-full text-lg h-14"
         onClick={capture}
-        disabled={scanning || nextPickLoading || (nextPick === null && !nextPickFailed)}
+        disabled={scanning || nextPickLoading || nextPick === null}
       >
         {scanning
           ? "Herkennen..."
           : nextPickLoading
             ? "Laden..."
-            : nextPick === null && !nextPickFailed
-              ? "Niets meer te scannen"
-              : "Scan"}
+            : nextPickFailed
+              ? "Suggestie mislukt"
+              : nextPick === null
+                ? "Niets meer te scannen"
+                : "Scan"}
       </Button>
       <button
         onClick={onBack}
@@ -885,6 +889,22 @@ function ScanStep({
       >
         Terug naar orders
       </button>
+
+      {nextPickFailed && (
+        <Card className="p-3 mt-4 bg-amber-50 border-amber-200">
+          <p className="text-sm font-semibold mb-2">Suggestie laden mislukt</p>
+          <p className="text-xs text-muted-foreground mb-3">
+            Kon de volgende SKU niet ophalen. Probeer opnieuw om verder te scannen.
+          </p>
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={() => setNextPickRetry((n) => n + 1)}
+          >
+            Opnieuw proberen
+          </Button>
+        </Card>
+      )}
 
       {nextPick && (
         <Card className="p-3 mt-4">

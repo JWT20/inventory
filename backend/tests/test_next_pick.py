@@ -4,11 +4,18 @@ from app.models import Customer, Order, OrderLine, Organization, SKU
 from tests.conftest import auth_header
 
 
-def _make_sku(db, code="SKU-1"):
-    sku = SKU(sku_code=code, name=f"Wine {code}")
+def _make_sku(db, code="SKU-1", is_bottle=False):
+    sku = SKU(sku_code=code, name=f"Wine {code}", is_bottle=is_bottle)
     db.add(sku)
     db.flush()
     return sku
+
+
+def _get_mode(client, token, order_id, scan_mode):
+    return client.get(
+        f"/api/orders/{order_id}/next-pick?scan_mode={scan_mode}",
+        headers=auth_header(token),
+    )
 
 
 def _make_customer(db, org, name):
@@ -176,6 +183,57 @@ def test_next_pick_rejects_other_org_for_owner(client, db, owner_token, sample_o
 
     resp = _get(client, owner_token, order.id)
     assert resp.status_code == 403
+
+
+def test_next_pick_respects_scan_mode(client, db, courier_token, sample_org):
+    box_sku = _make_sku(db, "BOX", is_bottle=False)
+    bottle_sku = _make_sku(db, "BOTTLE", is_bottle=True)
+    cust = _make_customer(db, sample_org, "Alpha")
+    order = _make_order(db, sample_org, "CTX")
+    box_line = _make_line(db, order, box_sku, cust, quantity=2)
+    bottle_line = _make_line(db, order, bottle_sku, cust, quantity=2)
+    db.commit()
+
+    box = _get_mode(client, courier_token, order.id, "box").json()
+    assert box["sku_id"] == box_sku.id
+    assert box["order_line_id"] == box_line.id
+
+    bottle = _get_mode(client, courier_token, order.id, "bottle").json()
+    assert bottle["sku_id"] == bottle_sku.id
+    assert bottle["order_line_id"] == bottle_line.id
+
+
+def test_next_pick_no_match_for_scan_mode_returns_null(
+    client, db, courier_token, sample_org
+):
+    box_sku = _make_sku(db, "BOX", is_bottle=False)
+    cust = _make_customer(db, sample_org, "Alpha")
+    order = _make_order(db, sample_org, "CTX")
+    _make_line(db, order, box_sku, cust, quantity=2)
+    db.commit()
+
+    # Only a box line is open, so bottle mode has nothing to suggest.
+    resp = _get_mode(client, courier_token, order.id, "bottle")
+    assert resp.status_code == 200
+    assert resp.json() is None
+
+
+def test_next_pick_full_adhoc_order_does_not_fall_back(
+    client, db, courier_token, sample_org
+):
+    sku = _make_sku(db)
+    cust = _make_customer(db, sample_org, "Alpha")
+    # Completed ad-hoc order (no week) must not switch context to a scheduled
+    # order — receiving scopes ad-hoc scans to themselves.
+    adhoc = _make_order(db, sample_org, "ADHOC", week=None)
+    _make_line(db, adhoc, sku, cust, quantity=1, booked_count=1)
+    scheduled = _make_order(db, sample_org, "SCHED", week="2026-W21")
+    _make_line(db, scheduled, sku, cust, quantity=3)
+    db.commit()
+
+    resp = _get(client, courier_token, adhoc.id)
+    assert resp.status_code == 200
+    assert resp.json() is None
 
 
 def test_next_pick_rejects_customer_role(client, db, customer_token, sample_org):
