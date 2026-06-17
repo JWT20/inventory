@@ -616,6 +616,7 @@ function ScanStep({
   const [scanning, setScanning] = useState(false);
   const [nextPick, setNextPick] = useState<NextPick | null>(null);
   const [nextPickLoading, setNextPickLoading] = useState(true);
+  const [nextPickLightbox, setNextPickLightbox] = useState(false);
   const [openProgress, setOpenProgress] = useState<{
     openBoxes: number;
     openBottles: number;
@@ -889,14 +890,25 @@ function ScanStep({
               : `Order vol — suggestie voor ${nextPick.customer_name ?? "andere klant"}`}
           </p>
           <div className="flex gap-3 items-center">
-            <div className="w-20 h-20 shrink-0 rounded-lg overflow-hidden border bg-muted">
+            <div className="w-20 h-20 shrink-0 rounded-lg overflow-hidden border bg-muted relative">
               {nextPick.image_url ? (
-                <img
-                  src={nextPick.image_url}
-                  alt={nextPick.sku_name}
-                  className="w-full h-full object-cover"
-                  loading="lazy"
-                />
+                <>
+                  <img
+                    src={nextPick.image_url}
+                    alt={nextPick.sku_name}
+                    className="w-full h-full object-cover cursor-zoom-in"
+                    loading="lazy"
+                    onClick={() => setNextPickLightbox(true)}
+                  />
+                  <div className="absolute bottom-1 right-1 bg-black/60 text-white p-0.5 rounded-full pointer-events-none">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="11" cy="11" r="7" />
+                      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                      <line x1="11" y1="8" x2="11" y2="14" />
+                      <line x1="8" y1="11" x2="14" y2="11" />
+                    </svg>
+                  </div>
+                </>
               ) : (
                 <div className="flex h-full items-center justify-center px-1 text-center text-xs text-muted-foreground">
                   Geen foto
@@ -914,6 +926,13 @@ function ScanStep({
           </div>
         </Card>
       )}
+
+      <ImageLightbox
+        images={nextPick?.image_url ? [nextPick.image_url] : []}
+        startIndex={0}
+        open={nextPickLightbox}
+        onClose={() => setNextPickLightbox(false)}
+      />
     </>
   );
 }
