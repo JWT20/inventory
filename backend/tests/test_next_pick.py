@@ -97,7 +97,7 @@ def test_next_pick_falls_back_to_other_order_when_full(
     assert body["remaining_quantity"] == 3
 
 
-def test_next_pick_other_order_scoped_to_same_week_and_org(
+def test_next_pick_other_order_spans_weeks_but_not_orgs(
     client, db, courier_token, sample_org
 ):
     sku = _make_sku(db)
@@ -109,11 +109,34 @@ def test_next_pick_other_order_scoped_to_same_week_and_org(
 
     full_order = _make_order(db, sample_org, "FULL", week="2026-W21")
     _make_line(db, full_order, sku, cust, quantity=1, booked_count=1)
-    # Open lines exist, but in another week and another org — both excluded.
+    # Another week of the same org is now a valid suggestion (matches the
+    # booking sweep, which spans all weeks for scheduled orders).
     next_week = _make_order(db, sample_org, "NEXT", week="2026-W22")
-    _make_line(db, next_week, sku, cust, quantity=2)
+    next_line = _make_line(db, next_week, sku, cust, quantity=2)
+    # Another org stays excluded.
     foreign = _make_order(db, other_org, "FOREIGN", week="2026-W21")
     _make_line(db, foreign, sku, foreign_cust, quantity=2)
+    db.commit()
+
+    resp = _get(client, courier_token, full_order.id)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "other_order"
+    assert body["order_id"] == next_week.id
+    assert body["order_line_id"] == next_line.id
+
+
+def test_next_pick_skips_adhoc_orders_in_fallback(
+    client, db, courier_token, sample_org
+):
+    sku = _make_sku(db)
+    cust = _make_customer(db, sample_org, "Alpha")
+    full_order = _make_order(db, sample_org, "FULL", week="2026-W21")
+    _make_line(db, full_order, sku, cust, quantity=1, booked_count=1)
+    # Ad-hoc order (no week) is never swept into weekly matching, so it must
+    # not be suggested either — the box would not be bookable against it.
+    adhoc = _make_order(db, sample_org, "ADHOC", week=None)
+    _make_line(db, adhoc, sku, cust, quantity=2)
     db.commit()
 
     resp = _get(client, courier_token, full_order.id)

@@ -966,9 +966,11 @@ def next_pick(
     """Suggestion photo for the next SKU to scan.
 
     Within the order while it still has open lines; once it is fully booked,
-    falls back to the first open line of another active order in the same
-    organization and delivery week. No status gate on the context order: we
-    want a suggestion exactly when the order has just been completed.
+    falls back to the first open line of another active scheduled order in the
+    same organization, across all weeks — matching the booking sweep in
+    receiving._open_scope_lines_query so any suggestion is actually bookable.
+    No status gate on the context order: we want a suggestion exactly when the
+    order has just been completed.
     """
     pick_options = (
         selectinload(Order.lines).selectinload(OrderLine.sku).selectinload(SKU.reference_images),
@@ -999,9 +1001,9 @@ def next_pick(
             Order.id != order.id,
             Order.status == "active",
             Order.organization_id == order.organization_id,
-            Order.delivery_week == order.delivery_week,
+            Order.delivery_week.isnot(None),
         )
-        .order_by(Order.id)
+        .order_by(Order.delivery_week, Order.id)
         .options(*pick_options)
         .all()
     )
