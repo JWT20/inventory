@@ -11,9 +11,9 @@ from app.auth import require_inbound_booker
 from app.config import settings
 from app.database import get_db
 from app.events import publish_event
-from app.models import SKU, Booking, InventoryBalance, Order, OrderLine, Organization, ReferenceImage, User
-from app.routers.inventory import apply_stock_movement
+from app.models import SKU, InventoryBalance, Order, OrderLine, Organization, ReferenceImage, User
 from app.routers.skus import _check_duplicate_embedding, _sku_to_response
+from app.services.booking import apply_booking
 from app.schemas import (
     AlternativeMatch,
     BookingConfirmation,
@@ -867,42 +867,20 @@ def confirm_booking(
                 )
             quantity = min(quantity, cap_remaining)
 
-    last_booking = None
-    for _ in range(quantity):
-        booking = Booking(
-            order_id=order.id,
-            order_line_id=order_line.id,
-            sku_id=data["sku_id"],
-            scanned_by=user.id,
-            scan_image_path=data.get("scan_image_key", data.get("scan_image_path")),
-            confidence=data.get("confidence"),
-        )
-        db.add(booking)
-        last_booking = booking
-    order_line.booked_count += quantity
-    db.flush()
-
-    # Deduct stock
-    apply_stock_movement(
+    result = apply_booking(
         db,
+        order_id=order.id,
+        order_line_id=order_line.id,
         sku_id=data["sku_id"],
-        organization_id=order.organization_id,
-        quantity=-quantity,
-        movement_type="pick",
-        reference_type="booking",
-        reference_id=last_booking.id,
-        performed_by=user.id,
+        quantity=quantity,
+        cap_remaining=None,
+        scanned_by=user.id,
+        scan_image_path=data.get("scan_image_key", data.get("scan_image_path")),
+        confidence=data.get("confidence"),
     )
 
-    all_booked = all(l.booked_count >= l.quantity for l in order.lines)
-    if all_booked:
-        order.status = "completed"
-        order.mark_finalized()
-
-    db.commit()
-
     rolcontainer = f"KLANT {order_line.customer_name.upper()}"
-    remaining = order_line.quantity - order_line.booked_count
+    remaining = result.remaining
 
     publish_event(
         "box_booked",
@@ -913,13 +891,13 @@ def confirm_booking(
             "confidence": data.get("confidence"),
             "rolcontainer": rolcontainer,
             "klant": order_line.customer_name,
-            "order_completed": all_booked,
+            "order_completed": result.order_completed,
             "confirmed_by_human": True,
-            "quantity": quantity,
+            "quantity": result.booked_quantity,
         },
         user=user,
         resource_type="booking",
-        resource_id=last_booking.id,
+        resource_id=result.last_booking_id,
     )
 
     scan_key = data.get("scan_image_key", data.get("scan_image_path", ""))
@@ -929,7 +907,7 @@ def confirm_booking(
         context_order_reference = context_order.reference if context_order else None
 
     return BookingResponse(
-        id=last_booking.id,
+        id=result.last_booking_id,
         order_id=order.id,
         order_line_id=order_line.id,
         order_reference=order.reference,
@@ -940,11 +918,11 @@ def confirm_booking(
         sku_name=sku.name,
         klant=order_line.customer_name,
         rolcontainer=rolcontainer,
-        created_at=last_booking.created_at,
+        created_at=result.last_booking_created_at,
         scan_image_url=_image_url(scan_key) if scan_key else "",
         reference_image_urls=_all_reference_image_urls(db, sku.id),
         confidence=data.get("confidence", 0.0),
-        booked_quantity=quantity,
+        booked_quantity=result.booked_quantity,
         remaining_quantity=remaining,
     )
 
@@ -1144,42 +1122,20 @@ def book_more(
                 )
             actual_quantity = min(actual_quantity, cap_remaining)
 
-    last_booking = None
-    for _ in range(actual_quantity):
-        booking = Booking(
-            order_id=order.id,
-            order_line_id=order_line.id,
-            sku_id=sku.id,
-            scanned_by=user.id,
-            scan_image_path=scan_image_path or None,
-            confidence=None,
-        )
-        db.add(booking)
-        last_booking = booking
-    order_line.booked_count += actual_quantity
-    db.flush()
-
-    # Deduct stock
-    apply_stock_movement(
+    result = apply_booking(
         db,
+        order_id=order.id,
+        order_line_id=order_line.id,
         sku_id=sku.id,
-        organization_id=order.organization_id,
-        quantity=-actual_quantity,
-        movement_type="pick",
-        reference_type="booking",
-        reference_id=last_booking.id,
-        performed_by=user.id,
+        quantity=actual_quantity,
+        cap_remaining=None,
+        scanned_by=user.id,
+        scan_image_path=scan_image_path or None,
+        confidence=None,
     )
 
-    all_booked = all(l.booked_count >= l.quantity for l in order.lines)
-    if all_booked:
-        order.status = "completed"
-        order.mark_finalized()
-
-    db.commit()
-
     rolcontainer = f"KLANT {order_line.customer_name.upper()}"
-    remaining = order_line.quantity - order_line.booked_count
+    remaining = result.remaining
 
     publish_event(
         "box_booked",
@@ -1189,17 +1145,17 @@ def book_more(
             "is_bottle": sku.is_bottle,
             "rolcontainer": rolcontainer,
             "klant": order_line.customer_name,
-            "order_completed": all_booked,
-            "quantity": actual_quantity,
+            "order_completed": result.order_completed,
+            "quantity": result.booked_quantity,
             "batch_add": True,
         },
         user=user,
         resource_type="booking",
-        resource_id=last_booking.id,
+        resource_id=result.last_booking_id,
     )
 
     return BookingResponse(
-        id=last_booking.id,
+        id=result.last_booking_id,
         order_id=order.id,
         order_line_id=order_line.id,
         order_reference=order.reference,
@@ -1208,10 +1164,10 @@ def book_more(
         sku_name=sku.name,
         klant=order_line.customer_name,
         rolcontainer=rolcontainer,
-        created_at=last_booking.created_at,
+        created_at=result.last_booking_created_at,
         scan_image_url=_image_url(scan_image_path) if scan_image_path else "",
         reference_image_urls=_all_reference_image_urls(db, sku.id),
-        booked_quantity=actual_quantity,
+        booked_quantity=result.booked_quantity,
         remaining_quantity=remaining,
     )
 
