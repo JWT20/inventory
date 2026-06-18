@@ -45,6 +45,7 @@ from app.schemas import (
     WeeklySummarySupplier,
     WeeklySummaryWine,
 )
+from app.services.booking import recompute_order_status
 from app.services.pricing import calc_effective_price
 
 logger = logging.getLogger(__name__)
@@ -1331,23 +1332,12 @@ def _get_editable_order(order_id: int, db: Session, user: User) -> Order:
 
 
 def _recompute_order_status(order: Order) -> None:
-    """Recompute order status based on SKU images and booking progress.
+    """Recompute order status from the order's current lines.
 
-    Orders awaiting approval stay pending_approval regardless of line edits;
-    approval is an explicit merchant action.
+    Thin wrapper over the shared service helper; callers here operate on the
+    in-session ``order.lines`` after their own edits.
     """
-    if order.status in ("completed", "cancelled", "closed", "pending_approval"):
-        return
-    all_have_images = all(len(l.sku.reference_images) > 0 for l in order.lines)
-    all_booked = all(l.booked_count >= l.quantity for l in order.lines)
-    if order.status == "active":
-        if all_booked:
-            order.status = "completed"
-            order.mark_finalized()
-        return
-    # Approved but waiting for images: promote once every SKU has one.
-    if all_have_images:
-        order.status = "active"
+    recompute_order_status(order, order.lines)
 
 
 @router.post("/{order_id}/lines", response_model=OrderResponse)
