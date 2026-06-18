@@ -24,6 +24,19 @@ from app.models import EMBEDDING_DIM
 
 logger = logging.getLogger(__name__)
 
+
+class VisionParseError(ValueError):
+    """Raised when a vision response cannot be parsed into a usable result.
+
+    Previously the parser silently fell back to ``text[:50]``, which embedded a
+    truncated raw-JSON snippet (``{"is_package": true, "description": "...``) as
+    if it were a real description. Those garbage embeddings clustered together
+    and produced false "looks like" matches between unrelated products. We now
+    fail loudly instead: reference-image processing marks the image ``failed``
+    and scan endpoints return a 502, so nothing bad is ever embedded.
+    """
+
+
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 10  # seconds
 MAX_VISION_DIMENSION = 1024  # px – downscale before sending to Gemini
@@ -99,21 +112,35 @@ def parse_classify_and_describe_response(raw: str) -> tuple[bool, str]:
 
     try:
         data = _json.loads(text)
-        if isinstance(data, dict) and "is_package" in data:
-            is_package = bool(data["is_package"])
-            description = str(data.get("description", "")).strip()
-            if description.startswith('"') and description.endswith('"'):
-                description = description[1:-1]
-            return is_package, description
-    except (_json.JSONDecodeError, TypeError, ValueError):
-        pass
+    except (_json.JSONDecodeError, TypeError, ValueError) as exc:
+        # No silent fallback: the old ``text[:50]`` path embedded a truncated raw
+        # ``{"is_package": true, "description": "...`` snippet as if it were a real
+        # description. Fail loudly and log the full raw response so the cause
+        # (truncation, safety block, malformed JSON) is visible — the matching
+        # finish_reason/usage is logged by _call_vision for the same request.
+        logger.error(
+            "Vision classify+describe response is not valid JSON (len=%d): %r",
+            len(text),
+            text[:2000],
+        )
+        raise VisionParseError(
+            "classify-and-describe response was not valid JSON"
+        ) from exc
 
-    # Fallback: look for keywords suggesting packaging
-    logger.warning("Combined response not valid JSON, using heuristic: %s", text[:100])
-    lower = text.lower()
-    package_words = {"box", "case", "crate", "carton", "package", "packaging", "parcel"}
-    has_package_word = any(w in lower for w in package_words)
-    return has_package_word, text[:50]
+    if not (isinstance(data, dict) and "is_package" in data):
+        logger.error(
+            "Vision classify+describe response JSON missing 'is_package' key: %r",
+            text[:2000],
+        )
+        raise VisionParseError(
+            "classify-and-describe response missing 'is_package' key"
+        )
+
+    is_package = bool(data["is_package"])
+    description = str(data.get("description", "")).strip()
+    if description.startswith('"') and description.endswith('"'):
+        description = description[1:-1]
+    return is_package, description
 
 
 def _get_client() -> genai.Client:
@@ -208,6 +235,19 @@ def _usage_details_from_gemini(response) -> dict[str, int]:
     return details
 
 
+def _finish_reason(response) -> str | None:
+    """Best-effort extraction of the first candidate's finish reason.
+
+    ``MAX_TOKENS`` means the output was truncated (raise the token cap or the
+    model is looping); ``SAFETY``/``RECITATION`` mean it was blocked. Logged on
+    parse failures so the cause is visible without re-running the call.
+    """
+    try:
+        return str(response.candidates[0].finish_reason)
+    except (AttributeError, IndexError, TypeError):
+        return None
+
+
 @observe(as_type="generation")
 async def _call_vision(
     image: Image.Image,
@@ -225,11 +265,14 @@ async def _call_vision(
     generate_kwargs: dict = {
         "model": model,
         "contents": [prompt, image],
-    }
-    if system_instruction:
-        generate_kwargs["config"] = types.GenerateContentConfig(
+        # Set the output cap explicitly so a normal description never truncates
+        # mid-JSON (which used to surface as an unparseable response), while a
+        # runaway/looping response stays bounded.
+        "config": types.GenerateContentConfig(
+            max_output_tokens=settings.gemini_max_output_tokens,
             system_instruction=system_instruction,
-        )
+        ),
+    }
 
     async with _get_semaphore():
         for attempt in range(1, MAX_RETRIES + 1):
@@ -246,7 +289,16 @@ async def _call_vision(
                     raise
 
     vision_ms = (time.perf_counter() - t0) * 1000
-    logger.info("[TIMING] gemini_vision=%.0fms", vision_ms)
+    finish_reason = _finish_reason(response)
+    logger.info("[TIMING] gemini_vision=%.0fms finish_reason=%s", vision_ms, finish_reason)
+    # A non-STOP finish (MAX_TOKENS/SAFETY/RECITATION) means the text is partial
+    # or blocked — the usual root cause behind an unparseable response below.
+    if finish_reason is not None and "STOP" not in finish_reason:
+        logger.warning(
+            "Gemini Vision finished abnormally: finish_reason=%s usage=%s",
+            finish_reason,
+            _usage_details_from_gemini(response) or "{}",
+        )
 
     try:
         langfuse = get_langfuse_client()

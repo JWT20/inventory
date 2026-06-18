@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     gemini_embedding_model: str = "gemini-embedding-001"
     gemini_max_concurrent: int = 5  # max concurrent Gemini API requests
     gemini_extraction_max_dimension: int = 2048  # px – longest side for pakbon/invoice extraction (table digits need more resolution than box classification)
+    gemini_max_output_tokens: int = 8192  # explicit output cap for vision calls — generous so a normal description/extraction never truncates, but bounded so a runaway/looping response can't grow unbounded
     match_threshold: float = 0.80
     ambiguity_margin: float = 0.05
     upload_dir: str = "/app/uploads"

@@ -4,12 +4,16 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from PIL import Image
 
+from app.config import settings
 from app.services.embedding import (
     EXTRACT_SHIPMENT_USER_PROMPT,
+    VisionParseError,
     _call_vision,
     extract_shipment_document,
+    parse_classify_and_describe_response,
 )
 
 
@@ -34,8 +38,14 @@ def _make_response(text: str) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
-def test_call_vision_without_system_instruction():
-    """When no system_instruction is given, generate_content is called without 'config'."""
+def test_call_vision_sets_output_token_cap():
+    """_call_vision always sets a GenerateContentConfig with the explicit output-token cap.
+
+    Without an explicit cap a long/looping response could truncate mid-JSON,
+    which is the root cause behind the unparseable responses we now reject.
+    """
+    from google.genai import types
+
     mock_response = _make_response('{"is_package": true}')
     mock_client = MagicMock()
     mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
@@ -46,11 +56,15 @@ def test_call_vision_without_system_instruction():
         asyncio.run(_call_vision(_make_image(), "test prompt"))
 
     call_kwargs = mock_client.aio.models.generate_content.call_args.kwargs
-    assert "config" not in call_kwargs
+    assert "config" in call_kwargs
+    cfg = call_kwargs["config"]
+    assert isinstance(cfg, types.GenerateContentConfig)
+    assert cfg.max_output_tokens == settings.gemini_max_output_tokens
+    assert cfg.system_instruction is None
 
 
 def test_call_vision_with_system_instruction_passes_config():
-    """When system_instruction is provided, generate_content receives a GenerateContentConfig."""
+    """When system_instruction is provided, it rides along on the GenerateContentConfig."""
     from google.genai import types
 
     mock_response = _make_response('{"result": "ok"}')
@@ -69,6 +83,36 @@ def test_call_vision_with_system_instruction_passes_config():
     cfg = call_kwargs["config"]
     assert isinstance(cfg, types.GenerateContentConfig)
     assert cfg.system_instruction == system_text
+    assert cfg.max_output_tokens == settings.gemini_max_output_tokens
+
+
+# ---------------------------------------------------------------------------
+# parse_classify_and_describe_response — hard-fail instead of garbage fallback
+# ---------------------------------------------------------------------------
+
+
+def test_parse_classify_and_describe_valid():
+    is_package, description = parse_classify_and_describe_response(
+        '{"is_package": true, "description": "Red wine box, Casa Santos Lima"}'
+    )
+    assert is_package is True
+    assert description == "Red wine box, Casa Santos Lima"
+
+
+def test_parse_classify_and_describe_raises_on_truncated_json():
+    """The exact production corruption: a truncated, unterminated envelope.
+
+    The old code stored this as ``text[:50]`` and embedded it; now it must
+    raise so nothing gets embedded.
+    """
+    raw = '{"is_package": true, "description": "Brown cardboa'
+    with pytest.raises(VisionParseError):
+        parse_classify_and_describe_response(raw)
+
+
+def test_parse_classify_and_describe_raises_on_missing_key():
+    with pytest.raises(VisionParseError):
+        parse_classify_and_describe_response('{"foo": "bar"}')
 
 
 # ---------------------------------------------------------------------------
