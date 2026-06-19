@@ -263,18 +263,21 @@ export function ScanStep({
   }
 
   // Carousel of this week's open pick photos, starting on the current
-  // suggestion. Falls back to just the suggestion photo when the week list
-  // is empty or the suggested SKU isn't in it.
+  // suggestion. Only used when the suggested line is actually in the loaded
+  // week list: next-pick can point at another active week (scheduled orders
+  // are scoped across the whole org), while weeklyPickPhotos only loads this
+  // order's week. When it isn't found we fall back to the single suggestion
+  // photo so the lightbox never opens on the wrong wine.
   let carouselImages: string[];
   let carouselCaptions: string[];
   let carouselStart: number;
-  if (weekPhotos.length > 0) {
+  const weekStart = weekPhotos.findIndex(
+    (p) => p.order_line_id === nextPick?.order_line_id,
+  );
+  if (weekStart >= 0) {
     carouselImages = weekPhotos.map((p) => p.image_url as string);
     carouselCaptions = weekPhotos.map((p) => p.wine_name);
-    carouselStart = Math.max(
-      0,
-      weekPhotos.findIndex((p) => p.order_line_id === nextPick?.order_line_id),
-    );
+    carouselStart = weekStart;
   } else if (nextPick?.image_url) {
     carouselImages = [nextPick.image_url];
     carouselCaptions = [nextPick.sku_name];
