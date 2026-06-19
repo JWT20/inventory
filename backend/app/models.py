@@ -4,6 +4,7 @@ import json
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -25,12 +26,21 @@ EMBEDDING_DIM = 3072
 
 
 VALID_ROLES = ("owner", "member", "courier", "customer")
-VALID_SHIPMENT_STATUSES = ("draft", "booked")
+VALID_SHIPMENT_STATUSES = ("draft", "booked", "cancelled")
 VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count")
 VALID_DISCOUNT_TYPES = ("percentage", "fixed")
 VALID_DELIVERY_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday")
 DEFAULT_DELIVERY_DAYS = ("wednesday", "thursday", "friday")
 DEFAULT_DELIVERY_DAYS_JSON = json.dumps(list(DEFAULT_DELIVERY_DAYS))
+
+
+def _in_check(column: str, values: tuple[str, ...], *, nullable: bool = False) -> str:
+    """SQL for a CHECK constraint limiting ``column`` to ``values``."""
+    quoted = ", ".join(f"'{v}'" for v in values)
+    check = f"{column} IN ({quoted})"
+    if nullable:
+        check = f"{column} IS NULL OR {check}"
+    return check
 
 
 class Organization(Base):
@@ -74,6 +84,9 @@ class User(Base):
     Platform admin is a separate flag (is_platform_admin), not a role.
     """
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(_in_check("role", VALID_ROLES), name="ck_users_role"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(100), unique=True, index=True)
@@ -294,6 +307,10 @@ class CustomerSKU(Base):
     __table_args__ = (
         UniqueConstraint("customer_id", "sku_id"),
         Index("ix_customer_skus_sku_id", "sku_id"),
+        CheckConstraint(
+            _in_check("discount_type", VALID_DISCOUNT_TYPES, nullable=True),
+            name="ck_customer_skus_discount_type",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -321,6 +338,9 @@ class Order(Base):
         # Speeds up the monthly booked-boxes report which filters finalized
         # orders by terminal status.
         Index("ix_orders_status_finalized_at", "status", "finalized_at"),
+        CheckConstraint(
+            _in_check("status", VALID_ORDER_STATUSES), name="ck_orders_status"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -358,9 +378,13 @@ class Order(Base):
 
     def mark_finalized(self) -> None:
         """Stamp ``finalized_at`` the first time the order reaches a terminal
-        state (completed or closed). Idempotent: later calls are no-ops."""
+        state (completed or closed). Idempotent: later calls are no-ops.
+
+        Uses the database clock (``func.now()``) so the stamp is on the same
+        clock as ``created_at``/``updated_at``.
+        """
         if self.finalized_at is None:
-            self.finalized_at = datetime.datetime.utcnow()
+            self.finalized_at = func.now()
 
 
 class OrderLine(Base):
@@ -431,6 +455,10 @@ class InboundShipment(Base):
             "ix_inbound_shipments_org_sha",
             "organization_id",
             "document_sha256",
+        ),
+        CheckConstraint(
+            _in_check("status", VALID_SHIPMENT_STATUSES),
+            name="ck_inbound_shipments_status",
         ),
     )
 
@@ -582,6 +610,12 @@ class InventoryBalance(Base):
 
 class StockMovement(Base):
     __tablename__ = "stock_movements"
+    __table_args__ = (
+        CheckConstraint(
+            _in_check("movement_type", VALID_MOVEMENT_TYPES),
+            name="ck_stock_movements_movement_type",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
