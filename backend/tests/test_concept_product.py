@@ -140,6 +140,15 @@ class TestCreateConceptProduct:
         assert sku is not None
         assert sku.organization_id is None
 
+    def test_concept_sku_is_vision(self, client, db, courier_token):
+        """A concept is an unfinished wine, so it must be a vision product —
+        not the model's "barcode" default, which would force the barcode form."""
+        resp = _post(client, courier_token, "VISION-001")
+        assert resp.status_code == 201
+        sku = db.query(SKU).filter(SKU.sku_code == "VISION-001").first()
+        assert sku.product_type == "vision"
+        assert sku.ean is None
+
 
 # ---------------------------------------------------------------------------
 # Idempotency – existing SKU returns 200

@@ -284,7 +284,10 @@ def auth_header(token: str) -> dict:
 
 @pytest.fixture
 def sample_sku(db):
-    sku = SKU(sku_code="WINE-001", name="Test Wine", description="A test wine")
+    sku = SKU(
+        sku_code="WINE-001", name="Test Wine", description="A test wine",
+        product_type="vision",
+    )
     db.add(sku)
     db.commit()
     db.refresh(sku)
