@@ -115,6 +115,29 @@ def test_parse_classify_and_describe_raises_on_missing_key():
         parse_classify_and_describe_response('{"foo": "bar"}')
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"is_package": true}',
+        '{"is_package": true, "description": null}',
+        '{"is_package": true, "description": ""}',
+        '{"is_package": true, "description": "   "}',
+        '{"is_package": true, "description": "\\"   \\""}',
+    ],
+)
+def test_parse_classify_and_describe_raises_on_missing_package_description(raw):
+    with pytest.raises(VisionParseError):
+        parse_classify_and_describe_response(raw)
+
+
+def test_parse_classify_and_describe_allows_empty_description_for_non_package():
+    is_package, description = parse_classify_and_describe_response(
+        '{"is_package": false}'
+    )
+    assert is_package is False
+    assert description == ""
+
+
 # ---------------------------------------------------------------------------
 # extract_shipment_document — system_instruction and user prompt
 # ---------------------------------------------------------------------------

@@ -137,9 +137,18 @@ def parse_classify_and_describe_response(raw: str) -> tuple[bool, str]:
         )
 
     is_package = bool(data["is_package"])
-    description = str(data.get("description", "")).strip()
+    description_value = data.get("description")
+    description = "" if description_value is None else str(description_value).strip()
     if description.startswith('"') and description.endswith('"'):
-        description = description[1:-1]
+        description = description[1:-1].strip()
+    if is_package and not description:
+        logger.error(
+            "Vision classify+describe response missing usable package description: %r",
+            text[:2000],
+        )
+        raise VisionParseError(
+            "classify-and-describe response missing usable package description"
+        )
     return is_package, description
 
 
