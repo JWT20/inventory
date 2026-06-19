@@ -216,6 +216,8 @@ export const api = {
     active?: boolean;
     supplier_id?: number | null;
     is_bottle?: boolean;
+    product_type?: "barcode" | "vision";
+    ean?: string;
   }) => json("/skus", "POST", data),
   getSKU: (id: number) => request(`/skus/${id}`),
   updateSKU: (id: number, data: Record<string, unknown>) =>

@@ -48,6 +48,8 @@ interface SKU {
   supplier_id: number | null;
   supplier_name: string | null;
   is_bottle: boolean;
+  product_type: string;
+  ean: string | null;
   image_count: number;
 }
 
@@ -313,6 +315,11 @@ function SKUDialog({
   const [supplierId, setSupplierId] = useState<number | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [isBottle, setIsBottle] = useState(false);
+  // "vision" = wine (photo + AI); "barcode" = identified by its EAN scan.
+  const [productType, setProductType] = useState<"vision" | "barcode">("vision");
+  const [naam, setNaam] = useState("");
+  const [skuCode, setSkuCode] = useState("");
+  const [ean, setEan] = useState("");
 
   // Helper to build attributes dict from individual state fields
   const getAttributes = () => ({
@@ -344,6 +351,10 @@ function SKUDialog({
       setVolume(a.volume || "");
       setSupplierId(sku.supplier_id ?? null);
       setIsBottle(sku.is_bottle ?? false);
+      setProductType(sku.product_type === "barcode" ? "barcode" : "vision");
+      setNaam(sku.name ?? "");
+      setSkuCode(sku.sku_code ?? "");
+      setEan(sku.ean ?? "");
       setCurrentId(sku.id);
       loadImages(sku.id);
     } else if (open) {
@@ -353,6 +364,10 @@ function SKUDialog({
       setVolume("");
       setSupplierId(null);
       setIsBottle(false);
+      setProductType("vision");
+      setNaam("");
+      setSkuCode("");
+      setEan("");
       setCurrentId(null);
       setImages([]);
     }
@@ -406,7 +421,25 @@ function SKUDialog({
     setSubmitting(true);
     try {
       let skuId = currentId;
-      if (skuId) {
+      if (productType === "barcode") {
+        // Barcode product (e.g. socks): identified by its EAN, no photos.
+        const payload = {
+          name: naam.trim(),
+          sku_code: skuCode.trim(),
+          product_type: "barcode" as const,
+          ean: ean.trim(),
+          is_bottle: isBottle,
+        };
+        if (skuId) {
+          await api.updateSKU(skuId, payload);
+          toast.success("Product bijgewerkt");
+        } else {
+          const created = await api.createSKU({ category: "overig", attributes: {}, ...payload });
+          skuId = created.id;
+          setCurrentId(skuId);
+          toast.success("Product aangemaakt");
+        }
+      } else if (skuId) {
         await api.updateSKU(skuId, {
           attributes: getAttributes(),
           supplier_id: supplierId,
@@ -425,7 +458,7 @@ function SKUDialog({
         toast.success("SKU aangemaakt");
       }
 
-      if (skuId && stagedFiles.length > 0) {
+      if (skuId && productType === "vision" && stagedFiles.length > 0) {
         await uploadImages(skuId, stagedFiles, false);
       }
 
@@ -594,76 +627,131 @@ function SKUDialog({
         </SheetHeader>
 
         <form onSubmit={submit} className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Producent</Label>
-              <Input
-                value={producent}
-                onChange={(e) => setProducent(e.target.value)}
-                placeholder="Château Margaux"
-                required
-                disabled={isCourier}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Wijnaam</Label>
-              <Input
-                value={wijnaam}
-                onChange={(e) => setWijnaam(e.target.value)}
-                placeholder="Grand Vin"
-                required
-                disabled={isCourier}
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Type</Label>
-              <Input
-                value={wijntype}
-                onChange={(e) => setWijntype(e.target.value)}
-                placeholder="Rood"
-                required
-                disabled={isCourier}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Volume</Label>
-              <Input
-                value={volume}
-                onChange={(e) => setVolume(e.target.value)}
-                placeholder="750"
-                required
-                disabled={isCourier}
-              />
-            </div>
-          </div>
           <div className="space-y-1">
-            <Label className="text-xs">Leverancier</Label>
+            <Label className="text-xs">Soort product</Label>
             <Select
-              value={supplierId ? String(supplierId) : "none"}
-              onValueChange={(v) => setSupplierId(v === "none" ? null : Number(v))}
-              disabled={isCourier}
+              value={productType}
+              onValueChange={(v) => setProductType(v as "vision" | "barcode")}
+              disabled={isCourier || currentId !== null}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Geen leverancier" />
+                <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">Geen leverancier</SelectItem>
-                {suppliers.map((s) => (
-                  <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
-                ))}
+                <SelectItem value="vision">Wijn (foto)</SelectItem>
+                <SelectItem value="barcode">Barcode (EAN)</SelectItem>
               </SelectContent>
             </Select>
           </div>
-          <div className="flex items-center gap-2">
-            <Switch
-              checked={isBottle}
-              onCheckedChange={setIsBottle}
-              disabled={isCourier}
-            />
-            <Label className="text-xs">Dit product is een losse fles</Label>
-          </div>
+
+          {productType === "barcode" ? (
+            <>
+              <div className="space-y-1">
+                <Label className="text-xs">Naam</Label>
+                <Input
+                  value={naam}
+                  onChange={(e) => setNaam(e.target.value)}
+                  placeholder="Wielersok zwart M"
+                  required
+                  disabled={isCourier}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">SKU-code</Label>
+                <Input
+                  value={skuCode}
+                  onChange={(e) => setSkuCode(e.target.value)}
+                  placeholder="SOK-ZW-M"
+                  required
+                  disabled={isCourier}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">EAN (streepjescode)</Label>
+                <Input
+                  value={ean}
+                  onChange={(e) => setEan(e.target.value)}
+                  placeholder="8712345678906"
+                  inputMode="numeric"
+                  required
+                  disabled={isCourier}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Producent</Label>
+                  <Input
+                    value={producent}
+                    onChange={(e) => setProducent(e.target.value)}
+                    placeholder="Château Margaux"
+                    required
+                    disabled={isCourier}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Wijnaam</Label>
+                  <Input
+                    value={wijnaam}
+                    onChange={(e) => setWijnaam(e.target.value)}
+                    placeholder="Grand Vin"
+                    required
+                    disabled={isCourier}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Type</Label>
+                  <Input
+                    value={wijntype}
+                    onChange={(e) => setWijntype(e.target.value)}
+                    placeholder="Rood"
+                    required
+                    disabled={isCourier}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Volume</Label>
+                  <Input
+                    value={volume}
+                    onChange={(e) => setVolume(e.target.value)}
+                    placeholder="750"
+                    required
+                    disabled={isCourier}
+                  />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Leverancier</Label>
+                <Select
+                  value={supplierId ? String(supplierId) : "none"}
+                  onValueChange={(v) => setSupplierId(v === "none" ? null : Number(v))}
+                  disabled={isCourier}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Geen leverancier" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Geen leverancier</SelectItem>
+                    {suppliers.map((s) => (
+                      <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={isBottle}
+                  onCheckedChange={setIsBottle}
+                  disabled={isCourier}
+                />
+                <Label className="text-xs">Dit product is een losse fles</Label>
+              </div>
+            </>
+          )}
           {!isCourier && (
             <Button type="submit" className="w-full" disabled={submitting}>
               {submitting
@@ -675,6 +763,7 @@ function SKUDialog({
           )}
         </form>
 
+        {productType === "vision" && (
         <div className="mt-6">
           <Label className="mb-2 block">Referentiebeelden</Label>
           {stagedFiles.length > 0 && (
@@ -821,6 +910,7 @@ function SKUDialog({
             onChange={handleUpload}
           />
         </div>
+        )}
 
         {canDeleteProduct && currentId && (
           <div className="mt-6 pt-4 border-t border-border">
