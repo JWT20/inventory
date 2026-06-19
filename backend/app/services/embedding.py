@@ -274,14 +274,11 @@ async def _call_vision(
     generate_kwargs: dict = {
         "model": model,
         "contents": [prompt, image],
-        # Set the output cap explicitly so a normal description never truncates
-        # mid-JSON (which used to surface as an unparseable response), while a
-        # runaway/looping response stays bounded.
-        "config": types.GenerateContentConfig(
-            max_output_tokens=settings.gemini_max_output_tokens,
-            system_instruction=system_instruction,
-        ),
     }
+    if system_instruction:
+        generate_kwargs["config"] = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+        )
 
     async with _get_semaphore():
         for attempt in range(1, MAX_RETRIES + 1):
