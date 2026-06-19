@@ -7,7 +7,7 @@ import { ImageLightbox } from "@/components/image-lightbox";
 import { formatBoxesBottles } from "@/lib/units";
 import { ScanModeToggle } from "./ScanModeToggle";
 import { SCAN_MODE_WORD } from "./constants";
-import type { ConfirmationData, NextPick, Order, ScanMode } from "./types";
+import type { ConfirmationData, NextPick, Order, ScanMode, WeeklyPickPhoto } from "./types";
 
 export function ScanStep({
   order,
@@ -28,6 +28,7 @@ export function ScanStep({
   const [nextPickFailed, setNextPickFailed] = useState(false);
   const [nextPickRetry, setNextPickRetry] = useState(0);
   const [nextPickLightbox, setNextPickLightbox] = useState(false);
+  const [weekPhotos, setWeekPhotos] = useState<WeeklyPickPhoto[]>([]);
   const [openProgress, setOpenProgress] = useState<{
     openBoxes: number;
     openBottles: number;
@@ -103,6 +104,21 @@ export function ScanStep({
       .finally(() => { if (active) setNextPickLoading(false); });
     return () => { active = false; };
   }, [order, scanMode, nextPickRetry]);
+
+  // Photos of every wine still to be picked this week, so tapping the
+  // suggestion photo opens a carousel the courier can page through. Refreshes
+  // on the same trigger as nextPick so picked SKUs drop out. Best-effort: a
+  // failure just falls back to the single suggestion photo below.
+  useEffect(() => {
+    let active = true;
+    api
+      .weeklyPickPhotos(order.delivery_week ?? undefined)
+      .then((res: WeeklyPickPhoto[]) => {
+        if (active) setWeekPhotos(res.filter((p) => p.image_url));
+      })
+      .catch(() => { if (active) setWeekPhotos([]); });
+    return () => { active = false; };
+  }, [order, nextPickRetry]);
 
   useEffect(() => {
     async function startCamera() {
@@ -246,6 +262,29 @@ export function ScanStep({
     );
   }
 
+  // Carousel of this week's open pick photos, starting on the current
+  // suggestion. Falls back to just the suggestion photo when the week list
+  // is empty or the suggested SKU isn't in it.
+  let carouselImages: string[];
+  let carouselCaptions: string[];
+  let carouselStart: number;
+  if (weekPhotos.length > 0) {
+    carouselImages = weekPhotos.map((p) => p.image_url as string);
+    carouselCaptions = weekPhotos.map((p) => p.wine_name);
+    carouselStart = Math.max(
+      0,
+      weekPhotos.findIndex((p) => p.order_line_id === nextPick?.order_line_id),
+    );
+  } else if (nextPick?.image_url) {
+    carouselImages = [nextPick.image_url];
+    carouselCaptions = [nextPick.sku_name];
+    carouselStart = 0;
+  } else {
+    carouselImages = [];
+    carouselCaptions = [];
+    carouselStart = 0;
+  }
+
   return (
     <>
       <Card className="p-3 mb-3">
@@ -361,8 +400,9 @@ export function ScanStep({
       )}
 
       <ImageLightbox
-        images={nextPick?.image_url ? [nextPick.image_url] : []}
-        startIndex={0}
+        images={carouselImages}
+        captions={carouselCaptions}
+        startIndex={carouselStart}
         open={nextPickLightbox}
         onClose={() => setNextPickLightbox(false)}
       />

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 interface ImageLightboxProps {
   images: string[];
+  captions?: string[];
   startIndex?: number;
   open: boolean;
   onClose: () => void;
@@ -14,6 +15,7 @@ const SWIPE_THRESHOLD = 50;
 
 export function ImageLightbox({
   images,
+  captions,
   startIndex = 0,
   open,
   onClose,
@@ -374,6 +376,13 @@ export function ImageLightbox({
             </svg>
           </button>
         </>
+      )}
+
+      {/* Caption */}
+      {captions?.[index] && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 max-w-[90%] truncate bg-white/10 text-white text-sm px-3 py-1 rounded-full text-center">
+          {captions[index]}
+        </div>
       )}
     </div>
   );
