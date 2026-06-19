@@ -6,6 +6,7 @@ import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
 from sqlalchemy import or_, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth import get_current_user, require_can_edit_photos, require_product_manager
@@ -297,6 +298,18 @@ def _ean_conflict(
     return db.query(q.exists()).scalar()
 
 
+def _is_ean_unique_violation(exc: IntegrityError) -> bool:
+    """Whether an IntegrityError is the per-org EAN uniqueness violation.
+
+    The app-level _ean_conflict check catches sequential duplicates; this only
+    fires on a genuine race where two requests pass that check before either
+    commits. Postgres names the constraint in the message; SQLite lists the
+    columns — match either so the race surfaces as a clean 400, not a 500.
+    """
+    msg = str(getattr(exc, "orig", exc))
+    return "uq_skus_org_ean" in msg or "skus.ean" in msg
+
+
 def _sku_to_response(sku: SKU) -> SKUResponse:
     return SKUResponse(
         id=sku.id,
@@ -440,7 +453,13 @@ def create_sku(
     )
     sku.set_attributes(data.attributes)
     db.add(sku)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        if _is_ean_unique_violation(exc):
+            raise HTTPException(400, f"EAN '{data.ean}' bestaat al bij deze handelaar")
+        raise
     recompute_active(sku, db)
     db.commit()
     db.refresh(sku)
@@ -559,7 +578,14 @@ def update_sku(
     if is_complete(sku) and sku.attributes_dict.get("status") == "concept":
         sku.set_attribute("status", "done")
 
-    db.commit()
+    attempted_ean = sku.ean  # read before commit; sku expires on rollback
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if _is_ean_unique_violation(exc):
+            raise HTTPException(400, f"EAN '{attempted_ean}' bestaat al bij deze handelaar")
+        raise
     db.refresh(sku)
     publish_event(
         "sku_updated",
