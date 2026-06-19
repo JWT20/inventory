@@ -496,11 +496,9 @@ def update_sku(
     if "is_bottle" in changed_fields and data.is_bottle is not None:
         sku.is_bottle = data.is_bottle
 
-    if "product_type" in changed_fields and data.product_type is not None:
+    product_type_changed = "product_type" in changed_fields and data.product_type is not None
+    if product_type_changed:
         sku.product_type = data.product_type
-        # A vision product never carries an EAN; drop a stale one on switch.
-        if data.product_type == "vision":
-            sku.ean = None
 
     if "name" in changed_fields and data.name is not None:
         sku.name = data.name
@@ -513,24 +511,26 @@ def update_sku(
             raise HTTPException(400, f"SKU code '{data.sku_code}' bestaat al")
         sku.sku_code = data.sku_code
 
-    if "ean" in changed_fields:
-        ean = normalize_ean(data.ean)
-        # Validate against the product type after this update, not just the
-        # stored one, so changing type and EAN together is checked correctly.
-        product_type = sku.product_type
-        if product_type == "barcode":
-            if not ean:
+    ean_changed = "ean" in changed_fields
+    if ean_changed:
+        sku.ean = normalize_ean(data.ean)
+
+    # Whenever identity (type or EAN) changes, validate the resulting pair — not
+    # just the field that was sent — so a partial update can never leave a
+    # barcode product without a valid EAN, or a vision product carrying one.
+    if product_type_changed or ean_changed:
+        if sku.product_type == "barcode":
+            if not sku.ean:
                 raise HTTPException(400, "EAN is verplicht voor barcode-producten")
-            if not is_valid_ean13(ean):
+            if not is_valid_ean13(sku.ean):
                 raise HTTPException(
                     400,
                     "Ongeldige EAN-13 (controleer de cijfers en het controlecijfer)",
                 )
-        elif ean:
-            raise HTTPException(400, "Een vision-product mag geen EAN hebben")
-        if ean and _ean_conflict(db, sku.organization_id, ean, exclude_sku_id=sku_id):
-            raise HTTPException(400, f"EAN '{ean}' bestaat al bij deze handelaar")
-        sku.ean = ean
+            if _ean_conflict(db, sku.organization_id, sku.ean, exclude_sku_id=sku_id):
+                raise HTTPException(400, f"EAN '{sku.ean}' bestaat al bij deze handelaar")
+        else:  # vision must never carry an EAN
+            sku.ean = None
 
     if data.attributes is not None:
         sku.set_attributes(data.attributes)

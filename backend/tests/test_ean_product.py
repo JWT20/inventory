@@ -100,3 +100,84 @@ class TestWineStaysVision:
             headers=auth_header(merchant_token),
         )
         assert resp.status_code == 422
+
+
+class TestCreateDefaultFromCategory:
+    """Omitting product_type derives it from the category: wine→vision, else→barcode."""
+
+    def test_non_wine_without_product_type_defaults_to_barcode(self, client, merchant_token):
+        resp = client.post(
+            "/api/skus",
+            json={
+                "category": "overig",
+                "name": "Wielersok zwart M",
+                "sku_code": "SOK-ZW-M",
+                "ean": "8712345678906",
+            },
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["product_type"] == "barcode"
+
+    def test_non_wine_default_barcode_requires_ean(self, client, merchant_token):
+        # Defaulting to barcode means an EAN becomes mandatory.
+        resp = client.post(
+            "/api/skus",
+            json={"category": "overig", "name": "Sok zonder EAN", "sku_code": "SOK-X"},
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 422
+
+
+class TestUpdateInvariant:
+    """A partial update can never leave a barcode product without a valid EAN."""
+
+    def _make_vision_sku(self, client, token):
+        resp = client.post("/api/skus", json=WINE_DATA, headers=auth_header(token))
+        assert resp.status_code == 201, resp.text
+        return resp.json()["id"]
+
+    def test_switch_to_barcode_without_ean_rejected(self, client, merchant_token):
+        sku_id = self._make_vision_sku(client, merchant_token)
+        resp = client.patch(
+            f"/api/skus/{sku_id}",
+            json={"product_type": "barcode"},
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 400
+        assert "EAN" in resp.json()["detail"]
+
+    def test_switch_to_barcode_with_ean_ok(self, client, merchant_token):
+        sku_id = self._make_vision_sku(client, merchant_token)
+        resp = client.patch(
+            f"/api/skus/{sku_id}",
+            json={"product_type": "barcode", "ean": "8712345678906"},
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["product_type"] == "barcode"
+        assert body["ean"] == "8712345678906"
+
+    def test_switch_to_vision_clears_ean(self, client, merchant_token):
+        # Build a barcode product, then switch it back to vision.
+        created = client.post(
+            "/api/skus",
+            json={
+                "category": "overig",
+                "name": "Sok",
+                "sku_code": "SOK-CLR",
+                "product_type": "barcode",
+                "ean": "8712345678906",
+            },
+            headers=auth_header(merchant_token),
+        )
+        assert created.status_code == 201, created.text
+        sku_id = created.json()["id"]
+        resp = client.patch(
+            f"/api/skus/{sku_id}",
+            json={"product_type": "vision"},
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["ean"] is None

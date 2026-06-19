@@ -4,7 +4,7 @@ from typing import Literal
 
 import unicodedata
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # --- Auth ---
@@ -197,7 +197,9 @@ class SKUCreate(BaseModel):
     active: bool = True
     supplier_id: int | None = None
     is_bottle: bool = False
-    product_type: Literal["barcode", "vision"] = "vision"
+    # When omitted, the type is derived from the category below: wine → vision,
+    # everything else → barcode (the new default, matching the model/migration).
+    product_type: Literal["barcode", "vision"] | None = None
     ean: str | None = None
 
     @field_validator("attributes")
@@ -210,12 +212,16 @@ class SKUCreate(BaseModel):
                 raise ValueError(f"Wijn-attributen ontbreken: {', '.join(missing)}")
         return v
 
-    @field_validator("ean")
-    @classmethod
-    def validate_ean(cls, v: str | None, info) -> str | None:
-        ean = normalize_ean(v)
-        product_type = info.data.get("product_type", "vision")
-        if product_type == "barcode":
+    @model_validator(mode="after")
+    def resolve_type_and_validate_ean(self) -> "SKUCreate":
+        # Derive the identification method from the category when not given, so
+        # a caller that omits product_type gets vision for wine and barcode for
+        # anything else — instead of a blanket default that contradicts the
+        # model's "barcode" server default.
+        if self.product_type is None:
+            self.product_type = "vision" if self.category == "wine" else "barcode"
+        ean = normalize_ean(self.ean)
+        if self.product_type == "barcode":
             if not ean:
                 raise ValueError("EAN is verplicht voor barcode-producten")
             if not is_valid_ean13(ean):
@@ -224,7 +230,8 @@ class SKUCreate(BaseModel):
                 )
         elif ean:
             raise ValueError("Een vision-product mag geen EAN hebben")
-        return ean
+        self.ean = ean
+        return self
 
 
 class SKUUpdate(BaseModel):
