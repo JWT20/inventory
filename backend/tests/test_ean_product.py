@@ -181,3 +181,45 @@ class TestUpdateInvariant:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["ean"] is None
+
+
+class TestEanRaceTranslatedTo400:
+    """A concurrent duplicate EAN that slips past the app pre-check is caught by
+    the DB unique index and surfaced as a clean 400, not a raw 500."""
+
+    def test_create_duplicate_ean_race_returns_400(self, client, merchant_token, monkeypatch):
+        first = client.post(
+            "/api/skus", json=_barcode_payload(), headers=auth_header(merchant_token)
+        )
+        assert first.status_code == 201
+        # Simulate the race window: the app pre-check passes, so the insert hits
+        # the DB unique index instead.
+        monkeypatch.setattr("app.routers.skus._ean_conflict", lambda *a, **k: False)
+        dup = client.post(
+            "/api/skus",
+            json=_barcode_payload(sku_code="SOK-ZW-L", name="Sok L"),
+            headers=auth_header(merchant_token),
+        )
+        assert dup.status_code == 400
+        assert "EAN" in dup.json()["detail"]
+
+    def test_update_to_duplicate_ean_race_returns_400(self, client, merchant_token, monkeypatch):
+        a = client.post(
+            "/api/skus", json=_barcode_payload(), headers=auth_header(merchant_token)
+        )
+        assert a.status_code == 201
+        b = client.post(
+            "/api/skus",
+            json=_barcode_payload(sku_code="SOK-B", name="Sok B", ean="4006381333931"),
+            headers=auth_header(merchant_token),
+        )
+        assert b.status_code == 201
+        b_id = b.json()["id"]
+        monkeypatch.setattr("app.routers.skus._ean_conflict", lambda *a, **k: False)
+        resp = client.patch(
+            f"/api/skus/{b_id}",
+            json={"ean": "8712345678906"},
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 400
+        assert "EAN" in resp.json()["detail"]
