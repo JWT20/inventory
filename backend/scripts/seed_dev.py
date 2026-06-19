@@ -59,6 +59,7 @@ def main() -> None:
                         active=True,
                         organization_id=org.id,
                         is_bottle=is_bottle,
+                        product_type="vision",
                     )
                 )
         db.commit()

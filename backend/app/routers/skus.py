@@ -34,6 +34,8 @@ from app.schemas import (
     SKUUpdate,
     generate_wine_display_name,
     generate_wine_sku_code,
+    is_valid_ean13,
+    normalize_ean,
 )
 from langfuse import observe
 
@@ -285,6 +287,16 @@ def sweep_stale_reference_images(db: Session) -> int:
     return count
 
 
+def _ean_conflict(
+    db: Session, organization_id: int | None, ean: str, exclude_sku_id: int | None = None
+) -> bool:
+    """True if another SKU in the same organization already owns this EAN."""
+    q = db.query(SKU).filter(SKU.organization_id == organization_id, SKU.ean == ean)
+    if exclude_sku_id is not None:
+        q = q.filter(SKU.id != exclude_sku_id)
+    return db.query(q.exists()).scalar()
+
+
 def _sku_to_response(sku: SKU) -> SKUResponse:
     return SKUResponse(
         id=sku.id,
@@ -297,6 +309,8 @@ def _sku_to_response(sku: SKU) -> SKUResponse:
         supplier_id=sku.supplier_id,
         supplier_name=sku.supplier.name if sku.supplier else None,
         is_bottle=sku.is_bottle,
+        product_type=sku.product_type,
+        ean=sku.ean,
         created_at=sku.created_at,
         updated_at=sku.updated_at,
         image_count=len(sku.reference_images),
@@ -408,6 +422,10 @@ def create_sku(
     if existing:
         raise HTTPException(400, f"SKU code '{sku_code}' bestaat al")
 
+    # EAN format is validated by the schema; uniqueness is per organization.
+    if data.ean and _ean_conflict(db, user.organization_id, data.ean):
+        raise HTTPException(400, f"EAN '{data.ean}' bestaat al bij deze handelaar")
+
     sku = SKU(
         sku_code=sku_code,
         name=name,
@@ -417,6 +435,8 @@ def create_sku(
         organization_id=user.organization_id,
         supplier_id=data.supplier_id,
         is_bottle=data.is_bottle,
+        product_type=data.product_type,
+        ean=data.ean,
     )
     sku.set_attributes(data.attributes)
     db.add(sku)
@@ -475,6 +495,42 @@ def update_sku(
 
     if "is_bottle" in changed_fields and data.is_bottle is not None:
         sku.is_bottle = data.is_bottle
+
+    product_type_changed = "product_type" in changed_fields and data.product_type is not None
+    if product_type_changed:
+        sku.product_type = data.product_type
+
+    if "name" in changed_fields and data.name is not None:
+        sku.name = data.name
+
+    if "sku_code" in changed_fields and data.sku_code:
+        conflict = db.query(SKU).filter(
+            SKU.sku_code == data.sku_code, SKU.id != sku_id
+        ).first()
+        if conflict:
+            raise HTTPException(400, f"SKU code '{data.sku_code}' bestaat al")
+        sku.sku_code = data.sku_code
+
+    ean_changed = "ean" in changed_fields
+    if ean_changed:
+        sku.ean = normalize_ean(data.ean)
+
+    # Whenever identity (type or EAN) changes, validate the resulting pair — not
+    # just the field that was sent — so a partial update can never leave a
+    # barcode product without a valid EAN, or a vision product carrying one.
+    if product_type_changed or ean_changed:
+        if sku.product_type == "barcode":
+            if not sku.ean:
+                raise HTTPException(400, "EAN is verplicht voor barcode-producten")
+            if not is_valid_ean13(sku.ean):
+                raise HTTPException(
+                    400,
+                    "Ongeldige EAN-13 (controleer de cijfers en het controlecijfer)",
+                )
+            if _ean_conflict(db, sku.organization_id, sku.ean, exclude_sku_id=sku_id):
+                raise HTTPException(400, f"EAN '{sku.ean}' bestaat al bij deze handelaar")
+        else:  # vision must never carry an EAN
+            sku.ean = None
 
     if data.attributes is not None:
         sku.set_attributes(data.attributes)

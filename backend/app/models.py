@@ -25,6 +25,9 @@ EMBEDDING_DIM = 3072
 
 
 VALID_ROLES = ("owner", "member", "courier", "customer")
+# How a product is identified. "barcode" = matched on its EAN/GTIN scan (no
+# vision); "vision" = matched via reference photos + AI (the wine flow).
+VALID_PRODUCT_TYPES = ("barcode", "vision")
 VALID_SHIPMENT_STATUSES = ("draft", "booked")
 VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count")
 VALID_DISCOUNT_TYPES = ("percentage", "fixed")
@@ -127,6 +130,19 @@ class SKU(Base):
     __tablename__ = "skus"
     __table_args__ = (
         Index("ix_skus_org_active_name", "organization_id", "active", "name"),
+        # An EAN identifies one product within a merchant. Uniqueness is scoped
+        # per organization (not global like sku_code) because the courier serves
+        # many merchants and two of them may legitimately stock the same EAN; a
+        # pick-time scan always resolves within the order's organization. NULL
+        # eans (every wine/vision product) are excluded so they never collide.
+        Index(
+            "uq_skus_org_ean",
+            "organization_id",
+            "ean",
+            unique=True,
+            postgresql_where=text("ean IS NOT NULL"),
+            sqlite_where=text("ean IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -148,6 +164,14 @@ class SKU(Base):
     is_bottle: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false"), nullable=False
     )
+    # How the product is identified. New products default to "barcode"; the
+    # existing wine catalogue is backfilled to "vision" by the migration.
+    product_type: Mapped[str] = mapped_column(
+        String(20), default="barcode", server_default=text("'barcode'"), nullable=False
+    )
+    # EAN-13 barcode. NULL for vision (wine) products. Unique per organization
+    # via uq_skus_org_ean above.
+    ean: Mapped[str | None] = mapped_column(String(13), nullable=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()

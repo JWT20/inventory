@@ -4,7 +4,7 @@ from typing import Literal
 
 import unicodedata
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # --- Auth ---
@@ -133,6 +133,29 @@ class OrganizationResponse(BaseModel):
 WINE_ATTRIBUTE_KEYS = ("producent", "wijnaam", "wijntype", "volume")
 
 
+def is_valid_ean13(code: str) -> bool:
+    """True if `code` is a syntactically valid EAN-13 (13 digits, checkdigit OK).
+
+    The 13th digit is a checksum over the first 12: odd positions weigh 1, even
+    positions weigh 3, and the check digit makes the weighted sum a multiple of
+    10. Catching a typo here keeps a broken barcode out of the catalogue, where
+    it would later surface as a "product not found" at the scan station.
+    """
+    if not code.isdigit() or len(code) != 13:
+        return False
+    digits = [int(c) for c in code]
+    checksum = sum(d * (3 if i % 2 else 1) for i, d in enumerate(digits[:12]))
+    return (10 - checksum % 10) % 10 == digits[12]
+
+
+def normalize_ean(value: str | None) -> str | None:
+    """Trim an EAN to its digits, returning None for blank input."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
 def generate_wine_sku_code(attrs: dict[str, str]) -> str:
     """Generate SKU code from wine attributes like CHAT-GRAN-ROO-750."""
     def abbrev(s: str, length: int = 4) -> str:
@@ -174,6 +197,10 @@ class SKUCreate(BaseModel):
     active: bool = True
     supplier_id: int | None = None
     is_bottle: bool = False
+    # When omitted, the type is derived from the category below: wine → vision,
+    # everything else → barcode (the new default, matching the model/migration).
+    product_type: Literal["barcode", "vision"] | None = None
+    ean: str | None = None
 
     @field_validator("attributes")
     @classmethod
@@ -185,12 +212,39 @@ class SKUCreate(BaseModel):
                 raise ValueError(f"Wijn-attributen ontbreken: {', '.join(missing)}")
         return v
 
+    @model_validator(mode="after")
+    def resolve_type_and_validate_ean(self) -> "SKUCreate":
+        # Derive the identification method from the category when not given, so
+        # a caller that omits product_type gets vision for wine and barcode for
+        # anything else — instead of a blanket default that contradicts the
+        # model's "barcode" server default.
+        if self.product_type is None:
+            self.product_type = "vision" if self.category == "wine" else "barcode"
+        ean = normalize_ean(self.ean)
+        if self.product_type == "barcode":
+            if not ean:
+                raise ValueError("EAN is verplicht voor barcode-producten")
+            if not is_valid_ean13(ean):
+                raise ValueError(
+                    "Ongeldige EAN-13 (controleer de cijfers en het controlecijfer)"
+                )
+        elif ean:
+            raise ValueError("Een vision-product mag geen EAN hebben")
+        self.ean = ean
+        return self
+
 
 class SKUUpdate(BaseModel):
+    sku_code: str | None = None
+    name: str | None = None
     attributes: dict[str, str] | None = None
     active: bool | None = None
     supplier_id: int | None = None
     is_bottle: bool | None = None
+    product_type: Literal["barcode", "vision"] | None = None
+    # EAN format/uniqueness is validated in the endpoint, where the SKU's
+    # product_type (existing or just-changed) and organization are known.
+    ean: str | None = None
 
 
 class SKUResponse(BaseModel):
@@ -204,6 +258,8 @@ class SKUResponse(BaseModel):
     supplier_id: int | None = None
     supplier_name: str | None = None
     is_bottle: bool = False
+    product_type: str = "vision"
+    ean: str | None = None
     created_at: datetime
     updated_at: datetime
     image_count: int = 0

@@ -1193,9 +1193,11 @@ async def create_product_inline(
     if existing:
         raise HTTPException(400, f"SKU code '{sku_code}' already exists")
 
+    # Photo-matched product: identified via vision, never a barcode. Set this
+    # explicitly because the model default is now "barcode".
     sku = SKU(
         sku_code=sku_code, name=name, description=description,
-        category=category, is_bottle=is_bottle,
+        category=category, is_bottle=is_bottle, product_type="vision",
     )
     db.add(sku)
     db.flush()
@@ -1312,6 +1314,8 @@ def create_concept_product(
         category="wine",
         active=False,
         organization_id=target_org_id,
+        # An unfinished wine is a vision product; the model default is "barcode".
+        product_type="vision",
     )
     sku.set_attributes({"status": "concept", "source": "inbound_scan"})
     db.add(sku)
