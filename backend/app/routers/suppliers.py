@@ -5,13 +5,18 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, require_product_manager
+from app.auth import get_current_user, require_module, require_product_manager
 from app.database import get_db
 from app.models import Supplier, User
 from app.schemas import SupplierCreate, SupplierResponse
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/suppliers", tags=["suppliers"])
+# Whole router is gated: only organizations with the 'suppliers' module reach it.
+router = APIRouter(
+    prefix="/suppliers",
+    tags=["suppliers"],
+    dependencies=[Depends(require_module("suppliers"))],
+)
 
 
 @router.get("", response_model=list[SupplierResponse])

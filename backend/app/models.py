@@ -44,8 +44,10 @@ class Organization(Base):
     name: Mapped[str] = mapped_column(String(255))
     slug: Mapped[str] = mapped_column(String(100), unique=True)
     custom_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # New organizations default to the barcode-fulfilment baseline; vision is
+    # the exception, enabled per-merchant. Kept in sync with app.modules.
     enabled_modules: Mapped[str] = mapped_column(
-        Text, default='["inventory","orders"]'
+        Text, default='["inventory","orders","barcode_picking","channel_orders"]'
     )
     auto_inactivate_no_images: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false"), nullable=False

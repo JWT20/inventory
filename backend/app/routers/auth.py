@@ -28,11 +28,13 @@ from app.auth import (
 from app.database import get_db
 from app.events import publish_event
 from app.models import Customer, Organization, User
+from app.modules import MODULE_DEFS
 from app.schemas import (
     AdminResetPassword,
     ChangeOwnPassword,
     LoginRequest,
     LogoutRequest,
+    ModuleCatalogEntry,
     OrganizationCreate,
     OrganizationResponse,
     OrganizationUpdate,
@@ -60,12 +62,14 @@ def _user_to_response(user: User, db: Session | None = None) -> UserResponse:
     org_name = None
     org_slug = None
     custom_label = None
+    enabled_modules: list[str] = []
     if user.organization_id:
         try:
             if user.organization:
                 org_name = user.organization.name
                 org_slug = user.organization.slug
                 custom_label = user.organization.custom_label
+                enabled_modules = user.organization.modules
         except Exception:
             if db:
                 org = db.get(Organization, user.organization_id)
@@ -73,6 +77,7 @@ def _user_to_response(user: User, db: Session | None = None) -> UserResponse:
                     org_name = org.name
                     org_slug = org.slug
                     custom_label = org.custom_label
+                    enabled_modules = org.modules
     # Resolve customer name
     customer_name = None
     if user.customer_id:
@@ -93,6 +98,7 @@ def _user_to_response(user: User, db: Session | None = None) -> UserResponse:
         custom_label=custom_label,
         customer_id=user.customer_id,
         customer_name=customer_name,
+        enabled_modules=enabled_modules,
         is_active=user.is_active,
         created_at=user.created_at,
     )
@@ -135,12 +141,14 @@ async def login(
     org_name = None
     org_slug = None
     custom_label = None
+    enabled_modules: list[str] = []
     if user.organization_id:
         org = db.get(Organization, user.organization_id)
         if org:
             org_name = org.name
             org_slug = org.slug
             custom_label = org.custom_label
+            enabled_modules = org.modules
 
     publish_event(
         "user_login",
@@ -159,6 +167,7 @@ async def login(
         organization_slug=org_slug,
         custom_label=custom_label,
         customer_id=user.customer_id,
+        enabled_modules=enabled_modules,
     )
 
 
@@ -346,6 +355,21 @@ def logout(
 
 
 # --- Organization management ---
+
+@router.get("/modules/catalog", response_model=list[ModuleCatalogEntry])
+def modules_catalog(_: User = Depends(require_admin)):
+    """Canonical list of feature modules (key + label + description).
+
+    The admin org-editor renders its checkboxes from this so the UI never
+    hardcodes the module list and can't drift from backend validation.
+    """
+    return [
+        ModuleCatalogEntry(
+            key=m.key, label=m.label, description=m.description, baseline=m.baseline
+        )
+        for m in MODULE_DEFS
+    ]
+
 
 @router.get("/organizations", response_model=list[OrganizationResponse])
 def list_organizations(

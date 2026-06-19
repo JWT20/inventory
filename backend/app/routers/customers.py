@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, require_product_manager
+from app.auth import get_current_user, require_module, require_product_manager
 from app.database import get_db
 from sqlalchemy.exc import IntegrityError
 
@@ -21,7 +21,13 @@ from app.schemas import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/customers", tags=["customers"])
+# Whole router is gated: only organizations with the 'customer_portal' module
+# reach it (barcode-fulfilment orgs have no customers).
+router = APIRouter(
+    prefix="/customers",
+    tags=["customers"],
+    dependencies=[Depends(require_module("customer_portal"))],
+)
 
 
 def _require_customer_reader(user: User = Depends(get_current_user)) -> User:

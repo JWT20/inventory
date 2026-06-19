@@ -10,7 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
-from app.auth import get_current_user, require_can_create_orders, require_merchant
+from app.auth import (
+    get_current_user,
+    require_can_create_orders,
+    require_merchant,
+    require_module,
+)
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
@@ -445,6 +450,7 @@ def weekly_pick_photos(
     week: str = Query(None, description="ISO week, bijv. '2026-W15'. Standaard: huidige week."),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    _wk: User = Depends(require_module("week_overview")),
 ):
     """Photos for order lines that are not fully picked when this view opens."""
     if not week:
@@ -714,6 +720,7 @@ def weekly_order_summary(
     group_by: str = Query("supplier", description="Groepering: 'supplier' of 'customer'."),
     db: Session = Depends(get_db),
     user: User = Depends(require_merchant),
+    _wk: User = Depends(require_module("week_overview")),
 ):
     """Weekly order summary grouped by supplier or by customer (for invoicing).
 
@@ -1078,6 +1085,7 @@ def approve_order(
     body: OrderApprove | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    _wk: User = Depends(require_module("week_overview")),
 ):
     """Approve an order so the courier can start working on it.
 

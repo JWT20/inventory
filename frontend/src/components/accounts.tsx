@@ -45,12 +45,70 @@ interface Organization {
   created_at: string;
 }
 
+interface ModuleCatalogEntry {
+  key: string;
+  label: string;
+  description: string;
+  baseline: boolean;
+}
+
+// Mirrors app/modules.py DEFAULT_MODULES — the starting selection for a new org.
+const DEFAULT_MODULES = ["inventory", "orders", "barcode_picking", "channel_orders"];
+
 const ROLE_LABELS: Record<string, string> = {
   owner: "Eigenaar",
   member: "Medewerker",
   courier: "Koerier",
   customer: "Klant",
 };
+
+/** Checkbox list of feature modules, rendered from the backend catalog so the
+ *  UI never hardcodes the module list. Baseline modules are always on. */
+function ModulePicker({
+  selected,
+  onChange,
+}: {
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [catalog, setCatalog] = useState<ModuleCatalogEntry[]>([]);
+
+  useEffect(() => {
+    api.getModuleCatalog().then(setCatalog).catch(() => {});
+  }, []);
+
+  function toggle(key: string, on: boolean) {
+    onChange(on ? [...selected, key] : selected.filter((m) => m !== key));
+  }
+
+  return (
+    <div className="space-y-2">
+      <Label>Modules</Label>
+      <div className="space-y-2 rounded-md border border-border p-3">
+        {catalog.map((m) => (
+          <label key={m.key} className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={m.baseline || selected.includes(m.key)}
+              disabled={m.baseline}
+              onChange={(e) => toggle(m.key, e.target.checked)}
+              className="mt-1"
+            />
+            <span>
+              <span className="text-sm font-medium">{m.label}</span>
+              {m.baseline && (
+                <span className="ml-1 text-xs text-muted-foreground">(altijd aan)</span>
+              )}
+              <span className="block text-xs text-muted-foreground">
+                {m.description}
+              </span>
+            </span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function AccountsPage() {
   const { user: me } = useAuth();
@@ -405,12 +463,14 @@ function NewOrgDialog({
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [customLabel, setCustomLabel] = useState("");
+  const [modules, setModules] = useState<string[]>(DEFAULT_MODULES);
 
   useEffect(() => {
     if (open) {
       setName("");
       setSlug("");
       setCustomLabel("");
+      setModules(DEFAULT_MODULES);
     }
   }, [open]);
 
@@ -428,7 +488,7 @@ function NewOrgDialog({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     try {
-      await api.createOrganization({ name, slug, custom_label: customLabel || undefined });
+      await api.createOrganization({ name, slug, custom_label: customLabel || undefined, enabled_modules: modules });
       toast.success(`Organisatie '${name}' aangemaakt`);
       onClose();
       onCreated();
@@ -477,6 +537,7 @@ function NewOrgDialog({
               Vervangt "Magazijn" in de header voor deze organisatie
             </p>
           </div>
+          <ModulePicker selected={modules} onChange={setModules} />
           <Button type="submit" className="w-full">
             Aanmaken
           </Button>
@@ -499,6 +560,7 @@ function EditOrgDialog({
   const [slug, setSlug] = useState("");
   const [customLabel, setCustomLabel] = useState("");
   const [autoInactivate, setAutoInactivate] = useState(false);
+  const [modules, setModules] = useState<string[]>([]);
 
   useEffect(() => {
     if (org) {
@@ -506,6 +568,7 @@ function EditOrgDialog({
       setSlug(org.slug);
       setCustomLabel(org.custom_label || "");
       setAutoInactivate(!!org.auto_inactivate_no_images);
+      setModules(org.enabled_modules || []);
     }
   }, [org]);
 
@@ -518,6 +581,7 @@ function EditOrgDialog({
         slug,
         custom_label: customLabel || null,
         auto_inactivate_no_images: autoInactivate,
+        enabled_modules: modules,
       });
       toast.success(`Organisatie '${name}' bijgewerkt`);
       onClose();
@@ -584,6 +648,7 @@ function EditOrgDialog({
               </span>
             </label>
           </div>
+          <ModulePicker selected={modules} onChange={setModules} />
           <Button type="submit" className="w-full">
             Opslaan
           </Button>

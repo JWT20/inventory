@@ -152,7 +152,12 @@ def client(db):
 
 @pytest.fixture
 def sample_org(db):
+    # Enable every module so existing wine-flow + barcode tests are unaffected by
+    # module gating. Tests that exercise gating use purpose-built orgs instead.
+    from app.modules import VALID_MODULES
+
     org = Organization(name="Test Wijnhandel", slug="test-wijnhandel")
+    org.modules = list(VALID_MODULES)
     db.add(org)
     db.commit()
     db.refresh(org)

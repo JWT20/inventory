@@ -6,6 +6,8 @@ import unicodedata
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.modules import DEFAULT_MODULES
+
 
 # --- Auth ---
 class LoginRequest(BaseModel):
@@ -25,6 +27,7 @@ class TokenResponse(BaseModel):
     organization_slug: str | None = None
     custom_label: str | None = None
     customer_id: int | None = None
+    enabled_modules: list[str] = []
 
 
 class RefreshRequest(BaseModel):
@@ -92,6 +95,7 @@ class UserResponse(BaseModel):
     custom_label: str | None = None
     customer_id: int | None = None
     customer_name: str | None = None
+    enabled_modules: list[str] = []
     is_active: bool
     created_at: datetime
 
@@ -100,12 +104,25 @@ class UserResponse(BaseModel):
 
 # --- Organization ---
 
+def _validate_modules(modules: list[str]) -> list[str]:
+    from app.modules import normalize_modules
+    try:
+        return normalize_modules(modules)
+    except ValueError as exc:
+        raise ValueError(str(exc))
+
+
 class OrganizationCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     slug: str = Field(..., min_length=1, max_length=100)
     custom_label: str | None = Field(None, max_length=255)
-    enabled_modules: list[str] = ["inventory", "orders"]
+    enabled_modules: list[str] = Field(default_factory=lambda: list(DEFAULT_MODULES))
     auto_inactivate_no_images: bool = False
+
+    @field_validator("enabled_modules")
+    @classmethod
+    def check_modules(cls, v: list[str]) -> list[str]:
+        return _validate_modules(v)
 
 
 class OrganizationUpdate(BaseModel):
@@ -114,6 +131,11 @@ class OrganizationUpdate(BaseModel):
     custom_label: str | None = None
     enabled_modules: list[str] | None = None
     auto_inactivate_no_images: bool | None = None
+
+    @field_validator("enabled_modules")
+    @classmethod
+    def check_modules(cls, v: list[str] | None) -> list[str] | None:
+        return None if v is None else _validate_modules(v)
 
 
 class OrganizationResponse(BaseModel):
@@ -126,6 +148,13 @@ class OrganizationResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ModuleCatalogEntry(BaseModel):
+    key: str
+    label: str
+    description: str
+    baseline: bool
 
 
 # --- SKU ---
