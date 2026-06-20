@@ -151,6 +151,14 @@ class TestWeekOverviewGating:
         )
         assert resp.status_code != 403
 
+    def test_courier_can_reach_weekly_pick_photos(self, client, courier_token):
+        # Couriers have no organization and use this endpoint in their scan flow,
+        # so it must NOT be gated by a user-org module dependency.
+        resp = client.get(
+            "/api/orders/weekly-pick-photos", headers=auth_header(courier_token)
+        )
+        assert resp.status_code == 200, resp.text
+
 
 class TestModuleGatedRouters:
     def test_barcode_org_denied_suppliers(self, client, db):

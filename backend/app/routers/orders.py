@@ -450,9 +450,14 @@ def weekly_pick_photos(
     week: str = Query(None, description="ISO week, bijv. '2026-W15'. Standaard: huidige week."),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-    _wk: User = Depends(require_module("week_overview")),
 ):
-    """Photos for order lines that are not fully picked when this view opens."""
+    """Photos for order lines that are not fully picked when this view opens.
+
+    Shared by the courier scan flow ("Deze week" + scan-suggestie-carousel), so
+    this must NOT use a user-org module guard: couriers have no organization and
+    would always 403. The per-order/per-org method gating for the pick flow is
+    handled against the *order's* organization in Fase 1, not here.
+    """
     if not week:
         today = datetime.date.today()
         week = f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"
