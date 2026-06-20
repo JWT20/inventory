@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
+import { useAuth, hasModule } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -304,6 +304,12 @@ function SKUDialog({
 }) {
   const { user } = useAuth();
   const isCourier = user?.role === "courier";
+  // The product form may only offer pick methods the org has a module for; the
+  // invariant on the backend rejects anything else. Default a new product to
+  // whichever the org supports (vision wins when both are enabled).
+  const canVision = hasModule(user, "vision_picking");
+  const canBarcode = hasModule(user, "barcode_picking");
+  const defaultProductType: "vision" | "barcode" = canVision ? "vision" : "barcode";
   const canDeleteProduct =
     !!user &&
     (user.is_platform_admin || user.role === "owner" || user.role === "member");
@@ -364,7 +370,7 @@ function SKUDialog({
       setVolume("");
       setSupplierId(null);
       setIsBottle(false);
-      setProductType("vision");
+      setProductType(defaultProductType);
       setNaam("");
       setSkuCode("");
       setEan("");
@@ -638,8 +644,8 @@ function SKUDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="vision">Wijn (foto)</SelectItem>
-                <SelectItem value="barcode">Barcode (EAN)</SelectItem>
+                {canVision && <SelectItem value="vision">Wijn (foto)</SelectItem>}
+                {canBarcode && <SelectItem value="barcode">Barcode (EAN)</SelectItem>}
               </SelectContent>
             </Select>
           </div>
