@@ -13,6 +13,15 @@ interface AuthUser {
   organization_slug: string | null;
   custom_label: string | null;
   customer_id: number | null;
+  enabled_modules: string[];
+}
+
+/** Whether the logged-in user's organization has a given feature module.
+ *  Platform admins (no org) implicitly have everything. */
+export function hasModule(user: AuthUser | null, module: string): boolean {
+  if (!user) return false;
+  if (user.is_platform_admin) return true;
+  return (user.enabled_modules ?? []).includes(module);
 }
 
 interface AuthCtx {
@@ -55,6 +64,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       organization_slug: resp.organization_slug ?? null,
       custom_label: resp.custom_label ?? null,
       customer_id: resp.customer_id ?? null,
+      enabled_modules: resp.enabled_modules ?? [],
     });
     // Refresh full user data
     const me = await api.me();

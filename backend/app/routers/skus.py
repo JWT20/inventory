@@ -19,12 +19,14 @@ from app.models import (
     InboundShipmentLine,
     InventoryBalance,
     OrderLine,
+    Organization,
     ReferenceImage,
     SKUAttribute,
     StockMovement,
     Supplier,
     User,
 )
+from app.modules import PICKING_MODULE_BY_PRODUCT_TYPE
 from app.schemas import (
     WINE_ATTRIBUTE_KEYS,
     ReferenceImageResponse,
@@ -411,6 +413,29 @@ def list_sku_options(
     ]
 
 
+def _assert_org_supports_product_type(
+    db: Session, organization_id: int | None, product_type: str
+) -> None:
+    """Invariant: an org may only hold products whose pick method it has enabled.
+
+    A vision SKU requires ``vision_picking``; a barcode SKU requires
+    ``barcode_picking``. Global SKUs (no organization, e.g. created by a platform
+    admin) are exempt — there is no org whose modules could be checked.
+    """
+    if organization_id is None:
+        return
+    required = PICKING_MODULE_BY_PRODUCT_TYPE.get(product_type)
+    if required is None:
+        return
+    org = db.get(Organization, organization_id)
+    if org and required not in org.modules:
+        raise HTTPException(
+            400,
+            f"Deze organisatie heeft module '{required}' niet ingeschakeld; "
+            f"kan geen {product_type}-product aanmaken",
+        )
+
+
 @router.post("", response_model=SKUResponse, status_code=201)
 def create_sku(
     data: SKUCreate,
@@ -438,6 +463,8 @@ def create_sku(
     # EAN format is validated by the schema; uniqueness is per organization.
     if data.ean and _ean_conflict(db, user.organization_id, data.ean):
         raise HTTPException(400, f"EAN '{data.ean}' bestaat al bij deze handelaar")
+
+    _assert_org_supports_product_type(db, user.organization_id, data.product_type)
 
     sku = SKU(
         sku_code=sku_code,
@@ -517,6 +544,7 @@ def update_sku(
 
     product_type_changed = "product_type" in changed_fields and data.product_type is not None
     if product_type_changed:
+        _assert_org_supports_product_type(db, sku.organization_id, data.product_type)
         sku.product_type = data.product_type
 
     if "name" in changed_fields and data.name is not None:

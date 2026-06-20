@@ -19,9 +19,11 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi_users.password import PasswordHelper
+from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import User
+from app.database import get_db
+from app.models import Organization, User
 from app.users import current_active_user, get_jwt_strategy
 
 logger = logging.getLogger(__name__)
@@ -338,6 +340,37 @@ def require_merchant(user: User = Depends(current_active_user)) -> User:
     if user.is_platform_admin or user.role in ("owner", "member"):
         return user
     raise HTTPException(status.HTTP_403_FORBIDDEN, "Merchant access required")
+
+
+def require_module(module: str):
+    """Build a dependency that requires ``module`` on the caller's organization.
+
+    Platform admins bypass the check (they manage every org). For everyone else
+    the check keys off **the user's own organization** — so this is for
+    merchant-facing management/reporting endpoints, not for the courier
+    pick/scan flow. Couriers have no organization; their per-order method is
+    enforced against the *order's* organization, resolved inside those handlers.
+    """
+
+    def _require_module(
+        user: User = Depends(current_active_user),
+        db: Session = Depends(get_db),
+    ) -> User:
+        if user.is_platform_admin:
+            return user
+        modules: list[str] = []
+        if user.organization_id:
+            org = db.get(Organization, user.organization_id)
+            if org:
+                modules = org.modules
+        if module not in modules:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                f"Module '{module}' is niet ingeschakeld voor deze organisatie",
+            )
+        return user
+
+    return _require_module
 
 
 # ---------------------------------------------------------------------------

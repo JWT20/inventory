@@ -10,7 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
-from app.auth import get_current_user, require_can_create_orders, require_merchant
+from app.auth import (
+    get_current_user,
+    require_can_create_orders,
+    require_merchant,
+    require_module,
+)
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
@@ -446,7 +451,13 @@ def weekly_pick_photos(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Photos for order lines that are not fully picked when this view opens."""
+    """Photos for order lines that are not fully picked when this view opens.
+
+    Shared by the courier scan flow ("Deze week" + scan-suggestie-carousel), so
+    this must NOT use a user-org module guard: couriers have no organization and
+    would always 403. The per-order/per-org method gating for the pick flow is
+    handled against the *order's* organization in Fase 1, not here.
+    """
     if not week:
         today = datetime.date.today()
         week = f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"
@@ -714,6 +725,7 @@ def weekly_order_summary(
     group_by: str = Query("supplier", description="Groepering: 'supplier' of 'customer'."),
     db: Session = Depends(get_db),
     user: User = Depends(require_merchant),
+    _wk: User = Depends(require_module("week_overview")),
 ):
     """Weekly order summary grouped by supplier or by customer (for invoicing).
 
@@ -1078,6 +1090,7 @@ def approve_order(
     body: OrderApprove | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    _wk: User = Depends(require_module("week_overview")),
 ):
     """Approve an order so the courier can start working on it.
 

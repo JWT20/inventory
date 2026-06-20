@@ -1,5 +1,5 @@
 import { Toaster, toast } from "sonner";
-import { AuthProvider, useAuth } from "@/lib/auth";
+import { AuthProvider, useAuth, hasModule } from "@/lib/auth";
 import { LoginPage } from "@/components/login";
 import { ReceivePage } from "@/components/receive";
 import { SKUsPage } from "@/components/skus";
@@ -54,7 +54,7 @@ function Main() {
     {
       id: "inbound",
       label: "Inbound",
-      show: !isAdmin && (user.role === "owner" || user.role === "member"),
+      show: !isAdmin && (user.role === "owner" || user.role === "member") && hasModule(user, "suppliers"),
     },
     {
       id: "skus",
@@ -69,17 +69,17 @@ function Main() {
     {
       id: "weekly",
       label: "Weekoverzicht",
-      show: !isAdmin && (user.role === "owner" || user.role === "member"),
+      show: !isAdmin && (user.role === "owner" || user.role === "member") && hasModule(user, "week_overview"),
     },
     {
       id: "customers",
       label: "Klanten",
-      show: !isAdmin && (user.role === "owner" || user.role === "member"),
+      show: !isAdmin && (user.role === "owner" || user.role === "member") && hasModule(user, "customer_portal"),
     },
     {
       id: "suppliers",
       label: "Leveranciers",
-      show: !isAdmin && (user.role === "owner" || user.role === "member"),
+      show: !isAdmin && (user.role === "owner" || user.role === "member") && hasModule(user, "suppliers"),
     },
     {
       id: "monthly-boxes",

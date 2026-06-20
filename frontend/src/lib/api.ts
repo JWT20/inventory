@@ -171,6 +171,7 @@ export const api = {
     json("/auth/logout", "POST", { refresh_token: refreshToken }),
 
   // Organizations
+  getModuleCatalog: () => request("/auth/modules/catalog"),
   listOrganizations: () => request("/auth/organizations"),
   createOrganization: (data: { name: string; slug: string; custom_label?: string; enabled_modules?: string[]; auto_inactivate_no_images?: boolean }) =>
     json("/auth/organizations", "POST", data),
