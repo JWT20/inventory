@@ -309,6 +309,7 @@ function SKUDialog({
   // whichever the org supports (vision wins when both are enabled).
   const canVision = hasModule(user, "vision_picking");
   const canBarcode = hasModule(user, "barcode_picking");
+  const canSuppliers = hasModule(user, "suppliers");
   const defaultProductType: "vision" | "barcode" = canVision ? "vision" : "barcode";
   const canDeleteProduct =
     !!user &&
@@ -346,7 +347,9 @@ function SKUDialog({
   const failedImages = images.filter((img) => img.processing_status === "failed");
 
   useEffect(() => {
-    if (open) {
+    // Only fetch suppliers when the org has the module; couriers (no org) and
+    // barcode-only orgs would otherwise trigger a spurious 403 on /suppliers.
+    if (open && canSuppliers) {
       api.listSuppliers().then(setSuppliers).catch(() => {});
     }
     if (open && sku) {
