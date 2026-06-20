@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -503,7 +504,8 @@ function NewOrgDialog({
         <DialogHeader>
           <DialogTitle>Nieuwe organisatie</DialogTitle>
         </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={submit} className="flex flex-col min-h-0 flex-1">
+          <DialogBody className="space-y-4">
           <div className="space-y-2">
             <Label>Naam</Label>
             <Input
@@ -537,8 +539,9 @@ function NewOrgDialog({
               Vervangt "Magazijn" in de header voor deze organisatie
             </p>
           </div>
-          <ModulePicker selected={modules} onChange={setModules} />
-          <Button type="submit" className="w-full">
+            <ModulePicker selected={modules} onChange={setModules} />
+          </DialogBody>
+          <Button type="submit" className="w-full mt-4 flex-shrink-0">
             Aanmaken
           </Button>
         </form>
@@ -597,7 +600,8 @@ function EditOrgDialog({
         <DialogHeader>
           <DialogTitle>Organisatie bewerken</DialogTitle>
         </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={submit} className="flex flex-col min-h-0 flex-1">
+          <DialogBody className="space-y-4">
           <div className="space-y-2">
             <Label>Naam</Label>
             <Input
@@ -648,8 +652,9 @@ function EditOrgDialog({
               </span>
             </label>
           </div>
-          <ModulePicker selected={modules} onChange={setModules} />
-          <Button type="submit" className="w-full">
+            <ModulePicker selected={modules} onChange={setModules} />
+          </DialogBody>
+          <Button type="submit" className="w-full mt-4 flex-shrink-0">
             Opslaan
           </Button>
         </form>
