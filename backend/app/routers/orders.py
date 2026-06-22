@@ -181,11 +181,18 @@ def _order_to_response(
     visible_total = round(sum(visible_line_totals), 2) if visible_line_totals else None
     hidden_lines_count = len([line for line in lines if not line.show_prices])
 
+    # An order is barcode-picked only when every product on it is a barcode
+    # product; anything with a vision product (or an empty order) keeps the
+    # camera flow. Drives which scanner the courier UI opens.
+    line_product_types = {line.sku.product_type for line in order.lines}
+    pick_method = "barcode" if line_product_types == {"barcode"} else "vision"
+
     return OrderResponse(
         id=order.id,
         reference=order.reference,
         status=order.status,
         channel=order.channel,
+        pick_method=pick_method,
         remarks=order.remarks or "",
         delivery_week=order.delivery_week,
         organization_id=order.organization_id,
@@ -442,7 +449,12 @@ def list_orders(
         return []
 
     if week:
-        query = query.filter(Order.delivery_week == week)
+        # Barcode/channel orders are born active without a delivery week, so they
+        # belong to no week at all — surface them alongside the selected week so
+        # the courier always sees orders that are ready to pick now.
+        query = query.filter(
+            or_(Order.delivery_week == week, Order.delivery_week.is_(None))
+        )
 
     orders = query.order_by(Order.created_at.desc()).offset(offset).limit(limit).all()
     return [

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { OrderSelectStep } from "./OrderSelectStep";
 import { ThisWeekStep } from "./ThisWeekStep";
 import { ScanStep } from "./ScanStep";
+import { EanScanStep } from "./EanScanStep";
 import { ConfirmStep } from "./ConfirmStep";
 import { ResultStep } from "./ResultStep";
 import { IdentifyScanStep } from "./IdentifyScanStep";
@@ -83,13 +84,17 @@ export function ReceivePage() {
       )}
 
       {step === "scan" && selectedOrder && (
-        <ScanStep
-          order={selectedOrder}
-          scanMode={scanMode}
-          onScanModeChange={setScanMode}
-          onBooked={handleBooked}
-          onBack={reset}
-        />
+        selectedOrder.pick_method === "barcode" ? (
+          <EanScanStep order={selectedOrder} onBack={reset} />
+        ) : (
+          <ScanStep
+            order={selectedOrder}
+            scanMode={scanMode}
+            onScanModeChange={setScanMode}
+            onBooked={handleBooked}
+            onBack={reset}
+          />
+        )
       )}
 
       {step === "confirm" && pendingConfirmation && selectedOrder && (

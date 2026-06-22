@@ -22,7 +22,13 @@ export function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (ord
     >
       <div className="flex justify-between items-center mb-1">
         <span className="font-semibold">{o.reference}</span>
-        <div className="flex gap-1">
+        <div className="flex gap-1 items-center">
+          <Badge
+            variant={o.pick_method === "barcode" ? "default" : "outline"}
+            className="text-xs"
+          >
+            {o.pick_method === "barcode" ? "Scanner" : "Camera"}
+          </Badge>
           {days.map((d) => (
             <Badge key={d} variant="secondary" className="text-xs">
               {DELIVERY_DAY_SHORT[d] || d}
