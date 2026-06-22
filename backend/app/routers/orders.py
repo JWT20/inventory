@@ -7,7 +7,7 @@ from collections import defaultdict
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth import (
@@ -185,6 +185,7 @@ def _order_to_response(
         id=order.id,
         reference=order.reference,
         status=order.status,
+        channel=order.channel,
         remarks=order.remarks or "",
         delivery_week=order.delivery_week,
         organization_id=order.organization_id,
@@ -268,6 +269,18 @@ def _current_iso_week() -> str:
     return f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"
 
 
+def _week_planning_org_ids(db: Session) -> list[int]:
+    """Org ids that run the weekly approval/planning flow (week_overview module).
+
+    Scopes the weekly views' weekless-order fallback: born-active channel orders
+    (barcode merchants have no delivery_week and never go through approval) must
+    not leak into the wine week views — most visibly the courier's cross-org pick
+    carousel. Orgs are few, so loading and filtering in Python keeps the query
+    portable across Postgres and the SQLite test DB.
+    """
+    return [o.id for o in db.query(Organization).all() if "week_overview" in o.modules]
+
+
 @router.post("", response_model=OrderResponse)
 def create_order(
     body: ManualOrderCreate,
@@ -300,13 +313,20 @@ def create_order(
                 )
 
     ref = f"ORD-{uuid.uuid4().hex[:8].upper()}"
-    # New orders await merchant approval; the delivery week is assigned at
-    # the moment of approval, not at creation.
+    # Orders await merchant approval only where the organization runs the weekly
+    # approval flow (the week_overview module). Merchants without it — the
+    # barcode/channel merchants — have no approval step, so their orders are born
+    # active and ready to pick. Keyed on the org's modules, not the channel, so a
+    # manually-placed barcode order is treated the same as an imported one. The
+    # delivery week stays None and is assigned at approval (week-flow orders only).
+    org = db.get(Organization, org_id)
+    needs_approval = bool(org and "week_overview" in org.modules)
     order = Order(
         organization_id=org_id,
         created_by=user.id,
         reference=ref,
-        status="pending_approval",
+        channel="manual",
+        status="pending_approval" if needs_approval else "active",
         remarks=body.remarks,
         delivery_week=None,
     )
@@ -465,6 +485,7 @@ def weekly_pick_photos(
     monday, sunday = _parse_iso_week(week)
     start_dt = datetime.datetime.combine(monday, datetime.time.min)
     end_dt = datetime.datetime.combine(sunday, datetime.time.max)
+    week_org_ids = _week_planning_org_ids(db)
 
     query = (
         db.query(OrderLine)
@@ -478,7 +499,14 @@ def weekly_pick_photos(
             OrderLine.booked_count < OrderLine.quantity,
             or_(
                 Order.delivery_week == week,
-                (Order.delivery_week.is_(None)) & (Order.created_at >= start_dt) & (Order.created_at <= end_dt),
+                # Weekless fallback only for week-planning orgs: born-active
+                # channel orders (no delivery_week) must not surface here.
+                and_(
+                    Order.delivery_week.is_(None),
+                    Order.organization_id.in_(week_org_ids),
+                    Order.created_at >= start_dt,
+                    Order.created_at <= end_dt,
+                ),
             ),
         )
     )
@@ -748,6 +776,7 @@ def weekly_order_summary(
     # Fetch all order lines for the delivery week
     start_dt = datetime.datetime.combine(monday, datetime.time.min)
     end_dt = datetime.datetime.combine(sunday, datetime.time.max)
+    week_org_ids = _week_planning_org_ids(db)
 
     query = (
         db.query(OrderLine)
@@ -763,8 +792,14 @@ def weekly_order_summary(
             Order.status.in_(("pending_images", "active")),
             or_(
                 Order.delivery_week == week,
-                # Fallback for legacy orders without delivery_week
-                (Order.delivery_week.is_(None)) & (Order.created_at >= start_dt) & (Order.created_at <= end_dt),
+                # Weekless fallback only for week-planning orgs (legacy wine
+                # orders); born-active channel orders must stay out.
+                and_(
+                    Order.delivery_week.is_(None),
+                    Order.organization_id.in_(week_org_ids),
+                    Order.created_at >= start_dt,
+                    Order.created_at <= end_dt,
+                ),
             ),
         )
     )

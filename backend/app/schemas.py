@@ -467,6 +467,8 @@ class OrderResponse(BaseModel):
     id: int
     reference: str
     status: str
+    # Order provenance: "manual" (in-app/customer), "shopify" or "bol".
+    channel: str = "manual"
     remarks: str = ""
     delivery_week: str | None = None
     organization_id: int | None = None
