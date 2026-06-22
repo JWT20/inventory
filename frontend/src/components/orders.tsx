@@ -443,6 +443,22 @@ export function OrdersPage() {
   const groupStats = (groups: WeekGroup[]) =>
     weekStats(groups.flatMap((group) => group.orders));
 
+  // Headline open-work totals must keep counting active orders that were moved
+  // into the "Wacht op foto's" bucket — they stay pickable workload, only their
+  // card is shown elsewhere. Built from every active-with-remaining order,
+  // independent of where its card lands. weekStats only counts active orders, so
+  // pending_images still contribute 0 (as before).
+  const openWorkGroups = isCustomer
+    ? []
+    : buildWeekGroups(
+        visibleOrders.filter((o) => !isApprovalOrder(o) && isOpenWorkOrder(o)),
+      );
+  const currentWeekStats = weekStats(
+    openWorkGroups.find((g) => g.week === currentWeek)?.orders ?? [],
+  );
+  const overdueWorkGroups = openWorkGroups.filter((g) => g.week < currentWeek);
+  const upcomingWorkGroups = openWorkGroups.filter((g) => g.week > currentWeek);
+
   const renderOrderCard = (o: Order, muted = false) => (
     <Card
       key={o.id}
@@ -630,10 +646,10 @@ export function OrdersPage() {
                       (currentGroup?.orders.length ?? 0) === 1 ? "" : "s"
                     }${currentGroup ? ` · levering ${currentGroup.range}` : ""}`
                   : `${formatBoxesBottles(
-                      weekStats(currentGroup?.orders ?? []).openBoxes,
-                      weekStats(currentGroup?.orders ?? []).openBottles,
+                      currentWeekStats.openBoxes,
+                      currentWeekStats.openBottles,
                     )} open · ${
-                      weekStats(currentGroup?.orders ?? []).openOrders
+                      currentWeekStats.openOrders
                     } orders${currentGroup ? ` · levering ${currentGroup.range}` : ""}`}
               </p>
             </div>
@@ -642,6 +658,10 @@ export function OrdersPage() {
               <div className="space-y-3">
                 {sortForPicking(currentGroup.orders).map((o) => renderOrderCard(o))}
               </div>
+            ) : currentWeekStats.openOrders > 0 ? (
+              <p className="text-center text-muted-foreground py-8">
+                Alle orders van deze week staan onder “Wacht op foto's”.
+              </p>
             ) : (
               <p className="text-center text-muted-foreground py-8">
                 Geen orders voor deze week
@@ -677,9 +697,9 @@ export function OrdersPage() {
               renderCollapsedGroup(
                 "Achterstallig",
                 `${formatBoxesBottles(
-                  groupStats(overdueGroups).openBoxes,
-                  groupStats(overdueGroups).openBottles,
-                )} open · ${groupStats(overdueGroups).openOrders} orders`,
+                  groupStats(overdueWorkGroups).openBoxes,
+                  groupStats(overdueWorkGroups).openBottles,
+                )} open · ${groupStats(overdueWorkGroups).openOrders} orders`,
                 showOverdue,
                 () => setShowOverdue((value) => !value),
                 overdueGroups.map((group) => renderWeekGroup(group, true)),
@@ -702,9 +722,9 @@ export function OrdersPage() {
                 isCustomer
                   ? `${upcomingGroups.reduce((n, g) => n + g.orders.length, 0)} orders`
                   : `${formatBoxesBottles(
-                      groupStats(upcomingGroups).openBoxes,
-                      groupStats(upcomingGroups).openBottles,
-                    )} open · ${groupStats(upcomingGroups).openOrders} orders`,
+                      groupStats(upcomingWorkGroups).openBoxes,
+                      groupStats(upcomingWorkGroups).openBottles,
+                    )} open · ${groupStats(upcomingWorkGroups).openOrders} orders`,
                 showUpcoming,
                 () => setShowUpcoming((value) => !value),
                 upcomingGroups.map((group) => renderWeekGroup(group, true)),
