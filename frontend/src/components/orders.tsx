@@ -369,21 +369,32 @@ export function OrdersPage() {
   // For customers: split by week (current/future vs past), ignore status entirely
   // and hide cancelled orders. For everyone else: keep the open/history split,
   // pull orders awaiting approval into a "Te beoordelen" action bucket and
-  // pending_images orders into their own bucket.
+  // orders that still miss a reference photo into their own bucket.
   const visibleOrders = isCustomer
     ? orders.filter((o) => o.status !== "cancelled")
     : orders;
   const orderWeek = (o: Order) => o.delivery_week || getISOWeek(o.created_at);
 
   const approvalOrders = isCustomer ? [] : visibleOrders.filter(isApprovalOrder);
+
+  // "Wacht op foto's": open orders (not awaiting approval) that still miss a
+  // reference photo — whether parked as pending_images or already active. Active
+  // orders that miss a photo (e.g. after a reference image was removed) used to
+  // disappear into the normal open list; this surfaces them under their own
+  // heading again so the courier sees a photo still has to be made.
+  const isWaitingForPhotos = (o: Order) =>
+    !isApprovalOrder(o) &&
+    (o.status === "pending_images" ||
+      (isOpenWorkOrder(o) && missingImageCount(o) > 0));
+
   const pendingOrders = isCustomer
     ? []
-    : visibleOrders.filter((o) => isPendingOrder(o) && !isApprovalOrder(o));
+    : visibleOrders.filter(isWaitingForPhotos);
   const pendingGroups = buildWeekGroups(pendingOrders);
 
   const nonPendingOrders = isCustomer
     ? visibleOrders
-    : visibleOrders.filter((o) => !isPendingOrder(o));
+    : visibleOrders.filter((o) => !isPendingOrder(o) && !isWaitingForPhotos(o));
 
   const openSourceOrders = isCustomer
     ? nonPendingOrders.filter((o) => orderWeek(o) >= currentWeek)
