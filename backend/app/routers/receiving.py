@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy.orm import Session, contains_eager, joinedload
 
-from app.auth import require_inbound_booker
+from app.auth import assert_order_module, require_inbound_booker
 from app.config import settings
 from app.database import get_db
 from app.events import publish_event
@@ -453,6 +453,7 @@ def sku_distribution(
         and context_order.organization_id != user.organization_id
     ):
         raise HTTPException(403, "Geen toegang tot deze organisatie")
+    assert_order_module(context_order, "vision_picking", user)
     sku = db.get(SKU, sku_id)
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
@@ -559,6 +560,10 @@ async def book_box(
             raise HTTPException(404, "Order niet gevonden")
         if order.status != "active":
             raise HTTPException(400, f"Order is niet actief (status: {order.status})")
+        # Photo/AI picking only runs for orders whose organization has the
+        # vision-picking module. Keyed on the order's org, not the user's:
+        # couriers have no org and serve across merchants.
+        assert_order_module(order, "vision_picking", user)
 
         image_bytes = _read_image(file)
         t_read = time.perf_counter()
@@ -840,6 +845,7 @@ def confirm_booking(
         raise HTTPException(404, "Order niet gevonden")
     if order.status != "active":
         raise HTTPException(400, f"Order is niet actief (status: {order.status})")
+    assert_order_module(order, "vision_picking", user)
 
     available = order_line.quantity - order_line.booked_count
     quantity = min(body.quantity, available)
@@ -958,6 +964,7 @@ async def register_reference_and_book(
         raise HTTPException(404, "Order niet gevonden")
     if context_order.status != "active":
         raise HTTPException(400, f"Order is niet actief (status: {context_order.status})")
+    assert_order_module(context_order, "vision_picking", user)
 
     sku = db.get(SKU, body.sku_id)
     if not sku:
@@ -1091,6 +1098,7 @@ def book_more(
         raise HTTPException(404, "Order niet gevonden")
     if order.status != "active":
         raise HTTPException(400, f"Order is niet actief (status: {order.status})")
+    assert_order_module(order, "vision_picking", user)
 
     sku = db.get(SKU, order_line.sku_id)
     if not sku:

@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models import Organization, User
+from app.models import Order, Organization, User
 from app.users import current_active_user, get_jwt_strategy
 
 logger = logging.getLogger(__name__)
@@ -371,6 +371,29 @@ def require_module(module: str):
         return user
 
     return _require_module
+
+
+def assert_order_module(order: Order, module: str, user: User) -> None:
+    """Enforce that **the order's** organization has ``module`` enabled.
+
+    The order-scoped counterpart to :func:`require_module`. Where that keys off
+    the *caller's* organization, this keys off the **order's** — which is what
+    the courier pick/scan flow needs: a courier has no organization of their own
+    and serves whichever merchant the order belongs to, so the method that may
+    run is decided by the order, not the user. Platform admins bypass, mirroring
+    ``require_module``.
+
+    An order without an organization has no modules and is therefore rejected.
+    """
+    if user.is_platform_admin:
+        return
+    org = order.organization
+    modules: list[str] = org.modules if org else []
+    if module not in modules:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"Module '{module}' is niet ingeschakeld voor deze organisatie",
+        )
 
 
 # ---------------------------------------------------------------------------
