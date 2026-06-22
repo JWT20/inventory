@@ -59,6 +59,18 @@ def _barcode_org(db, slug="socks-pick"):
     return _make_org(db, slug, ["inventory", "orders", "barcode_picking", "channel_orders"])
 
 
+def _make_owner_token(db, org, username):
+    owner = User(
+        username=username, email=f"{username}@local",
+        hashed_password=hash_password("OwnerPass1!"), role="owner",
+        organization_id=org.id, is_verified=True,
+    )
+    db.add(owner)
+    db.commit()
+    db.refresh(owner)
+    return create_token(owner.id)
+
+
 def test_scan_books_one_unit(client, db, courier_token):
     org = _barcode_org(db)
     sku = _make_barcode_sku(db, org, "SOK-1", "8711111111111")
@@ -153,6 +165,30 @@ def test_barcode_order_exposes_pick_method_and_surfaces_weekless(client, db, cou
     by_id = {o["id"]: o for o in resp.json()}
     assert order.id in by_id
     assert by_id[order.id]["pick_method"] == "barcode"
+
+
+def test_owner_cannot_book_other_orgs_order(client, db):
+    """An owner of org A must not be able to book against org B's order, even
+    though both orgs have barcode_picking (module check != access check)."""
+    org_b = _barcode_org(db, "socks-b-owned")
+    sku = _make_barcode_sku(db, org_b, "SOK-OB", "8700000000200")
+    order, _ = _make_active_order(db, org_b, sku)
+    # Owner belongs to a different barcode org.
+    org_a = _barcode_org(db, "socks-a-owned")
+    token = _make_owner_token(db, org_a, "owner-a")
+
+    resp = _scan(client, token, order.id, "8700000000200")
+    assert resp.status_code == 403
+
+
+def test_owner_can_book_own_orgs_order(client, db):
+    org = _barcode_org(db, "socks-own")
+    sku = _make_barcode_sku(db, org, "SOK-OWN", "8700000000201")
+    order, _ = _make_active_order(db, org, sku)
+    token = _make_owner_token(db, org, "owner-self")
+
+    resp = _scan(client, token, order.id, "8700000000201")
+    assert resp.status_code == 200
 
 
 def test_inactive_order_rejected(client, db, courier_token):

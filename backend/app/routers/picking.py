@@ -46,6 +46,15 @@ def scan_ean(
     order = db.get(Order, body.order_id)
     if not order:
         raise HTTPException(404, "Order niet gevonden")
+    # Owners/members may only act on their own organization's orders; couriers
+    # and platform admins serve across organizations. assert_order_module checks
+    # the order's *module*, not the caller's *access* — so this guard is what
+    # keeps an owner of org A out of org B's order. Same check as receiving.
+    if (
+        user.role in ("owner", "member")
+        and order.organization_id != user.organization_id
+    ):
+        raise HTTPException(403, "Geen toegang tot deze organisatie")
     if order.status != "active":
         raise HTTPException(400, f"Order is niet actief (status: {order.status})")
     assert_order_module(order, "barcode_picking", user)
