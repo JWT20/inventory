@@ -42,7 +42,7 @@ def _node(order_id, barcode, qty=2, updated="2026-06-23T10:00:00Z"):
         "createdAt": "2026-06-23T09:00:00Z",
         "updatedAt": updated,
         "displayFinancialStatus": "PAID",
-        "customer": {"displayName": "Web Klant"},
+        "shippingAddress": {"name": "Web Klant"},
         "lineItems": {
             "edges": [
                 {"node": {"quantity": qty, "title": "Race sok",

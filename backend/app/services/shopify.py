@@ -42,7 +42,7 @@ query($first: Int!, $after: String, $query: String) {
         createdAt
         updatedAt
         displayFinancialStatus
-        customer { displayName }
+        shippingAddress { name }
         lineItems(first: 100) {
           edges { node { quantity title variant { barcode sku } } }
         }
@@ -61,7 +61,9 @@ def _gid_to_id(gid: str) -> str:
 
 def to_normalized(node: dict) -> NormalizedChannelOrder:
     """Map one Shopify order node to the internal normalized order. Pure."""
-    customer = node.get("customer") or {}
+    # Customer name comes from the shipping address (covered by read_orders), so
+    # the integration does not need the read_customers scope.
+    ship = node.get("shippingAddress") or {}
     line_edges = (node.get("lineItems") or {}).get("edges") or []
     lines: list[NormalizedLine] = []
     for edge in line_edges:
@@ -85,7 +87,7 @@ def to_normalized(node: dict) -> NormalizedChannelOrder:
     return NormalizedChannelOrder(
         external_id=_gid_to_id(node.get("id", "")),
         ordered_at=ordered_at,
-        customer_name=customer.get("displayName"),
+        customer_name=ship.get("name"),
         financial_status=(node.get("displayFinancialStatus") or "pending").lower(),
         lines=lines,
     )
