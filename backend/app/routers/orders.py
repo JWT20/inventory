@@ -448,6 +448,11 @@ def list_orders(
     else:
         return []
 
+    # Observe-mode channel orders are inert: they belong to the reconciliation
+    # view (Fase 3), not the normal order list. The courier filters above already
+    # exclude them; this also keeps them out of admin/owner listings.
+    query = query.filter(Order.status != "observed")
+
     if week:
         # Barcode/channel orders are born active without a delivery week, so they
         # belong to no week at all — surface them alongside the selected week so

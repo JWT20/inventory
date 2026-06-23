@@ -338,7 +338,10 @@ class CustomerSKU(Base):
     sku: Mapped["SKU"] = relationship()
 
 
-VALID_ORDER_STATUSES = ("pending_approval", "pending_images", "active", "completed", "cancelled", "closed")
+VALID_ORDER_STATUSES = ("pending_approval", "pending_images", "active", "completed", "cancelled", "closed", "observed")
+# "observed": a channel order imported in observe-mode — visible for
+# reconciliation but inert (not pickable, no stock movement). Promoted to
+# "active" at cutover (live mode).
 
 
 class Order(Base):
@@ -650,3 +653,66 @@ class StockMovement(Base):
     sku: Mapped["SKU"] = relationship()
     organization: Mapped["Organization | None"] = relationship()
     performed_by_user: Mapped["User"] = relationship(foreign_keys=[performed_by])
+
+
+class ChannelConnection(Base):
+    """A sales-channel connection (Shopify/bol) for one organization.
+
+    Holds the per-org operational state for importing channel orders: which
+    channel, observe vs live mode, and the incremental sync cursor. Credentials
+    are added when the adapter that needs them lands (PR 2). One connection per
+    (organization, channel).
+    """
+    __tablename__ = "channel_connections"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "channel", name="uq_channel_conn_org_channel"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False
+    )
+    channel: Mapped[str] = mapped_column(String(20))
+    # "observe" = import + show for reconciliation, no stock/fulfilment effect;
+    # "live" = born-active + (later) stock sync. Default observe — never act by
+    # surprise.
+    mode: Mapped[str] = mapped_column(
+        String(20), default="observe", server_default="observe"
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default="active"
+    )
+    # Incremental sync pointer (e.g. last processed order id / timestamp), so a
+    # poll never replays the whole order history.
+    cursor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_synced_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    organization: Mapped["Organization"] = relationship()
+
+
+class ChannelSyncLog(Base):
+    """One record per imported channel order — the data the observe/reconciliation
+    view (PR 4) reads: did it import, how many lines matched a SKU, and which
+    EANs did not match the catalogue."""
+    __tablename__ = "channel_sync_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
+    channel: Mapped[str] = mapped_column(String(20))
+    external_id: Mapped[str] = mapped_column(String(255))
+    action: Mapped[str] = mapped_column(String(20))  # created / updated
+    matched_lines: Mapped[int] = mapped_column(Integer, default=0)
+    # JSON-encoded list of EANs on the order that had no matching SKU.
+    unmatched_eans: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    synced_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    organization: Mapped["Organization | None"] = relationship()
