@@ -5,6 +5,7 @@ import { ReceivePage } from "@/components/receive";
 import { SKUsPage } from "@/components/skus";
 import { OrdersPage } from "@/components/orders";
 import { AccountsPage } from "@/components/accounts";
+import { ChannelsPage } from "@/components/channels";
 import { SuppliersPage } from "@/components/suppliers";
 import { CustomersPage } from "@/components/customers";
 import { InventoryPage } from "@/components/inventory";
@@ -16,14 +17,21 @@ import { LogOut } from "lucide-react";
 
 export { toast };
 
-type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "customers" | "suppliers" | "accounts" | "weekly" | "monthly-boxes";
+type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "customers" | "suppliers" | "accounts" | "channels" | "weekly" | "monthly-boxes";
 
 const JURJEN_ORG_SLUG = "jurjen";
 
 function Main() {
   const { user, loading, logout } = useAuth();
+  // Returning from the Shopify OAuth redirect (/?shopify=connected) should land
+  // an admin on Kanalen, so ChannelsPage mounts and shows the success toast +
+  // clears the query (inactive Radix tabs aren't mounted).
+  const shopifyReturn =
+    new URLSearchParams(window.location.search).get("shopify") === "connected";
   const defaultPage: Page = user?.is_platform_admin
-    ? "accounts"
+    ? shopifyReturn
+      ? "channels"
+      : "accounts"
     : user?.role === "courier"
       ? "receive"
       : "orders";
@@ -87,6 +95,11 @@ function Main() {
       show: isAdmin || (!isAdmin && user.role === "courier"),
     },
     {
+      id: "channels",
+      label: "Kanalen",
+      show: isAdmin,
+    },
+    {
       id: "accounts",
       label: "Beheer",
       show: isAdmin,
@@ -133,6 +146,7 @@ function Main() {
             {t.id === "monthly-boxes" && <MonthlyBoxesPage />}
             {t.id === "customers" && <CustomersPage />}
             {t.id === "suppliers" && <SuppliersPage />}
+            {t.id === "channels" && <ChannelsPage />}
             {t.id === "accounts" && <AccountsPage />}
           </TabsContent>
         ))}

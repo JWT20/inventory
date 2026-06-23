@@ -139,17 +139,18 @@ def test_sync_passes_cursor_to_client(db):
 
 # --- endpoint gating -------------------------------------------------------
 
-def test_sync_endpoint_400_when_not_configured(client, db, owner_token):
-    # owner_token's org (sample_org) has all modules incl. channel_orders, but no
-    # Shopify credentials are set in the test env → 400, not 500.
-    resp = client.post("/api/channels/shopify/sync", headers=auth_header(owner_token))
+def test_sync_endpoint_400_when_not_configured(client, db, admin_token, sample_org):
+    # sample_org has channel_orders but no Shopify connection token → 400, not 500.
+    resp = client.post(
+        f"/api/channels/shopify/sync?organization_id={sample_org.id}",
+        headers=auth_header(admin_token),
+    )
     assert resp.status_code == 400
 
 
 def test_sync_endpoint_403_for_customer(client, db, customer_user):
     from app.auth import create_token
-    # customer_user is in sample_org (has channel_orders), but customers must not
-    # be able to import channel orders — require_merchant blocks them.
+    # Channel endpoints are platform-admin only; a customer is rejected.
     token = create_token(customer_user.id)
     resp = client.post("/api/channels/shopify/sync", headers=auth_header(token))
     assert resp.status_code == 403
@@ -181,25 +182,16 @@ def test_fetch_orders_paginates_line_items(monkeypatch):
     assert barcodes == ["E1", "E2"]  # second page appended, nothing dropped
 
 
-def test_sync_uses_only_own_connection_token(client, db, monkeypatch):
-    """Cross-tenant guard: even with a global shop domain configured, an org
-    without its own OAuth token cannot sync (no global-credential fallback)."""
+def test_sync_uses_only_own_connection_token(client, db, monkeypatch, admin_token):
+    """No global-credential fallback: even with a global shop domain configured,
+    an org without its own OAuth token cannot sync."""
     monkeypatch.setattr(settings, "shopify_shop_domain", "racesokken.myshopify.com")
-    from app.auth import create_token, hash_password
-    from app.models import User
-
-    org = _org(db, "other-tenant")  # has channel_orders, but never did OAuth
-    owner = User(username="ot", email="ot@local",
-                 hashed_password=hash_password("OwnerPass1!"), role="owner",
-                 organization_id=org.id, is_verified=True)
-    db.add(owner)
-    db.commit()
-    db.refresh(owner)
-
+    org = _org(db, "other-tenant")  # channel_orders, but no OAuth connection
     resp = client.post(
-        "/api/channels/shopify/sync", headers=auth_header(create_token(owner.id))
+        f"/api/channels/shopify/sync?organization_id={org.id}",
+        headers=auth_header(admin_token),
     )
-    assert resp.status_code == 400  # not connected → cannot use global creds
+    assert resp.status_code == 400  # global creds are not used as a fallback
 
 
 def test_admin_sync_blocked_for_org_without_channel_module(client, db, admin_token):
@@ -227,3 +219,65 @@ def test_sync_endpoint_403_without_channel_module(client, db):
         "/api/channels/shopify/sync", headers=auth_header(create_token(owner.id))
     )
     assert resp.status_code == 403
+
+
+# --- new admin UI endpoints ------------------------------------------------
+
+def test_status_reports_not_connected(client, db, admin_token, sample_org):
+    resp = client.get(
+        f"/api/channels/shopify/status?organization_id={sample_org.id}",
+        headers=auth_header(admin_token),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["connected"] is False
+
+
+def test_connect_url_returns_authorize_url(client, db, admin_token, sample_org, monkeypatch):
+    monkeypatch.setattr(settings, "shopify_api_key", "key123")
+    monkeypatch.setattr(settings, "shopify_shop_domain", "racesokken.myshopify.com")
+    monkeypatch.setattr(settings, "domain", "dockscan.nl")
+    resp = client.get(
+        f"/api/channels/shopify/connect-url?organization_id={sample_org.id}",
+        headers=auth_header(admin_token),
+    )
+    assert resp.status_code == 200
+    assert "admin/oauth/authorize" in resp.json()["url"]
+    assert "client_id=key123" in resp.json()["url"]
+
+
+def test_connect_url_403_for_non_admin(client, db, owner_token, sample_org):
+    resp = client.get(
+        f"/api/channels/shopify/connect-url?organization_id={sample_org.id}",
+        headers=auth_header(owner_token),
+    )
+    assert resp.status_code == 403
+
+
+def test_reconciliation_lists_unmatched_eans(client, db, admin_token, sample_org):
+    from app.services.channel_import import (
+        NormalizedChannelOrder,
+        NormalizedLine,
+        import_channel_order,
+    )
+
+    conn = ChannelConnection(organization_id=sample_org.id, channel="shopify", mode="observe")
+    db.add(conn)
+    db.commit()
+    db.refresh(conn)
+    import_channel_order(
+        db, conn,
+        NormalizedChannelOrder(
+            external_id="R1", lines=[NormalizedLine(ean="9999999999999", quantity=1)]
+        ),
+    )
+    db.commit()
+
+    resp = client.get(
+        f"/api/channels/shopify/reconciliation?organization_id={sample_org.id}",
+        headers=auth_header(admin_token),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "9999999999999" in body["unmatched_eans"]
+    assert len(body["orders"]) == 1
+    assert body["orders"][0]["external_id"] == "R1"

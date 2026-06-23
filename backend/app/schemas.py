@@ -534,6 +534,32 @@ class ChannelSyncSummary(BaseModel):
     unmatched: int
 
 
+class ChannelConnectUrl(BaseModel):
+    url: str
+
+
+class ChannelStatus(BaseModel):
+    connected: bool
+    shop_domain: str | None = None
+    mode: str | None = None
+    last_synced_at: datetime | None = None
+
+
+class ChannelOrderRow(BaseModel):
+    external_id: str
+    reference: str | None = None
+    ordered_at: datetime | None = None
+    status: str | None = None
+    matched_lines: int
+    unmatched_eans: list[str] = []
+
+
+class ChannelReconciliation(BaseModel):
+    status: ChannelStatus
+    orders: list[ChannelOrderRow]
+    unmatched_eans: list[str]
+
+
 class EanScanRequest(BaseModel):
     order_id: int = Field(..., gt=0)
     ean: str = Field(..., min_length=1)

@@ -47,14 +47,14 @@ def test_verify_oauth_hmac(monkeypatch):
 
 # --- install ---------------------------------------------------------------
 
-def test_install_redirects_to_shopify(client, db, monkeypatch, owner_token):
+def test_install_redirects_to_shopify(client, db, monkeypatch, admin_token, sample_org):
     monkeypatch.setattr(settings, "shopify_api_key", "key123")
     monkeypatch.setattr(settings, "shopify_shop_domain", "racesokken.myshopify.com")
     monkeypatch.setattr(settings, "domain", "dockscan.nl")
 
     resp = client.get(
-        "/api/channels/shopify/install",
-        headers=auth_header(owner_token),
+        f"/api/channels/shopify/install?organization_id={sample_org.id}",
+        headers=auth_header(admin_token),
         follow_redirects=False,
     )
     assert resp.status_code in (302, 307)
@@ -64,22 +64,21 @@ def test_install_redirects_to_shopify(client, db, monkeypatch, owner_token):
     assert "state=" in loc
 
 
-def test_install_403_for_customer(client, db, customer_user):
-    from app.auth import create_token
-    token = create_token(customer_user.id)
+def test_install_403_for_non_admin(client, db, owner_token, sample_org):
+    # Channel endpoints are platform-admin only.
     resp = client.get(
-        "/api/channels/shopify/install",
-        headers=auth_header(token),
+        f"/api/channels/shopify/install?organization_id={sample_org.id}",
+        headers=auth_header(owner_token),
         follow_redirects=False,
     )
     assert resp.status_code == 403
 
 
-def test_install_400_when_not_configured(client, db, owner_token):
+def test_install_400_when_not_configured(client, db, admin_token, sample_org):
     # No Shopify settings in the test env → 400 (not a redirect).
     resp = client.get(
-        "/api/channels/shopify/install",
-        headers=auth_header(owner_token),
+        f"/api/channels/shopify/install?organization_id={sample_org.id}",
+        headers=auth_header(admin_token),
         follow_redirects=False,
     )
     assert resp.status_code == 400
