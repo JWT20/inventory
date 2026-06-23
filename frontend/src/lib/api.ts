@@ -179,6 +179,16 @@ export const api = {
     json(`/auth/organizations/${id}`, "PATCH", data),
   deleteOrganization: (id: number) => request(`/auth/organizations/${id}`, { method: "DELETE" }),
 
+  // Channels (Shopify) — platform-admin only
+  channelStatus: (orgId: number) =>
+    request(`/channels/shopify/status?organization_id=${orgId}`),
+  channelConnectUrl: (orgId: number) =>
+    request(`/channels/shopify/connect-url?organization_id=${orgId}`),
+  channelSync: (orgId: number) =>
+    request(`/channels/shopify/sync?organization_id=${orgId}`, { method: "POST" }),
+  channelReconciliation: (orgId: number) =>
+    request(`/channels/shopify/reconciliation?organization_id=${orgId}`),
+
   // Suppliers
   listSuppliers: () => request("/suppliers"),
   createSupplier: (data: { name: string }) => json("/suppliers", "POST", data),
