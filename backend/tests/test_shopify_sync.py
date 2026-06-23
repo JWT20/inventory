@@ -4,6 +4,7 @@ The mapping is pure (canned GraphQL nodes), and the sync runner takes an
 injected client so no real HTTP happens. Orders land as observe-mode via the
 shared importer.
 """
+from app.config import settings
 from app.models import ChannelConnection, Order, Organization, SKU
 from app.services.shopify import SyncSummary, sync_shopify, to_normalized
 from tests.conftest import auth_header
@@ -178,6 +179,27 @@ def test_fetch_orders_paginates_line_items(monkeypatch):
     assert len(nodes) == 1
     barcodes = [e["node"]["variant"]["barcode"] for e in nodes[0]["lineItems"]["edges"]]
     assert barcodes == ["E1", "E2"]  # second page appended, nothing dropped
+
+
+def test_sync_uses_only_own_connection_token(client, db, monkeypatch):
+    """Cross-tenant guard: even with a global shop domain configured, an org
+    without its own OAuth token cannot sync (no global-credential fallback)."""
+    monkeypatch.setattr(settings, "shopify_shop_domain", "racesokken.myshopify.com")
+    from app.auth import create_token, hash_password
+    from app.models import User
+
+    org = _org(db, "other-tenant")  # has channel_orders, but never did OAuth
+    owner = User(username="ot", email="ot@local",
+                 hashed_password=hash_password("OwnerPass1!"), role="owner",
+                 organization_id=org.id, is_verified=True)
+    db.add(owner)
+    db.commit()
+    db.refresh(owner)
+
+    resp = client.post(
+        "/api/channels/shopify/sync", headers=auth_header(create_token(owner.id))
+    )
+    assert resp.status_code == 400  # not connected → cannot use global creds
 
 
 def test_sync_endpoint_403_without_channel_module(client, db):

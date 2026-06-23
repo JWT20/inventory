@@ -175,7 +175,9 @@ class ShopifyClient:
         api_version: str | None = None,
     ) -> None:
         self.shop_domain = shop_domain or settings.shopify_shop_domain
-        self.access_token = access_token or settings.shopify_access_token
+        # No global-token fallback: a sync token must come from the org's own
+        # OAuth connection (see sync_shopify).
+        self.access_token = access_token or ""
         self.api_version = api_version or settings.shopify_api_version
 
     @property
@@ -258,9 +260,12 @@ def sync_shopify(db: Session, connection: ChannelConnection, client=None) -> Syn
     re-seen but never duplicated. Advances the cursor to the newest updatedAt.
     Does NOT commit — the caller owns the transaction.
     """
+    # Strictly per-connection credentials: NEVER fall back to global env
+    # credentials, or any org with the (default-on) channel_orders module could
+    # pull the configured shop into its own tenant.
     client = client or ShopifyClient(
-        shop_domain=connection.shop_domain or settings.shopify_shop_domain,
-        access_token=connection.access_token or settings.shopify_access_token,
+        shop_domain=connection.shop_domain,
+        access_token=connection.access_token,
     )
     if not client.configured:
         raise RuntimeError("Shopify niet geconfigureerd")

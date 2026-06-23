@@ -56,8 +56,9 @@ class Settings(BaseSettings):
     # shopify_access_token is only an optional manual fallback.
     shopify_api_key: str = ""       # Client ID
     shopify_api_secret: str = ""    # Client secret — OAuth token exchange + HMAC
-    shopify_access_token: str = ""  # optional manual fallback (legacy static token)
     shopify_api_version: str = "2025-01"
+    # NB: the per-shop access token is obtained via OAuth and stored on the
+    # ChannelConnection — never as a global env var (that would cross tenants).
 
     @field_validator("database_url")
     @classmethod

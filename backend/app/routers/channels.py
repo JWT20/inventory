@@ -137,9 +137,10 @@ def trigger_shopify_sync(
     """Pull Shopify orders updated since the last sync and import them (observe)."""
     org_id = _resolve_org_id(user, organization_id)
     connection = _get_or_create_connection(db, org_id, "shopify")
+    # Per-connection credentials only — no global env fallback (cross-tenant).
     client = ShopifyClient(
-        shop_domain=connection.shop_domain or settings.shopify_shop_domain,
-        access_token=connection.access_token or settings.shopify_access_token,
+        shop_domain=connection.shop_domain,
+        access_token=connection.access_token,
     )
     if not client.configured:
         raise HTTPException(
