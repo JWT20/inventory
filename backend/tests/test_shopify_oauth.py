@@ -95,7 +95,7 @@ def test_callback_stores_token(client, db, monkeypatch):
         lambda shop, code: {"access_token": "shpat_test", "scope": "read_orders,read_products"},
     )
     org = _org(db, "socks-oauth")
-    state = _state_signer.dumps({"org_id": org.id})
+    state = _state_signer.dumps({"org_id": org.id, "shop": "racesokken.myshopify.com"})
     params = {"shop": "racesokken.myshopify.com", "code": "abc", "state": state, "timestamp": "1"}
     params["hmac"] = _hmac(params, "testsecret")
 
@@ -117,6 +117,19 @@ def test_callback_rejects_bad_hmac(client, db, monkeypatch):
     org = _org(db, "socks-badhmac")
     state = _state_signer.dumps({"org_id": org.id})
     params = {"shop": "racesokken.myshopify.com", "code": "abc", "state": state, "hmac": "deadbeef"}
+
+    resp = client.get("/api/channels/shopify/oauth/callback", params=params)
+    assert resp.status_code == 400
+
+
+def test_callback_rejects_shop_mismatch(client, db, monkeypatch):
+    """A validly-signed callback for a different shop than the install started
+    for must be rejected (state binds the shop)."""
+    monkeypatch.setattr(settings, "shopify_api_secret", "testsecret")
+    org = _org(db, "socks-mismatch")
+    state = _state_signer.dumps({"org_id": org.id, "shop": "racesokken.myshopify.com"})
+    params = {"shop": "attacker.myshopify.com", "code": "abc", "state": state}
+    params["hmac"] = _hmac(params, "testsecret")  # valid hmac + valid myshopify host
 
     resp = client.get("/api/channels/shopify/oauth/callback", params=params)
     assert resp.status_code == 400

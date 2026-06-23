@@ -82,7 +82,9 @@ def shopify_install(
     shop = settings.shopify_shop_domain
     if not is_valid_shop_domain(shop):
         raise HTTPException(400, f"Ongeldig shop-domein: {shop}")
-    state = _state_signer.dumps({"org_id": org_id})
+    # state carries both the org and the intended shop, so the callback can
+    # reject a token bound to a different (but validly signed) shop.
+    state = _state_signer.dumps({"org_id": org_id, "shop": shop})
     return RedirectResponse(build_authorize_url(shop, _redirect_uri(), state))
 
 
@@ -107,6 +109,11 @@ def shopify_oauth_callback(request: Request, db: Session = Depends(get_db)):
     except BadSignature:
         raise HTTPException(400, "Ongeldige state")
     org_id = data["org_id"]
+    # Shopify signs a valid callback for ANY *.myshopify.com, so without this a
+    # different shop could be attached to this org's connection. Bind it to the
+    # shop the install was started for.
+    if shop != data.get("shop"):
+        raise HTTPException(400, "Shop komt niet overeen met de installatie")
 
     token_data = exchange_code_for_token(shop, code)
 
