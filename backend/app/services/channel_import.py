@@ -55,6 +55,11 @@ class ImportResult:
     unmatched_eans: list[str]
 
 
+# Shopify financial statuses that mean "this order should be fulfilled". Anything
+# else (pending/refunded/voided/…) must never become a born-active, pickable order.
+_FULFILLABLE_FINANCIAL_STATUSES = {"paid"}
+
+
 def import_channel_order(
     db: Session, connection: ChannelConnection, order: NormalizedChannelOrder
 ) -> ImportResult:
@@ -66,7 +71,11 @@ def import_channel_order(
     """
     org_id = connection.organization_id
     channel = connection.channel
-    target_status = "active" if connection.mode == "live" else "observed"
+    # Live-mode only makes an order pickable when it is actually fulfillable
+    # (paid). Cancelled/refunded/unpaid orders stay inert ("observed") so we
+    # never ship a cancelled order. Full cancellation→restock is fase 4.
+    fulfillable = order.financial_status in _FULFILLABLE_FINANCIAL_STATUSES
+    target_status = "active" if (connection.mode == "live" and fulfillable) else "observed"
 
     existing = (
         db.query(Order)
@@ -88,6 +97,7 @@ def import_channel_order(
             # external_id and is shown in the reconciliation view.
             reference=f"{channel[:3].upper()}-{uuid.uuid4().hex[:8].upper()}",
             status=target_status,
+            ordered_at=order.ordered_at,
             created_by=None,
         )
         db.add(db_order)
@@ -100,6 +110,8 @@ def import_channel_order(
         # progressed (active/completed/cancelled/closed).
         if db_order.status == "observed" and target_status == "active":
             db_order.status = "active"
+        if order.ordered_at is not None:
+            db_order.ordered_at = order.ordered_at
 
     matched = 0
     unmatched: list[str] = []
@@ -137,16 +149,28 @@ def import_channel_order(
                 )
             )
 
-    db.add(
-        ChannelSyncLog(
-            organization_id=org_id,
-            channel=channel,
-            external_id=order.external_id,
-            action="created" if created else "updated",
-            matched_lines=matched,
-            unmatched_eans=json.dumps(unmatched),
+    # One sync-log row per order (upsert), not one per import: the watermark
+    # cursor re-sees the boundary order every poll, which would otherwise grow
+    # the table unbounded. The reconciliation view wants the current match state
+    # per order anyway.
+    log = (
+        db.query(ChannelSyncLog)
+        .filter(
+            ChannelSyncLog.organization_id == org_id,
+            ChannelSyncLog.channel == channel,
+            ChannelSyncLog.external_id == order.external_id,
         )
+        .first()
     )
+    if log is None:
+        log = ChannelSyncLog(
+            organization_id=org_id, channel=channel, external_id=order.external_id
+        )
+        db.add(log)
+    log.action = "created" if created else "updated"
+    log.matched_lines = matched
+    log.unmatched_eans = json.dumps(unmatched)
+    log.synced_at = datetime.datetime.utcnow()
     connection.last_synced_at = datetime.datetime.utcnow()
     db.flush()
 

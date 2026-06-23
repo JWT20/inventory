@@ -384,6 +384,10 @@ class Order(Base):
     # The order id at the source channel (Shopify/bol). NULL for manual orders.
     # Unique per (organization, channel) via uq_orders_org_channel_external.
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The order's timestamp at the source channel (e.g. Shopify createdAt). NULL
+    # for manual orders. Distinct from created_at, which is the row insert time —
+    # the reconciliation view sorts/shows by this, not the import moment.
+    ordered_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
     remarks: Mapped[str] = mapped_column(Text, default="", server_default="")
     delivery_week: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(

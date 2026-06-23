@@ -189,6 +189,52 @@ def test_reimport_promotes_observed_to_active_when_live(db):
     assert db.get(Order, r2.order_id).status == "active"
 
 
+def test_live_mode_non_paid_order_stays_observed(db):
+    org = _org(db, "socks-refund")
+    conn = _connection(db, org, mode="live")
+    _sku(db, org, "SOK-1", "8710000000080")
+    order = _order(external_id="SHOP-RF",
+                   lines=[NormalizedLine(ean="8710000000080", quantity=1)])
+    order.financial_status = "refunded"  # not fulfillable
+
+    r = import_channel_order(db, conn, order)
+    db.commit()
+    # Must NOT become a born-active, pickable order despite live-mode.
+    assert db.get(Order, r.order_id).status == "observed"
+
+
+def test_ordered_at_is_persisted(db):
+    import datetime
+    org = _org(db, "socks-date")
+    conn = _connection(db, org)
+    _sku(db, org, "SOK-1", "8710000000081")
+    when = datetime.datetime(2026, 6, 1, 9, 0, 0)
+    order = _order(external_id="SHOP-DT",
+                   lines=[NormalizedLine(ean="8710000000081", quantity=1)])
+    order.ordered_at = when
+
+    r = import_channel_order(db, conn, order)
+    db.commit()
+    assert db.get(Order, r.order_id).ordered_at == when
+
+
+def test_sync_log_is_upserted_not_appended(db):
+    org = _org(db, "socks-log")
+    conn = _connection(db, org)
+    _sku(db, org, "SOK-1", "8710000000082")
+    order = _order(external_id="SHOP-LOG",
+                   lines=[NormalizedLine(ean="8710000000082", quantity=1)])
+
+    import_channel_order(db, conn, order)
+    db.commit()
+    import_channel_order(db, conn, order)  # boundary re-import
+    db.commit()
+
+    logs = db.query(ChannelSyncLog).filter_by(external_id="SHOP-LOG").all()
+    assert len(logs) == 1  # one row per order, not one per import
+    assert logs[0].action == "updated"
+
+
 def test_observed_orders_excluded_from_order_list(client, db, courier_token, owner_token):
     org = _org(db, "socks-listexcl")
     conn = _connection(db, org)

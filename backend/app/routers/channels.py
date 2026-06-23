@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.auth import require_merchant, require_module
 from app.config import settings
 from app.database import get_db
-from app.models import ChannelConnection, User
+from app.models import ChannelConnection, Organization, User
 from app.schemas import ChannelSyncSummary
 from app.services.shopify import (
     ShopifyClient,
@@ -44,6 +44,15 @@ def _resolve_org_id(user: User, requested: int | None) -> int:
     if user.organization_id:
         return user.organization_id
     raise HTTPException(400, "Gebruiker heeft geen organisatie")
+
+
+def _assert_org_has_channel(db: Session, org_id: int) -> None:
+    """Gate the *resolved* org (not just the caller): require_module lets platform
+    admins through and admins may target any org, so verify the target org itself
+    actually has the channel_orders module before importing into it."""
+    org = db.get(Organization, org_id)
+    if not org or "channel_orders" not in org.modules:
+        raise HTTPException(403, "Organisatie heeft de kanaal-module niet")
 
 
 def _get_or_create_connection(db: Session, org_id: int, channel: str) -> ChannelConnection:
@@ -79,6 +88,7 @@ def shopify_install(
     if not (settings.shopify_api_key and settings.shopify_shop_domain and settings.domain):
         raise HTTPException(400, "Shopify is niet geconfigureerd (API key / shop / domein)")
     org_id = _resolve_org_id(user, organization_id)
+    _assert_org_has_channel(db, org_id)
     shop = settings.shopify_shop_domain
     if not is_valid_shop_domain(shop):
         raise HTTPException(400, f"Ongeldig shop-domein: {shop}")
@@ -136,6 +146,7 @@ def trigger_shopify_sync(
 ):
     """Pull Shopify orders updated since the last sync and import them (observe)."""
     org_id = _resolve_org_id(user, organization_id)
+    _assert_org_has_channel(db, org_id)
     connection = _get_or_create_connection(db, org_id, "shopify")
     # Per-connection credentials only — no global env fallback (cross-tenant).
     client = ShopifyClient(

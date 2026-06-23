@@ -202,6 +202,17 @@ def test_sync_uses_only_own_connection_token(client, db, monkeypatch):
     assert resp.status_code == 400  # not connected → cannot use global creds
 
 
+def test_admin_sync_blocked_for_org_without_channel_module(client, db, admin_token):
+    # Platform admins bypass require_module and may target any org, so the target
+    # org itself must be checked for the channel_orders module.
+    org = _org(db, "no-channel-admin", modules=("inventory", "orders"))
+    resp = client.post(
+        f"/api/channels/shopify/sync?organization_id={org.id}",
+        headers=auth_header(admin_token),
+    )
+    assert resp.status_code == 403
+
+
 def test_sync_endpoint_403_without_channel_module(client, db):
     from app.auth import create_token, hash_password
     from app.models import User
