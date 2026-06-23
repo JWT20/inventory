@@ -356,6 +356,10 @@ export const api = {
         organizationId ? `?organization_id=${organizationId}` : ""
       }`,
     ),
+  // Picking - barcode/EAN (1 scan = 1 unit booked on the selected order)
+  scanEan: (orderId: number, ean: string) =>
+    json("/picking/scan-ean", "POST", { order_id: orderId, ean }),
+
   // Receiving - book (1 scan = 1 besteleenheid = 1 booking)
   bookBox: (blob: Blob, orderId: number, scanMode: "box" | "bottle" = "box") => {
     const form = new FormData();

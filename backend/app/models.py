@@ -347,6 +347,19 @@ class Order(Base):
         # Speeds up the monthly booked-boxes report which filters finalized
         # orders by terminal status.
         Index("ix_orders_status_finalized_at", "status", "finalized_at"),
+        # A channel order (Shopify/bol) carries the source channel's order id so
+        # the same external order is never imported twice. Uniqueness is scoped
+        # per (organization, channel); manual orders have a NULL external_id and
+        # are excluded so they never collide.
+        Index(
+            "uq_orders_org_channel_external",
+            "organization_id",
+            "channel",
+            "external_id",
+            unique=True,
+            postgresql_where=text("external_id IS NOT NULL"),
+            sqlite_where=text("external_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -358,6 +371,16 @@ class Order(Base):
     )
     reference: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="pending_approval")
+    # Where the order came from: "manual" (created in-app or by a customer),
+    # "shopify" or "bol". Provenance + dedup only — it does NOT drive the order
+    # lifecycle; whether an order is born active is decided by the organization's
+    # modules (see create_order).
+    channel: Mapped[str] = mapped_column(
+        String(20), default="manual", server_default=text("'manual'"), nullable=False
+    )
+    # The order id at the source channel (Shopify/bol). NULL for manual orders.
+    # Unique per (organization, channel) via uq_orders_org_channel_external.
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     remarks: Mapped[str] = mapped_column(Text, default="", server_default="")
     delivery_week: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(

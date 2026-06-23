@@ -8,6 +8,9 @@ export interface Order {
   id: number;
   reference: string;
   status: string;
+  channel?: string;
+  // "vision" = camera + AI; "barcode" = handscanner EAN scan.
+  pick_method?: "vision" | "barcode";
   delivery_week?: string | null;
   organization_id?: number | null;
   customer_name: string | null;
@@ -16,6 +19,19 @@ export interface Order {
   total_bottles: number;
   booked_bottles: number;
   lines?: OrderLine[];
+}
+
+export interface EanBookingResult {
+  order_id: number;
+  order_line_id: number;
+  sku_id: number;
+  sku_code: string;
+  sku_name: string;
+  klant: string;
+  rolcontainer: string;
+  booked_quantity: number;
+  remaining_quantity: number;
+  order_completed: boolean;
 }
 
 export type ScanMode = "box" | "bottle";

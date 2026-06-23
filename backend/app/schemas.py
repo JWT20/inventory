@@ -467,6 +467,12 @@ class OrderResponse(BaseModel):
     id: int
     reference: str
     status: str
+    # Order provenance: "manual" (in-app/customer), "shopify" or "bol".
+    channel: str = "manual"
+    # How this order is picked: "vision" (camera + AI) or "barcode" (handscanner
+    # EAN scan). Derived from the order's products so the courier UI can route to
+    # the right scanner.
+    pick_method: str = "vision"
     remarks: str = ""
     delivery_week: str | None = None
     organization_id: int | None = None
@@ -518,6 +524,25 @@ class NextPickResponse(BaseModel):
     source: Literal["this_order", "other_order"]
     order_id: int
     customer_name: str | None = None
+
+
+class EanScanRequest(BaseModel):
+    order_id: int = Field(..., gt=0)
+    ean: str = Field(..., min_length=1)
+
+
+class EanScanResponse(BaseModel):
+    """Result of one EAN scan = one booked unit on a barcode order."""
+    order_id: int
+    order_line_id: int
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    klant: str
+    rolcontainer: str
+    booked_quantity: int
+    remaining_quantity: int
+    order_completed: bool
 
 
 class ManualOrderLineCreate(BaseModel):
