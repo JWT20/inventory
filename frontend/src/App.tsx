@@ -23,8 +23,15 @@ const JURJEN_ORG_SLUG = "jurjen";
 
 function Main() {
   const { user, loading, logout } = useAuth();
+  // Returning from the Shopify OAuth redirect (/?shopify=connected) should land
+  // an admin on Kanalen, so ChannelsPage mounts and shows the success toast +
+  // clears the query (inactive Radix tabs aren't mounted).
+  const shopifyReturn =
+    new URLSearchParams(window.location.search).get("shopify") === "connected";
   const defaultPage: Page = user?.is_platform_admin
-    ? "accounts"
+    ? shopifyReturn
+      ? "channels"
+      : "accounts"
     : user?.role === "courier"
       ? "receive"
       : "orders";
