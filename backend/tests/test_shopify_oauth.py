@@ -64,6 +64,17 @@ def test_install_redirects_to_shopify(client, db, monkeypatch, owner_token):
     assert "state=" in loc
 
 
+def test_install_403_for_customer(client, db, customer_user):
+    from app.auth import create_token
+    token = create_token(customer_user.id)
+    resp = client.get(
+        "/api/channels/shopify/install",
+        headers=auth_header(token),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+
+
 def test_install_400_when_not_configured(client, db, owner_token):
     # No Shopify settings in the test env → 400 (not a redirect).
     resp = client.get(

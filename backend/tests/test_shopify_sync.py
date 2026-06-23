@@ -145,6 +145,41 @@ def test_sync_endpoint_400_when_not_configured(client, db, owner_token):
     assert resp.status_code == 400
 
 
+def test_sync_endpoint_403_for_customer(client, db, customer_user):
+    from app.auth import create_token
+    # customer_user is in sample_org (has channel_orders), but customers must not
+    # be able to import channel orders — require_merchant blocks them.
+    token = create_token(customer_user.id)
+    resp = client.post("/api/channels/shopify/sync", headers=auth_header(token))
+    assert resp.status_code == 403
+
+
+def test_fetch_orders_paginates_line_items(monkeypatch):
+    from app.services.shopify import ShopifyClient
+
+    sc = ShopifyClient(shop_domain="x.myshopify.com", access_token="t")
+    responses = [
+        {"orders": {"edges": [{"node": {
+            "id": "gid://shopify/Order/1",
+            "updatedAt": "2026-06-23T10:00:00Z",
+            "lineItems": {
+                "edges": [{"node": {"quantity": 1, "title": "a", "variant": {"barcode": "E1"}}}],
+                "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+            },
+        }}], "pageInfo": {"hasNextPage": False, "endCursor": None}}},
+        {"order": {"lineItems": {
+            "edges": [{"node": {"quantity": 2, "title": "b", "variant": {"barcode": "E2"}}}],
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+        }}},
+    ]
+    monkeypatch.setattr(sc, "_post", lambda q, v: responses.pop(0))
+
+    nodes = list(sc.fetch_orders())
+    assert len(nodes) == 1
+    barcodes = [e["node"]["variant"]["barcode"] for e in nodes[0]["lineItems"]["edges"]]
+    assert barcodes == ["E1", "E2"]  # second page appended, nothing dropped
+
+
 def test_sync_endpoint_403_without_channel_module(client, db):
     from app.auth import create_token, hash_password
     from app.models import User

@@ -94,6 +94,12 @@ def import_channel_order(
         db.flush()
     else:
         db_order = existing
+        # Cutover: an order first imported in observe-mode must become pickable
+        # once the connection goes live and the order is re-seen. Only promote
+        # observed → active; never downgrade or touch an order that already
+        # progressed (active/completed/cancelled/closed).
+        if db_order.status == "observed" and target_status == "active":
+            db_order.status = "active"
 
     matched = 0
     unmatched: list[str] = []

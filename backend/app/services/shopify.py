@@ -104,10 +104,23 @@ query($first: Int!, $after: String, $query: String) {
         shippingAddress { name }
         lineItems(first: 100) {
           edges { node { quantity title variant { barcode sku } } }
+          pageInfo { hasNextPage endCursor }
         }
       }
     }
     pageInfo { hasNextPage endCursor }
+  }
+}
+"""
+
+# Follow-up query to page through an order's remaining line items (>100).
+_LINE_ITEMS_QUERY = """
+query($id: ID!, $after: String) {
+  order(id: $id) {
+    lineItems(first: 100, after: $after) {
+      edges { node { quantity title variant { barcode sku } } }
+      pageInfo { hasNextPage endCursor }
+    }
   }
 }
 """
@@ -201,11 +214,32 @@ class ShopifyClient:
             )
             conn = data["orders"]
             for edge in conn["edges"]:
-                yield edge["node"]
+                node = edge["node"]
+                self._complete_line_items(node)
+                yield node
             page = conn["pageInfo"]
             if not page["hasNextPage"]:
                 break
             after = page["endCursor"]
+
+    def _complete_line_items(self, node: dict) -> None:
+        """Page through an order's remaining line items so orders with >100 lines
+        are imported whole instead of silently truncated."""
+        li = node.get("lineItems") or {}
+        page = li.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            return
+        edges = list(li.get("edges") or [])
+        after = page.get("endCursor")
+        while True:
+            data = self._post(_LINE_ITEMS_QUERY, {"id": node["id"], "after": after})
+            more = (data.get("order") or {}).get("lineItems") or {}
+            edges.extend(more.get("edges") or [])
+            mpage = more.get("pageInfo") or {}
+            if not mpage.get("hasNextPage"):
+                break
+            after = mpage.get("endCursor")
+        node["lineItems"]["edges"] = edges
 
 
 @dataclass

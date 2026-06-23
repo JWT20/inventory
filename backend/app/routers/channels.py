@@ -12,7 +12,7 @@ from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, require_module
+from app.auth import require_merchant, require_module
 from app.config import settings
 from app.database import get_db
 from app.models import ChannelConnection, User
@@ -71,7 +71,7 @@ def _redirect_uri() -> str:
 def shopify_install(
     organization_id: int | None = Query(None),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_merchant),
     _: User = Depends(require_module("channel_orders")),
 ):
     """Start the Shopify OAuth install: redirect the merchant to Shopify's
@@ -124,7 +124,7 @@ def shopify_oauth_callback(request: Request, db: Session = Depends(get_db)):
 def trigger_shopify_sync(
     organization_id: int | None = Query(None),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_merchant),
     _: User = Depends(require_module("channel_orders")),
 ):
     """Pull Shopify orders updated since the last sync and import them (observe)."""

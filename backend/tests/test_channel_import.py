@@ -169,6 +169,26 @@ def test_live_mode_creates_active_order(db):
     assert db.get(Order, result.order_id).status == "active"
 
 
+def test_reimport_promotes_observed_to_active_when_live(db):
+    org = _org(db, "socks-cutover")
+    conn = _connection(db, org, mode="observe")
+    _sku(db, org, "SOK-1", "8710000000070")
+    order = _order(external_id="SHOP-9001",
+                   lines=[NormalizedLine(ean="8710000000070", quantity=1)])
+
+    r1 = import_channel_order(db, conn, order)
+    db.commit()
+    assert db.get(Order, r1.order_id).status == "observed"
+
+    # Cutover: connection goes live, same order re-seen → becomes pickable.
+    conn.mode = "live"
+    db.commit()
+    r2 = import_channel_order(db, conn, order)
+    db.commit()
+    assert r2.created is False
+    assert db.get(Order, r2.order_id).status == "active"
+
+
 def test_observed_orders_excluded_from_order_list(client, db, courier_token, owner_token):
     org = _org(db, "socks-listexcl")
     conn = _connection(db, org)
