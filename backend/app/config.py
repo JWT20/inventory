@@ -48,6 +48,18 @@ class Settings(BaseSettings):
     # Domain (used for CORS)
     domain: str = ""
 
+    # Shopify (channel orders) — empty values disable the integration.
+    # Provide as env secrets on the server; never commit real values.
+    shopify_shop_domain: str = ""   # e.g. racesokken.myshopify.com
+    # OAuth app credentials (Dev Dashboard → Settings → Credentials). The access
+    # token is obtained via the OAuth install flow and stored per connection;
+    # shopify_access_token is only an optional manual fallback.
+    shopify_api_key: str = ""       # Client ID
+    shopify_api_secret: str = ""    # Client secret — OAuth token exchange + HMAC
+    shopify_api_version: str = "2025-01"
+    # NB: the per-shop access token is obtained via OAuth and stored on the
+    # ChannelConnection — never as a global env var (that would cross tenants).
+
     @field_validator("database_url")
     @classmethod
     def _check_database_url(cls, v: str) -> str:
