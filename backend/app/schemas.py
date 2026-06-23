@@ -526,6 +526,14 @@ class NextPickResponse(BaseModel):
     customer_name: str | None = None
 
 
+class ChannelSyncSummary(BaseModel):
+    """Result of a channel pull/sync run."""
+    fetched: int
+    created: int
+    updated: int
+    unmatched: int
+
+
 class EanScanRequest(BaseModel):
     order_id: int = Field(..., gt=0)
     ean: str = Field(..., min_length=1)
