@@ -51,8 +51,12 @@ class Settings(BaseSettings):
     # Shopify (channel orders) — empty values disable the integration.
     # Provide as env secrets on the server; never commit real values.
     shopify_shop_domain: str = ""   # e.g. racesokken.myshopify.com
-    shopify_access_token: str = ""  # Admin API access token (shpat_...)
-    shopify_api_secret: str = ""    # API secret key (shpss_...) — webhook HMAC (PR 3)
+    # OAuth app credentials (Dev Dashboard → Settings → Credentials). The access
+    # token is obtained via the OAuth install flow and stored per connection;
+    # shopify_access_token is only an optional manual fallback.
+    shopify_api_key: str = ""       # Client ID
+    shopify_api_secret: str = ""    # Client secret — OAuth token exchange + HMAC
+    shopify_access_token: str = ""  # optional manual fallback (legacy static token)
     shopify_api_version: str = "2025-01"
 
     @field_validator("database_url")

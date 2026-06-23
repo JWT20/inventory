@@ -14,8 +14,12 @@ what observe-mode is meant to surface.
 from __future__ import annotations
 
 import datetime
+import hashlib
+import hmac
 import logging
+import re
 from dataclasses import dataclass
+from urllib.parse import urlencode
 
 import httpx
 from sqlalchemy.orm import Session
@@ -29,6 +33,61 @@ from app.services.channel_import import (
 )
 
 logger = logging.getLogger(__name__)
+
+OAUTH_SCOPES = "read_orders,read_products"
+_SHOP_DOMAIN_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$")
+
+
+def is_valid_shop_domain(shop: str) -> bool:
+    """Guard against open-redirect / SSRF: only accept *.myshopify.com hosts."""
+    return bool(shop and _SHOP_DOMAIN_RE.match(shop))
+
+
+def build_authorize_url(shop: str, redirect_uri: str, state: str) -> str:
+    """Shopify OAuth authorize URL the merchant is redirected to."""
+    params = urlencode(
+        {
+            "client_id": settings.shopify_api_key,
+            "scope": OAUTH_SCOPES,
+            "redirect_uri": redirect_uri,
+            "state": state,
+        }
+    )
+    return f"https://{shop}/admin/oauth/authorize?{params}"
+
+
+def verify_oauth_hmac(query_params: dict[str, str]) -> bool:
+    """Verify the HMAC Shopify appends to the OAuth callback.
+
+    HMAC-SHA256 of the sorted query string (excluding hmac/signature) keyed on
+    the app's client secret.
+    """
+    received = query_params.get("hmac")
+    if not received or not settings.shopify_api_secret:
+        return False
+    pairs = sorted(
+        f"{k}={v}" for k, v in query_params.items() if k not in ("hmac", "signature")
+    )
+    message = "&".join(pairs)
+    digest = hmac.new(
+        settings.shopify_api_secret.encode(), message.encode(), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(digest, received)
+
+
+def exchange_code_for_token(shop: str, code: str) -> dict:
+    """Exchange the OAuth authorization code for an Admin API access token."""
+    resp = httpx.post(
+        f"https://{shop}/admin/oauth/access_token",
+        json={
+            "client_id": settings.shopify_api_key,
+            "client_secret": settings.shopify_api_secret,
+            "code": code,
+        },
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    return resp.json()  # {"access_token": "...", "scope": "..."}
 
 # GraphQL: orders updated since a watermark, newest activity first, with the
 # variant barcode (EAN) per line.
@@ -165,7 +224,10 @@ def sync_shopify(db: Session, connection: ChannelConnection, client=None) -> Syn
     re-seen but never duplicated. Advances the cursor to the newest updatedAt.
     Does NOT commit — the caller owns the transaction.
     """
-    client = client or ShopifyClient()
+    client = client or ShopifyClient(
+        shop_domain=connection.shop_domain or settings.shopify_shop_domain,
+        access_token=connection.access_token or settings.shopify_access_token,
+    )
     if not client.configured:
         raise RuntimeError("Shopify niet geconfigureerd")
 

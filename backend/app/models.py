@@ -673,6 +673,12 @@ class ChannelConnection(Base):
         ForeignKey("organizations.id"), nullable=False
     )
     channel: Mapped[str] = mapped_column(String(20))
+    # Filled by the OAuth install flow. shop_domain is the *.myshopify.com host;
+    # access_token is the Admin API token for this shop. NOTE: stored as-is for
+    # now — encryption-at-rest is a follow-up.
+    shop_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scope: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # "observe" = import + show for reconciliation, no stock/fulfilment effect;
     # "live" = born-active + (later) stock sync. Default observe — never act by
     # surprise.
