@@ -36,13 +36,15 @@ def _sku(db, org, code, ean):
     return sku
 
 
-def _node(order_id, barcode, qty=2, updated="2026-06-23T10:00:00Z"):
+def _node(order_id, barcode, qty=2, updated="2026-06-23T10:00:00Z",
+          fulfillment="UNFULFILLED"):
     return {
         "id": f"gid://shopify/Order/{order_id}",
         "name": f"#{order_id}",
         "createdAt": "2026-06-23T09:00:00Z",
         "updatedAt": updated,
         "displayFinancialStatus": "PAID",
+        "displayFulfillmentStatus": fulfillment,
         "shippingAddress": {"name": "Web Klant"},
         "lineItems": {
             "edges": [
@@ -74,11 +76,18 @@ def test_to_normalized_maps_barcode_to_ean():
     # The order name "#1001" is normalized to "1001" — the number Veloyd puts on
     # the label, which we match on at the later label-scan step.
     assert norm.reference == "1001"
+    # Fulfillment status is carried through, normalized to lowercase.
+    assert norm.fulfillment_status == "unfulfilled"
     assert norm.customer_name == "Web Klant"
     assert norm.financial_status == "paid"
     assert len(norm.lines) == 1
     assert norm.lines[0].ean == "8710000000001"
     assert norm.lines[0].quantity == 3
+
+
+def test_to_normalized_maps_fulfilled_status():
+    norm = to_normalized(_node("1003", "8710000000001", fulfillment="FULFILLED"))
+    assert norm.fulfillment_status == "fulfilled"
 
 
 def test_to_normalized_missing_barcode_is_none():
@@ -129,6 +138,28 @@ def test_sync_is_idempotent_on_rerun(db):
     assert summary2.created == 0
     assert summary2.updated == 1
     assert db.query(Order).filter_by(organization_id=org.id).count() == 1
+
+
+def test_sync_stores_and_refreshes_fulfillment_status(db):
+    org = _org(db, "socks-fulfil")
+    conn = _connection(db, org)
+    _sku(db, org, "SOK-1", "8710000000003")
+
+    # First seen as unfulfilled.
+    sync_shopify(db, conn, FakeClient([_node("4001", "8710000000003")]))
+    db.commit()
+    order = db.query(Order).filter_by(organization_id=org.id, external_id="4001").one()
+    assert order.channel_fulfillment_status == "unfulfilled"
+
+    # Shipped (from home or by the courier) → next sync flips it to fulfilled.
+    sync_shopify(
+        db, conn,
+        FakeClient([_node("4001", "8710000000003", updated="2026-06-23T12:00:00Z",
+                          fulfillment="FULFILLED")]),
+    )
+    db.commit()
+    db.refresh(order)
+    assert order.channel_fulfillment_status == "fulfilled"
 
 
 def test_sync_passes_cursor_to_client(db):
@@ -272,7 +303,7 @@ def test_reconciliation_lists_unmatched_eans(client, db, admin_token, sample_org
     import_channel_order(
         db, conn,
         NormalizedChannelOrder(
-            external_id="R1", reference="1042",
+            external_id="R1", reference="1042", fulfillment_status="fulfilled",
             lines=[NormalizedLine(ean="9999999999999", quantity=1)]
         ),
     )
@@ -290,3 +321,5 @@ def test_reconciliation_lists_unmatched_eans(client, db, admin_token, sample_org
     # The human order number is surfaced so the operator can eyeball it against
     # the Veloyd label before cutover.
     assert body["orders"][0]["channel_reference"] == "1042"
+    # Fulfillment status is surfaced so already-shipped orders are visible.
+    assert body["orders"][0]["channel_fulfillment_status"] == "fulfilled"

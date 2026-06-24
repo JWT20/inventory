@@ -248,6 +248,9 @@ def shopify_reconciliation(
                 external_id=log.external_id,
                 reference=order.reference if order else None,
                 channel_reference=order.channel_reference if order else None,
+                channel_fulfillment_status=(
+                    order.channel_fulfillment_status if order else None
+                ),
                 ordered_at=order.ordered_at if order else None,
                 status=order.status if order else None,
                 matched_lines=log.matched_lines,

@@ -47,6 +47,11 @@ class NormalizedChannelOrder:
     # the reconciliation view and the later live-mode sync; observe-mode does not
     # act on it.
     financial_status: str = "pending"
+    # Channel fulfillment state (fulfilled / unfulfilled / partially_fulfilled …).
+    # Shown in observe so the operator sees which orders are already shipped (from
+    # home or by the courier); the cutover will keep fulfilled orders out of the
+    # pick list. Observe-mode does not act on it.
+    fulfillment_status: str = "unfulfilled"
     lines: list[NormalizedLine] = field(default_factory=list)
 
 
@@ -62,6 +67,13 @@ class ImportResult:
 # else (pending/refunded/voided/…) must never become a born-active, pickable order.
 _FULFILLABLE_FINANCIAL_STATUSES = {"paid"}
 
+# Shopify fulfillment statuses that mean "already shipped" — such orders must
+# never become born-active/pickable, even in live mode, or the warehouse would
+# pick something that already left (shipped from home, or labelled by the
+# courier). Mirrors the observe UI's "verzonden" badge. Restock/cancellation is
+# a separate concern (fase 4).
+_SHIPPED_FULFILLMENT_STATUSES = {"fulfilled"}
+
 
 def import_channel_order(
     db: Session, connection: ChannelConnection, order: NormalizedChannelOrder
@@ -75,10 +87,17 @@ def import_channel_order(
     org_id = connection.organization_id
     channel = connection.channel
     # Live-mode only makes an order pickable when it is actually fulfillable
-    # (paid). Cancelled/refunded/unpaid orders stay inert ("observed") so we
-    # never ship a cancelled order. Full cancellation→restock is fase 4.
+    # (paid) AND not already shipped. Cancelled/refunded/unpaid orders stay inert
+    # ("observed") so we never ship a cancelled order; already-fulfilled orders
+    # (shipped from home or labelled by the courier) stay out of the pick list so
+    # we never pick something twice. Full cancellation→restock is fase 4.
     fulfillable = order.financial_status in _FULFILLABLE_FINANCIAL_STATUSES
-    target_status = "active" if (connection.mode == "live" and fulfillable) else "observed"
+    already_shipped = order.fulfillment_status in _SHIPPED_FULFILLMENT_STATUSES
+    target_status = (
+        "active"
+        if (connection.mode == "live" and fulfillable and not already_shipped)
+        else "observed"
+    )
 
     existing = (
         db.query(Order)
@@ -100,6 +119,7 @@ def import_channel_order(
             # external_id and is shown in the reconciliation view.
             reference=f"{channel[:3].upper()}-{uuid.uuid4().hex[:8].upper()}",
             channel_reference=order.reference,
+            channel_fulfillment_status=order.fulfillment_status,
             status=target_status,
             ordered_at=order.ordered_at,
             created_by=None,
@@ -120,6 +140,10 @@ def import_channel_order(
         # imported before this column existed).
         if order.reference is not None:
             db_order.channel_reference = order.reference
+        # Refresh fulfillment status on every re-sync: an order shipped from home
+        # (or labelled by the courier) flips to "fulfilled" in Shopify, and the
+        # observe view must reflect that.
+        db_order.channel_fulfillment_status = order.fulfillment_status
 
     matched = 0
     unmatched: list[str] = []

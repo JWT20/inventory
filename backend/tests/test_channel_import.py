@@ -203,6 +203,40 @@ def test_live_mode_non_paid_order_stays_observed(db):
     assert db.get(Order, r.order_id).status == "observed"
 
 
+def test_live_mode_fulfilled_order_stays_observed(db):
+    org = _org(db, "socks-shipped")
+    conn = _connection(db, org, mode="live")
+    _sku(db, org, "SOK-1", "8710000000090")
+    order = _order(external_id="SHOP-SHIP",
+                   lines=[NormalizedLine(ean="8710000000090", quantity=1)])
+    order.fulfillment_status = "fulfilled"  # already shipped (e.g. from home)
+
+    r = import_channel_order(db, conn, order)
+    db.commit()
+    # A paid order that Shopify already marks fulfilled must stay out of the pick
+    # list, matching the observe "verzonden" badge — never picked twice.
+    assert db.get(Order, r.order_id).status == "observed"
+
+
+def test_observed_order_not_promoted_once_fulfilled(db):
+    org = _org(db, "socks-cutover-shipped")
+    conn = _connection(db, org, mode="observe")
+    _sku(db, org, "SOK-1", "8710000000091")
+    order = _order(external_id="SHOP-9100",
+                   lines=[NormalizedLine(ean="8710000000091", quantity=1)])
+
+    import_channel_order(db, conn, order)
+    db.commit()
+
+    # Cutover to live, but the order has meanwhile been shipped from home →
+    # Shopify reports it fulfilled, so it must NOT be promoted to active.
+    conn.mode = "live"
+    order.fulfillment_status = "fulfilled"
+    r2 = import_channel_order(db, conn, order)
+    db.commit()
+    assert db.get(Order, r2.order_id).status == "observed"
+
+
 def test_ordered_at_is_persisted(db):
     import datetime
     org = _org(db, "socks-date")

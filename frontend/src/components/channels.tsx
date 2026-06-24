@@ -29,10 +29,17 @@ interface ReconRow {
   external_id: string;
   reference: string | null;
   channel_reference: string | null;
+  channel_fulfillment_status: string | null;
   ordered_at: string | null;
   status: string | null;
   matched_lines: number;
   unmatched_eans: string[];
+}
+
+// Shopify reports "fulfilled" once an order is shipped (from home or by the
+// courier). Such orders will be kept out of the pick list at cutover.
+function isFulfilled(s: string | null): boolean {
+  return s === "fulfilled";
 }
 
 interface Reconciliation {
@@ -191,6 +198,7 @@ export function ChannelsPage() {
               <p className="text-xs text-muted-foreground mt-1">
                 Het ordernummer is wat Veloyd als referentie op het verzendlabel zet.
                 Bij de latere labelscan tijdens het picken matchen we hierop.
+                Verzonden orders komen bij de cutover niet in de picklijst.
               </p>
             </div>
             {recon && recon.orders.length > 0 ? (
@@ -202,6 +210,11 @@ export function ChannelsPage() {
                         Order {o.channel_reference ?? "—"}
                         {o.status && (
                           <Badge variant="secondary" className="ml-2 text-xs">{o.status}</Badge>
+                        )}
+                        {isFulfilled(o.channel_fulfillment_status) ? (
+                          <Badge variant="outline" className="ml-2 text-xs">verzonden</Badge>
+                        ) : (
+                          <Badge variant="secondary" className="ml-2 text-xs">nog te picken</Badge>
                         )}
                       </p>
                       <p className="text-xs text-muted-foreground">
