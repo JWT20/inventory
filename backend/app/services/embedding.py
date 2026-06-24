@@ -264,8 +264,15 @@ async def _call_vision(
     *,
     model: str | None = None,
     system_instruction: str | None = None,
+    response_schema: types.SchemaUnion | None = None,
 ) -> str:
-    """Call Gemini Vision asynchronously with retry logic. Returns raw response text."""
+    """Call Gemini Vision asynchronously with retry logic. Returns raw response text.
+
+    When ``response_schema`` is given, structured output is enabled
+    (``response_mime_type=application/json`` + schema) so the model is
+    constrained to schema-conforming JSON instead of being asked for JSON in
+    the prompt only — this removes the "not valid JSON" failure class.
+    """
     model = model or settings.gemini_vision_model
     client = _get_client()
     logger.info("Calling Gemini Vision model=%s", model)
@@ -275,10 +282,14 @@ async def _call_vision(
         "model": model,
         "contents": [prompt, image],
     }
+    config_kwargs: dict = {}
     if system_instruction:
-        generate_kwargs["config"] = types.GenerateContentConfig(
-            system_instruction=system_instruction,
-        )
+        config_kwargs["system_instruction"] = system_instruction
+    if response_schema is not None:
+        config_kwargs["response_mime_type"] = "application/json"
+        config_kwargs["response_schema"] = response_schema
+    if config_kwargs:
+        generate_kwargs["config"] = types.GenerateContentConfig(**config_kwargs)
 
     async with _get_semaphore():
         for attempt in range(1, MAX_RETRIES + 1):
@@ -524,6 +535,19 @@ async def describe_and_embed(image_bytes: bytes) -> tuple[str, list[float], str]
     return description, embedding, quality
 
 
+# Structured-output schema for the combined classify+describe call. Forcing
+# schema-conforming JSON at the API level (instead of asking for JSON in the
+# prompt) is what prevents the "not valid JSON" parse failures.
+_CLASSIFY_AND_DESCRIBE_SCHEMA = types.Schema(
+    type=types.Type.OBJECT,
+    properties={
+        "is_package": types.Schema(type=types.Type.BOOLEAN),
+        "description": types.Schema(type=types.Type.STRING),
+    },
+    required=["is_package", "description"],
+)
+
+
 @observe()
 async def classify_and_describe(image_bytes: bytes) -> tuple[bool, str]:
     """Classify and describe in a single Gemini call.
@@ -536,7 +560,9 @@ async def classify_and_describe(image_bytes: bytes) -> tuple[bool, str]:
     logger.info("[TIMING] image_resize=%.0fms", resize_ms)
 
     prompt = get_prompt_required("classify-and-describe")
-    raw_text = await _call_vision(image, prompt)
+    raw_text = await _call_vision(
+        image, prompt, response_schema=_CLASSIFY_AND_DESCRIBE_SCHEMA
+    )
     logger.info("Classify+describe raw response: %s", raw_text[:200])
 
     is_package, description = parse_classify_and_describe_response(raw_text)
