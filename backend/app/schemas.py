@@ -548,6 +548,9 @@ class ChannelStatus(BaseModel):
 class ChannelOrderRow(BaseModel):
     external_id: str
     reference: str | None = None
+    # The channel's human order number (Shopify order name, e.g. "1262"); this is
+    # what the courier's shipping label carries as its reference.
+    channel_reference: str | None = None
     ordered_at: datetime | None = None
     status: str | None = None
     matched_lines: int

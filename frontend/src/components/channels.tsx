@@ -28,6 +28,7 @@ interface ChannelStatus {
 interface ReconRow {
   external_id: string;
   reference: string | null;
+  channel_reference: string | null;
   ordered_at: string | null;
   status: string | null;
   matched_lines: number;
@@ -187,6 +188,10 @@ export function ChannelsPage() {
               <p className="text-sm font-semibold">
                 Binnengehaalde orders (observe){loading ? " — laden…" : ""}
               </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Het ordernummer is wat Veloyd als referentie op het verzendlabel zet.
+                Bij de latere labelscan tijdens het picken matchen we hierop.
+              </p>
             </div>
             {recon && recon.orders.length > 0 ? (
               <div className="divide-y divide-border">
@@ -194,12 +199,14 @@ export function ChannelsPage() {
                   <div key={o.external_id} className="px-4 py-3 flex justify-between items-center gap-3">
                     <div className="min-w-0">
                       <p className="text-sm font-medium">
-                        Shopify #{o.external_id}
+                        Order {o.channel_reference ?? "—"}
                         {o.status && (
                           <Badge variant="secondary" className="ml-2 text-xs">{o.status}</Badge>
                         )}
                       </p>
-                      <p className="text-xs text-muted-foreground">{fmtDate(o.ordered_at)}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Shopify-id {o.external_id} · {fmtDate(o.ordered_at)}
+                      </p>
                     </div>
                     <div className="text-right text-xs shrink-0">
                       <p className="text-emerald-700">{o.matched_lines} gematcht</p>

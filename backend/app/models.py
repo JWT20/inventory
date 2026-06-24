@@ -384,6 +384,12 @@ class Order(Base):
     # The order id at the source channel (Shopify/bol). NULL for manual orders.
     # Unique per (organization, channel) via uq_orders_org_channel_external.
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The human order number at the source channel (Shopify order name, e.g.
+    # "1262"), normalized without the leading '#'. Distinct from external_id,
+    # which is the channel's internal order id. This is the number the courier's
+    # shipping label (Veloyd) carries as its reference, so the later label-scan
+    # pick step matches on this. NULL for manual orders.
+    channel_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # The order's timestamp at the source channel (e.g. Shopify createdAt). NULL
     # for manual orders. Distinct from created_at, which is the row insert time —
     # the reconciliation view sorts/shows by this, not the import moment.

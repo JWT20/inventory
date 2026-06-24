@@ -38,6 +38,9 @@ class NormalizedLine:
 class NormalizedChannelOrder:
     """A channel order in the internal, channel-agnostic shape."""
     external_id: str
+    # The channel's human order number (Shopify order name, e.g. "1262"),
+    # normalized without '#'. Distinct from external_id (the internal order id).
+    reference: str | None = None
     ordered_at: datetime.datetime | None = None
     customer_name: str | None = None
     # Channel financial state (paid / pending / cancelled / refunded …). Kept for
@@ -96,6 +99,7 @@ def import_channel_order(
             # Unique internal reference; the channel's own order id lives in
             # external_id and is shown in the reconciliation view.
             reference=f"{channel[:3].upper()}-{uuid.uuid4().hex[:8].upper()}",
+            channel_reference=order.reference,
             status=target_status,
             ordered_at=order.ordered_at,
             created_by=None,
@@ -112,6 +116,10 @@ def import_channel_order(
             db_order.status = "active"
         if order.ordered_at is not None:
             db_order.ordered_at = order.ordered_at
+        # Backfill / refresh the order number on re-import (e.g. for orders
+        # imported before this column existed).
+        if order.reference is not None:
+            db_order.channel_reference = order.reference
 
     matched = 0
     unmatched: list[str] = []
