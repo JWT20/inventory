@@ -71,6 +71,9 @@ class FakeClient:
 def test_to_normalized_maps_barcode_to_ean():
     norm = to_normalized(_node("1001", "8710000000001", qty=3))
     assert norm.external_id == "1001"
+    # The order name "#1001" is normalized to "1001" — the number Veloyd puts on
+    # the label, which we match on at the later label-scan step.
+    assert norm.reference == "1001"
     assert norm.customer_name == "Web Klant"
     assert norm.financial_status == "paid"
     assert len(norm.lines) == 1
@@ -105,6 +108,8 @@ def test_sync_imports_orders_as_observed_and_advances_cursor(db):
     # Both stored as observe-mode orders for this org.
     observed = db.query(Order).filter_by(organization_id=org.id, status="observed").all()
     assert len(observed) == 2
+    # The human order number ("#2001" -> "2001") is stored for the label match.
+    assert {o.channel_reference for o in observed} == {"2001", "2002"}
     # Cursor advanced to the newest updatedAt.
     db.refresh(conn)
     assert conn.cursor == "2026-06-23T11:00:00Z"
@@ -267,7 +272,8 @@ def test_reconciliation_lists_unmatched_eans(client, db, admin_token, sample_org
     import_channel_order(
         db, conn,
         NormalizedChannelOrder(
-            external_id="R1", lines=[NormalizedLine(ean="9999999999999", quantity=1)]
+            external_id="R1", reference="1042",
+            lines=[NormalizedLine(ean="9999999999999", quantity=1)]
         ),
     )
     db.commit()
@@ -281,3 +287,6 @@ def test_reconciliation_lists_unmatched_eans(client, db, admin_token, sample_org
     assert "9999999999999" in body["unmatched_eans"]
     assert len(body["orders"]) == 1
     assert body["orders"][0]["external_id"] == "R1"
+    # The human order number is surfaced so the operator can eyeball it against
+    # the Veloyd label before cutover.
+    assert body["orders"][0]["channel_reference"] == "1042"

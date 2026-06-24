@@ -131,6 +131,18 @@ def _gid_to_id(gid: str) -> str:
     return gid.rsplit("/", 1)[-1] if gid else gid
 
 
+def _normalize_reference(name: str | None) -> str | None:
+    """Shopify order name '#1262' -> '1262'.
+
+    This is the human order number, distinct from the internal order id in
+    external_id. The courier's label (Veloyd) carries it as its reference, so we
+    store the normalized form (no leading '#', trimmed) to match against later.
+    """
+    if not name:
+        return None
+    return name.strip().lstrip("#").strip() or None
+
+
 def to_normalized(node: dict) -> NormalizedChannelOrder:
     """Map one Shopify order node to the internal normalized order. Pure."""
     # Customer name comes from the shipping address (covered by read_orders), so
@@ -158,6 +170,7 @@ def to_normalized(node: dict) -> NormalizedChannelOrder:
 
     return NormalizedChannelOrder(
         external_id=_gid_to_id(node.get("id", "")),
+        reference=_normalize_reference(node.get("name")),
         ordered_at=ordered_at,
         customer_name=ship.get("name"),
         financial_status=(node.get("displayFinancialStatus") or "pending").lower(),
