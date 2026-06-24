@@ -99,11 +99,11 @@ export function ChannelsPage() {
     }
   }
 
-  async function sync() {
+  async function sync(full = false) {
     if (!orgId) return;
     setSyncing(true);
     try {
-      const r = await api.channelSync(orgId);
+      const r = await api.channelSync(orgId, full);
       toast.success(
         `Sync klaar: ${r.fetched} opgehaald · ${r.created} nieuw · ${r.unmatched} ongematchte EAN's`,
       );
@@ -165,8 +165,16 @@ export function ChannelsPage() {
                 <Button variant="outline" onClick={connect}>
                   {status?.connected ? "Opnieuw verbinden" : "Verbind Shopify"}
                 </Button>
-                <Button onClick={sync} disabled={!status?.connected || syncing}>
+                <Button onClick={() => sync()} disabled={!status?.connected || syncing}>
                   {syncing ? "Synchroniseren…" : "Nu synchroniseren"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => sync(true)}
+                  disabled={!status?.connected || syncing}
+                  title="Haalt de hele historie opnieuw op en vult ontbrekende ordernummers/status aan."
+                >
+                  Volledige hersync
                 </Button>
               </div>
             </div>

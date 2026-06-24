@@ -182,10 +182,17 @@ def shopify_status(
 @router.post("/shopify/sync", response_model=ChannelSyncSummary)
 def trigger_shopify_sync(
     organization_id: int | None = Query(None),
+    full: bool = Query(False),
     db: Session = Depends(get_db),
     user: User = Depends(require_platform_admin),
 ):
-    """Pull Shopify orders updated since the last sync and import them (observe)."""
+    """Pull Shopify orders and import them (observe).
+
+    Normally incremental: only orders updated since the connection cursor. With
+    ``full=true`` the cursor is reset first, so Shopify re-sends the whole
+    history — used once to backfill fields on orders imported by older code. The
+    importer is idempotent, so this never duplicates orders.
+    """
     org_id = _require_org_id(organization_id)
     _assert_org_has_channel(db, org_id)
     connection = _get_or_create_connection(db, org_id, "shopify")
@@ -198,6 +205,8 @@ def trigger_shopify_sync(
         raise HTTPException(
             400, "Shopify is niet verbonden — koppel eerst via de Verbind-knop"
         )
+    if full:
+        connection.cursor = None
     summary = sync_shopify(db, connection, client)
     db.commit()
     return ChannelSyncSummary(

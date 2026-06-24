@@ -142,6 +142,42 @@ def test_sync_passes_cursor_to_client(db):
     assert client.seen_updated_after == "2026-06-20T00:00:00Z"
 
 
+def test_full_resync_resets_cursor(client, db, monkeypatch, admin_token, sample_org):
+    """full=true clears the cursor before syncing, so Shopify re-sends the whole
+    history; the default (incremental) sync keeps it."""
+    import app.routers.channels as channels_mod
+
+    conn = ChannelConnection(
+        organization_id=sample_org.id, channel="shopify", mode="observe",
+        shop_domain="x.myshopify.com", access_token="shpat_x",
+        cursor="2026-06-20T00:00:00Z",
+    )
+    db.add(conn)
+    db.commit()
+
+    seen = {}
+
+    def fake_sync(db, connection, client):
+        seen["cursor"] = connection.cursor  # cursor as seen by the sync runner
+        return SyncSummary()
+
+    monkeypatch.setattr(channels_mod, "sync_shopify", fake_sync)
+
+    # Incremental: cursor preserved.
+    client.post(
+        f"/api/channels/shopify/sync?organization_id={sample_org.id}",
+        headers=auth_header(admin_token),
+    )
+    assert seen["cursor"] == "2026-06-20T00:00:00Z"
+
+    # Full: cursor reset to None before the sync runs.
+    client.post(
+        f"/api/channels/shopify/sync?organization_id={sample_org.id}&full=true",
+        headers=auth_header(admin_token),
+    )
+    assert seen["cursor"] is None
+
+
 # --- endpoint gating -------------------------------------------------------
 
 def test_sync_endpoint_400_when_not_configured(client, db, admin_token, sample_org):

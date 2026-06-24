@@ -184,8 +184,11 @@ export const api = {
     request(`/channels/shopify/status?organization_id=${orgId}`),
   channelConnectUrl: (orgId: number) =>
     request(`/channels/shopify/connect-url?organization_id=${orgId}`),
-  channelSync: (orgId: number) =>
-    request(`/channels/shopify/sync?organization_id=${orgId}`, { method: "POST" }),
+  channelSync: (orgId: number, full = false) =>
+    request(
+      `/channels/shopify/sync?organization_id=${orgId}${full ? "&full=true" : ""}`,
+      { method: "POST" },
+    ),
   channelReconciliation: (orgId: number) =>
     request(`/channels/shopify/reconciliation?organization_id=${orgId}`),
 
