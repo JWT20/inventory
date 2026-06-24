@@ -6,7 +6,7 @@ shared importer.
 """
 from app.config import settings
 from app.models import ChannelConnection, Order, Organization, SKU
-from app.services.shopify import SyncSummary, sync_shopify, to_normalized
+from app.services.shopify import OAUTH_SCOPES, SyncSummary, sync_shopify, to_normalized
 from tests.conftest import auth_header
 
 
@@ -67,6 +67,13 @@ class FakeClient:
 
 
 # --- mapping ---------------------------------------------------------------
+
+def test_oauth_scopes_include_full_order_history_access():
+    """Full resync needs Shopify's protected all-orders scope, not just read_orders."""
+    scopes = OAUTH_SCOPES.split(",")
+    assert "read_orders" in scopes
+    assert "read_all_orders" in scopes
+
 
 def test_to_normalized_maps_barcode_to_ean():
     norm = to_normalized(_node("1001", "8710000000001", qty=3))
