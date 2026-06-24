@@ -101,6 +101,7 @@ query($first: Int!, $after: String, $query: String) {
         createdAt
         updatedAt
         displayFinancialStatus
+        displayFulfillmentStatus
         shippingAddress { name }
         lineItems(first: 100) {
           edges { node { quantity title variant { barcode sku } } }
@@ -174,6 +175,7 @@ def to_normalized(node: dict) -> NormalizedChannelOrder:
         ordered_at=ordered_at,
         customer_name=ship.get("name"),
         financial_status=(node.get("displayFinancialStatus") or "pending").lower(),
+        fulfillment_status=(node.get("displayFulfillmentStatus") or "unfulfilled").lower(),
         lines=lines,
     )
 

@@ -551,6 +551,9 @@ class ChannelOrderRow(BaseModel):
     # The channel's human order number (Shopify order name, e.g. "1262"); this is
     # what the courier's shipping label carries as its reference.
     channel_reference: str | None = None
+    # The fulfillment state at the source channel ("fulfilled"/"unfulfilled"/…);
+    # fulfilled orders will be kept out of the pick list at cutover.
+    channel_fulfillment_status: str | None = None
     ordered_at: datetime | None = None
     status: str | None = None
     matched_lines: int

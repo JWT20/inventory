@@ -390,6 +390,11 @@ class Order(Base):
     # shipping label (Veloyd) carries as its reference, so the later label-scan
     # pick step matches on this. NULL for manual orders.
     channel_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # The fulfillment state at the source channel (Shopify displayFulfillmentStatus,
+    # e.g. "fulfilled" / "unfulfilled"). Refreshed on every sync. Surfaced in
+    # observe so already-shipped orders are visible; the cutover keeps fulfilled
+    # orders out of the pick list. NULL for manual orders.
+    channel_fulfillment_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     # The order's timestamp at the source channel (e.g. Shopify createdAt). NULL
     # for manual orders. Distinct from created_at, which is the row insert time —
     # the reconciliation view sorts/shows by this, not the import moment.
