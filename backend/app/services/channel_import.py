@@ -67,6 +67,13 @@ class ImportResult:
 # else (pending/refunded/voided/…) must never become a born-active, pickable order.
 _FULFILLABLE_FINANCIAL_STATUSES = {"paid"}
 
+# Shopify fulfillment statuses that mean "already shipped" — such orders must
+# never become born-active/pickable, even in live mode, or the warehouse would
+# pick something that already left (shipped from home, or labelled by the
+# courier). Mirrors the observe UI's "verzonden" badge. Restock/cancellation is
+# a separate concern (fase 4).
+_SHIPPED_FULFILLMENT_STATUSES = {"fulfilled"}
+
 
 def import_channel_order(
     db: Session, connection: ChannelConnection, order: NormalizedChannelOrder
@@ -80,10 +87,17 @@ def import_channel_order(
     org_id = connection.organization_id
     channel = connection.channel
     # Live-mode only makes an order pickable when it is actually fulfillable
-    # (paid). Cancelled/refunded/unpaid orders stay inert ("observed") so we
-    # never ship a cancelled order. Full cancellation→restock is fase 4.
+    # (paid) AND not already shipped. Cancelled/refunded/unpaid orders stay inert
+    # ("observed") so we never ship a cancelled order; already-fulfilled orders
+    # (shipped from home or labelled by the courier) stay out of the pick list so
+    # we never pick something twice. Full cancellation→restock is fase 4.
     fulfillable = order.financial_status in _FULFILLABLE_FINANCIAL_STATUSES
-    target_status = "active" if (connection.mode == "live" and fulfillable) else "observed"
+    already_shipped = order.fulfillment_status in _SHIPPED_FULFILLMENT_STATUSES
+    target_status = (
+        "active"
+        if (connection.mode == "live" and fulfillable and not already_shipped)
+        else "observed"
+    )
 
     existing = (
         db.query(Order)
