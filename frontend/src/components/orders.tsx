@@ -30,7 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ChevronDown, Minus, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, Minus, Plus, Trash2, FileText } from "lucide-react";
 import {
   unitLabel,
   formatBoxesBottles,
@@ -218,6 +218,7 @@ export function OrdersPage() {
   const [showUpcoming, setShowUpcoming] = useState(false);
   const [showPending, setShowPending] = useState(false);
   const [showApproval, setShowApproval] = useState(false);
+  const [showNotes, setShowNotes] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -417,6 +418,15 @@ export function OrdersPage() {
     .filter((group) => group.week > currentWeek)
     .sort((a, b) => a.week.localeCompare(b.week));
 
+  // Notes: orders in the current week that have a non-empty remarks field.
+  const currentWeekOrders = currentGroup?.orders ?? [];
+  const notesEntries = currentWeekOrders
+    .filter((o) => o.remarks?.trim())
+    .map((o) => ({
+      header: o.customer_name?.trim() || o.reference,
+      remark: o.remarks.trim(),
+    }));
+
   const sortForPicking = (items: Order[]) =>
     [...items].sort((a, b) => {
       const [aDay] = getOrderDeliveryDays(a);
@@ -602,11 +612,22 @@ export function OrdersPage() {
     <>
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Orders</h2>
-        {canCreate && (
-          <Button size="sm" onClick={() => setShowManual(true)}>
-            + Order
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => setShowNotes(true)}>
+            <FileText className="h-4 w-4 mr-1.5" />
+            Notities
+            {notesEntries.length > 0 && (
+              <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+                {notesEntries.length}
+              </span>
+            )}
           </Button>
-        )}
+          {canCreate && (
+            <Button size="sm" onClick={() => setShowManual(true)}>
+              + Order
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="space-y-4">
@@ -732,6 +753,33 @@ export function OrdersPage() {
           </>
         )}
       </div>
+
+      <Dialog open={showNotes} onOpenChange={(open) => !open && setShowNotes(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Notities — week {currentWeek.split("-W")[1]}</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            {notesEntries.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                Geen notities voor deze week.
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {notesEntries.map((entry, i) => (
+                  <div key={i}>
+                    <p className="text-sm font-semibold">{entry.header}</p>
+                    <p className="text-sm text-muted-foreground mt-0.5">"{entry.remark}"</p>
+                  </div>
+                ))}
+                <p className="text-xs text-muted-foreground pt-2 border-t border-border">
+                  {notesEntries.length} klant{notesEntries.length === 1 ? "" : "en"} met een notitie
+                </p>
+              </div>
+            )}
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
 
       <ManualOrderDialog
         open={showManual}
