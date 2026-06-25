@@ -613,15 +613,15 @@ export function OrdersPage() {
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Orders</h2>
         <div className="flex items-center gap-2">
-          {notesEntries.length > 0 && (
-            <Button size="sm" variant="outline" onClick={() => setShowNotes(true)}>
-              <FileText className="h-4 w-4 mr-1.5" />
-              Notities
+          <Button size="sm" variant="outline" onClick={() => setShowNotes(true)}>
+            <FileText className="h-4 w-4 mr-1.5" />
+            Notities
+            {notesEntries.length > 0 && (
               <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
                 {notesEntries.length}
               </span>
-            </Button>
-          )}
+            )}
+          </Button>
           {canCreate && (
             <Button size="sm" onClick={() => setShowManual(true)}>
               + Order
