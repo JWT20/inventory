@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
+import { useAuth, hasModule } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -240,6 +240,14 @@ export function OrdersPage() {
 
   const isCustomer = user?.role === "customer";
   const isCourier = user?.role === "courier";
+  // Notes are a wine-flow concept (per-delivery remarks to customers). Show the
+  // overview only to the courier (cross-org) and the wine merchant (owner/member
+  // with the weekly flow); hide it for customers and EAN orgs (barcode/channel,
+  // which lack week_overview).
+  const canSeeNotes =
+    isCourier ||
+    ((user?.role === "owner" || user?.role === "member") &&
+      hasModule(user, "week_overview"));
 
   // Who can create orders?
   const canCreate =
@@ -613,15 +621,17 @@ export function OrdersPage() {
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Orders</h2>
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={() => setShowNotes(true)}>
-            <FileText className="h-4 w-4 mr-1.5" />
-            Notities
-            {notesEntries.length > 0 && (
-              <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
-                {notesEntries.length}
-              </span>
-            )}
-          </Button>
+          {canSeeNotes && (
+            <Button size="sm" variant="outline" onClick={() => setShowNotes(true)}>
+              <FileText className="h-4 w-4 mr-1.5" />
+              Notities
+              {notesEntries.length > 0 && (
+                <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+                  {notesEntries.length}
+                </span>
+              )}
+            </Button>
+          )}
           {canCreate && (
             <Button size="sm" onClick={() => setShowManual(true)}>
               + Order
