@@ -34,7 +34,7 @@ from app.services.channel_import import (
 
 logger = logging.getLogger(__name__)
 
-OAUTH_SCOPES = "read_orders,read_products"
+OAUTH_SCOPES = "read_orders,read_all_orders,read_products"
 _SHOP_DOMAIN_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$")
 
 
