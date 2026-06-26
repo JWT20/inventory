@@ -427,7 +427,12 @@ export function OrdersPage() {
     .sort((a, b) => a.week.localeCompare(b.week));
 
   // Notes: orders in the current week that have a non-empty remarks field.
-  const currentWeekOrders = currentGroup?.orders ?? [];
+  // Include every status (active, completed, closed) so the courier and wine/EAN
+  // merchant keep seeing remarks after an order is finished or closed; only drop
+  // cancelled orders.
+  const currentWeekOrders = visibleOrders.filter(
+    (o) => orderWeek(o) === currentWeek && o.status !== "cancelled",
+  );
   const notesEntries = currentWeekOrders
     .filter((o) => o.remarks?.trim())
     .map((o) => ({
