@@ -541,6 +541,14 @@ class ChannelSyncSummary(BaseModel):
     unmatched: int
 
 
+class InventoryPushSummary(BaseModel):
+    """Result of a one-shot bulk push of local stock to Shopify."""
+    total: int
+    pushed: int
+    skipped_no_variant: int
+    failed: int
+
+
 class ChannelConnectUrl(BaseModel):
     url: str
 

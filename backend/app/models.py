@@ -174,6 +174,12 @@ class SKU(Base):
     # EAN-13 barcode. NULL for vision (wine) products. Unique per organization
     # via uq_skus_org_ean above.
     ean: Mapped[str | None] = mapped_column(String(13), nullable=True)
+    # Cached Shopify inventory_item_id for this product's variant, resolved once
+    # via the variant barcode (== ean) and reused for inventory write-back. NULL
+    # until first resolved, or when the org has no live Shopify connection.
+    shopify_inventory_item_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
@@ -694,8 +700,11 @@ class ChannelConnection(Base):
     shop_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
     access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     scope: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Cached primary location id at the shop, resolved once and reused as the
+    # target of inventory write-back. NULL until first resolved.
+    shopify_location_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # "observe" = import + show for reconciliation, no stock/fulfilment effect;
-    # "live" = born-active + (later) stock sync. Default observe — never act by
+    # "live" = born-active + stock sync. Default observe — never act by
     # surprise.
     mode: Mapped[str] = mapped_column(
         String(20), default="observe", server_default="observe"
