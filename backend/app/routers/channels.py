@@ -9,7 +9,7 @@ auth token, and is instead secured by Shopify's HMAC + a signed ``state``.
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy.orm import Session
@@ -26,7 +26,7 @@ from app.schemas import (
     ChannelSyncSummary,
     InventoryPushSummary,
 )
-from app.services.inventory_sync import push_available
+from app.services.inventory_sync import push_available, push_inventory_to_shopify
 from app.services.shopify import (
     ShopifyClient,
     build_authorize_url,
@@ -183,6 +183,7 @@ def shopify_status(
 
 @router.post("/shopify/sync", response_model=ChannelSyncSummary)
 def trigger_shopify_sync(
+    background_tasks: BackgroundTasks,
     organization_id: int | None = Query(None),
     full: bool = Query(False),
     db: Session = Depends(get_db),
@@ -211,6 +212,10 @@ def trigger_shopify_sync(
         connection.cursor = None
     summary = sync_shopify(db, connection, client)
     db.commit()
+    # Mirror newly-reserved SKUs to Shopify after the response (best-effort), so
+    # going live immediately drops the storefront available by the open orders.
+    for sku_id in summary.reserved_sku_ids:
+        background_tasks.add_task(push_inventory_to_shopify, sku_id, org_id)
     return ChannelSyncSummary(
         fetched=summary.fetched,
         created=summary.created,

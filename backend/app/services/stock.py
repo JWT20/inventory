@@ -78,3 +78,38 @@ def apply_stock_movement(
     db.add(movement)
     db.flush()
     return movement
+
+
+def adjust_reservation(
+    db: Session, *, sku_id: int, organization_id: int, delta: int
+) -> None:
+    """Adjust reserved stock by ``delta`` (no physical movement, no movement row).
+
+    Reservation is how the available number an external channel sees already
+    excludes open orders: a live channel order reserves at activation and
+    releases as it is picked, so ``available`` stays stable across the
+    sale → pick window (no oversell). Clamped at 0 so a release on a product
+    that never reserved (e.g. vision picks) is a harmless no-op.
+
+    Does NOT commit — the caller owns the transaction boundary.
+    """
+    if delta == 0:
+        return
+    balance = (
+        db.query(InventoryBalance)
+        .filter(
+            InventoryBalance.sku_id == sku_id,
+            InventoryBalance.organization_id == organization_id,
+        )
+        .with_for_update()
+        .first()
+    )
+    if not balance:
+        if delta < 0:
+            return  # nothing reserved to release
+        balance = InventoryBalance(
+            sku_id=sku_id, organization_id=organization_id, quantity_on_hand=0
+        )
+        db.add(balance)
+        db.flush()
+    balance.quantity_reserved = max(0, balance.quantity_reserved + delta)

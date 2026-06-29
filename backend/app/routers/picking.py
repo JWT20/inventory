@@ -14,13 +14,14 @@ Gated on the order's ``barcode_picking`` module. Scoped to the selected order
 """
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.auth import assert_order_module, require_inbound_booker
 from app.database import get_db
 from app.events import publish_event
 from app.models import Booking, Order, OrderLine, SKU, User
+from app.services.inventory_sync import push_inventory_to_shopify
 from app.schemas import (
     EanScanRequest,
     EanScanResponse,
@@ -41,6 +42,7 @@ router = APIRouter(
 @router.post("/scan-ean", response_model=EanScanResponse)
 def scan_ean(
     body: EanScanRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(require_inbound_booker),
 ):
@@ -131,6 +133,9 @@ def scan_ean(
         resource_id=result.last_booking_id,
     )
 
+    # Mirror the new available to Shopify after the response (best-effort).
+    background_tasks.add_task(push_inventory_to_shopify, sku.id, order.organization_id)
+
     return EanScanResponse(
         order_id=order.id,
         order_line_id=line.id,
@@ -149,6 +154,7 @@ def scan_ean(
 @router.post("/undo", response_model=UndoScanResponse)
 def undo_scan(
     body: UndoScanRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(require_inbound_booker),
 ):
@@ -171,6 +177,11 @@ def undo_scan(
     assert_order_module(order, "barcode_picking", user)
 
     result = undo_booking(db, booking_id=booking.id, performed_by=user.id)
+
+    # Mirror the restored available to Shopify after the response (best-effort).
+    background_tasks.add_task(
+        push_inventory_to_shopify, result.sku_id, order.organization_id
+    )
 
     publish_event(
         "booking_undone",

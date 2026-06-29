@@ -18,7 +18,7 @@ import hashlib
 import hmac
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlencode
 
 import httpx
@@ -347,6 +347,9 @@ class SyncSummary:
     created: int = 0
     updated: int = 0
     unmatched: int = 0
+    # SKUs reserved because an order went live this sync — the caller pushes their
+    # new available to Shopify so the storefront stops overselling reserved stock.
+    reserved_sku_ids: set[int] = field(default_factory=set)
 
 
 def sync_shopify(db: Session, connection: ChannelConnection, client=None) -> SyncSummary:
@@ -377,6 +380,7 @@ def sync_shopify(db: Session, connection: ChannelConnection, client=None) -> Syn
         else:
             summary.updated += 1
         summary.unmatched += len(result.unmatched_eans)
+        summary.reserved_sku_ids.update(result.reserved_sku_ids)
 
         node_updated = node.get("updatedAt")
         if node_updated and (latest_updated is None or node_updated > latest_updated):

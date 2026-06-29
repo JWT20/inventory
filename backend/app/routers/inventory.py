@@ -4,7 +4,16 @@ import logging
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Response,
+    UploadFile,
+)
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -61,6 +70,7 @@ from app.services.embedding import (
 )
 from app.services.langfuse_client import PromptUnavailableError
 from app.services.pricing import calc_effective_price
+from app.services.inventory_sync import push_inventory_to_shopify
 from app.services.stock import apply_stock_movement
 from app.services.storage import storage
 
@@ -1162,6 +1172,7 @@ def list_movements(
 @router.post("/inventory/adjust", response_model=StockMovementResponse)
 def adjust_inventory(
     data: InventoryAdjustRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(require_inbound_booker),
 ):
@@ -1189,6 +1200,9 @@ def adjust_inventory(
     )
     db.commit()
     db.refresh(movement)
+
+    # Mirror the new available to Shopify after the response (best-effort).
+    background_tasks.add_task(push_inventory_to_shopify, data.sku_id, organization_id)
 
     publish_event(
         "inventory_adjusted",
