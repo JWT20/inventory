@@ -353,3 +353,21 @@ def test_label_blocked_without_channel_reference(client, db, courier_token):
 
     resp = _scan_label(client, courier_token, order.id, "1262")
     assert resp.status_code == 409
+
+
+def test_shipped_order_in_courier_history_not_worklist(client, db, courier_token):
+    """A shipped order drops out of the active worklist but stays visible under
+    include_history (PR2: shipped consistency)."""
+    org = _barcode_org(db, "socks-shipped-list")
+    order = _complete_order(db, org, "SOK-LH", "8700000003001", "1262")
+    assert _scan_label(client, courier_token, order.id, "1262").status_code == 200
+
+    worklist = client.get("/api/orders", headers=auth_header(courier_token)).json()
+    assert order.id not in {o["id"] for o in worklist}
+
+    history = client.get(
+        "/api/orders?include_history=true", headers=auth_header(courier_token)
+    ).json()
+    by_id = {o["id"]: o for o in history}
+    assert order.id in by_id
+    assert by_id[order.id]["status"] == "shipped"
