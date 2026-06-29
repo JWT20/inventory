@@ -7,12 +7,23 @@ Idempotent: safe to run repeatedly. Run inside the dev backend container:
 
 Creates a dev organization, a handful of SKUs, one customer linked to them,
 and a login per role (owner / member / courier / customer) so every part of
-the UI is reachable. Never run this against production.
+the UI is reachable. Also seeds a barcode/EAN organization with an active order
+so the handscanner pick flow can be tested by *typing* EANs (a handscanner is
+just a keyboard). Never run this against production.
 """
 
 from app.auth import hash_password
 from app.database import SessionLocal
-from app.models import Customer, CustomerSKU, Organization, SKU, User
+from app.models import (
+    Customer,
+    CustomerSKU,
+    InventoryBalance,
+    Order,
+    OrderLine,
+    Organization,
+    SKU,
+    User,
+)
 
 # (code, name, description, is_bottle)
 SAMPLE_SKUS = [
@@ -109,8 +120,100 @@ def main() -> None:
             print("Created logins: " + ", ".join(created_users))
         else:
             print("Role logins already existed (owner/member/koerier/klant).")
+
+        seed_barcode(db)
     finally:
         db.close()
+
+
+# (sku_code, name, ean) — dummy 13-digit codes. The scan endpoint matches on the
+# exact string (no checkdigit check), so these just need to be unique + memorable.
+BARCODE_SKUS = [
+    ("SOK-ROOD", "Sokken Rood", "8710000000018"),
+    ("SOK-BLAU", "Sokken Blauw", "8710000000025"),
+    ("SOK-GROEN", "Sokken Groen", "8710000000032"),
+]
+BARCODE_ORDER_REF = "SOK-DEMO-1"
+BARCODE_CHANNEL_REF = "1262"  # type this at the label step
+
+
+def seed_barcode(db) -> None:
+    """A barcode/EAN org + one active order, so the handscanner pick flow is
+    testable by typing EANs (and the channel_reference at the label step)."""
+    org = db.query(Organization).filter_by(slug="dev-sokken").first()
+    if org is None:
+        org = Organization(name="Dev Sokken", slug="dev-sokken")
+        db.add(org)
+        db.flush()
+    # EAN org modules: barcode picking + channel orders (Shopify).
+    org.modules = ["inventory", "orders", "barcode_picking", "channel_orders"]
+    db.commit()
+    db.refresh(org)
+
+    for code, name, ean in BARCODE_SKUS:
+        sku = db.query(SKU).filter_by(sku_code=code).first()
+        if sku is None:
+            sku = SKU(
+                sku_code=code,
+                name=name,
+                category="other",
+                active=True,
+                organization_id=org.id,
+                product_type="barcode",
+                ean=ean,
+            )
+            db.add(sku)
+            db.flush()
+        # Stock so picking does not hit the oversell guard.
+        if db.query(InventoryBalance).filter_by(
+            sku_id=sku.id, organization_id=org.id
+        ).first() is None:
+            db.add(InventoryBalance(
+                sku_id=sku.id, organization_id=org.id, quantity_on_hand=20
+            ))
+    db.commit()
+
+    customer = db.query(Customer).filter_by(name="Webshop Klant").first()
+    if customer is None:
+        customer = Customer(name="Webshop Klant", organization_id=org.id)
+        db.add(customer)
+        db.flush()
+
+    order = db.query(Order).filter_by(reference=BARCODE_ORDER_REF).first()
+    if order is None:
+        order = Order(
+            organization_id=org.id,
+            reference=BARCODE_ORDER_REF,
+            status="active",
+            channel="shopify",
+            external_id="SHOP-DEMO-1",
+            channel_reference=BARCODE_CHANNEL_REF,
+        )
+        db.add(order)
+        db.flush()
+        for code, _name, _ean in BARCODE_SKUS:
+            sku = db.query(SKU).filter_by(sku_code=code).first()
+            db.add(OrderLine(
+                order_id=order.id,
+                sku_id=sku.id,
+                customer_id=customer.id,
+                klant=customer.name,
+                quantity=2,
+                booked_count=0,
+                delivery_day="wednesday",
+            ))
+    db.commit()
+    db.refresh(order)
+
+    print(
+        f"\nBarcode pickflow testdata: org '{org.name}' (id={org.id}), "
+        f"order '{order.reference}' (id={order.id}, status={order.status})."
+    )
+    print("Log in als koerier (koerier/devkoerier) → Scan & Boek → kies deze order.")
+    print("Typ deze EANs (2x elk om de order compleet te maken):")
+    for code, name, ean in BARCODE_SKUS:
+        print(f"  {ean}  ({name})")
+    print(f"Labelstap: typ '{BARCODE_CHANNEL_REF}' (klopt) — iets anders = blokkade.")
 
 
 if __name__ == "__main__":
