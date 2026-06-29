@@ -200,3 +200,156 @@ def test_inactive_order_rejected(client, db, courier_token):
 
     resp = _scan(client, courier_token, order.id, "8700000000001")
     assert resp.status_code == 400
+
+
+# --- Undo (PR1) -----------------------------------------------------------
+
+
+def _undo(client, token, booking_id):
+    return client.post(
+        "/api/picking/undo",
+        json={"booking_id": booking_id},
+        headers=auth_header(token),
+    )
+
+
+def test_undo_reverses_one_unit_and_restocks(client, db, courier_token):
+    org = _barcode_org(db, "socks-undo")
+    sku = _make_barcode_sku(db, org, "SOK-U1", "8700000001001")
+    order, line = _make_active_order(db, org, sku, quantity=2)
+
+    booking_id = _scan(client, courier_token, order.id, "8700000001001").json()["booking_id"]
+    balance = (
+        db.query(InventoryBalance)
+        .filter_by(sku_id=sku.id, organization_id=org.id)
+        .one()
+    )
+    db.refresh(balance)
+    assert balance.quantity_on_hand == 9  # 10 - 1 picked
+
+    resp = _undo(client, courier_token, booking_id)
+    assert resp.status_code == 200
+    assert resp.json()["remaining_quantity"] == 2
+
+    db.refresh(line)
+    db.refresh(balance)
+    assert line.booked_count == 0
+    assert balance.quantity_on_hand == 10  # restocked
+
+
+def test_undo_reopens_completed_order(client, db, courier_token):
+    org = _barcode_org(db, "socks-undo-done")
+    sku = _make_barcode_sku(db, org, "SOK-U2", "8700000001002")
+    order, _line = _make_active_order(db, org, sku, quantity=1)
+
+    booking_id = _scan(client, courier_token, order.id, "8700000001002").json()["booking_id"]
+    db.refresh(order)
+    assert order.status == "completed"
+    assert order.finalized_at is not None
+
+    resp = _undo(client, courier_token, booking_id)
+    assert resp.status_code == 200
+    assert resp.json()["order_status"] == "active"
+
+    db.refresh(order)
+    assert order.status == "active"
+    assert order.finalized_at is None
+
+
+def test_undo_blocked_after_shipped(client, db, courier_token):
+    org = _barcode_org(db, "socks-undo-shipped")
+    sku = _make_barcode_sku(db, org, "SOK-U3", "8700000001003")
+    order, _ = _make_active_order(db, org, sku, quantity=1)
+    order.channel_reference = "1262"
+    db.commit()
+
+    booking_id = _scan(client, courier_token, order.id, "8700000001003").json()["booking_id"]
+    ship = _scan_label(client, courier_token, order.id, "1262")
+    assert ship.status_code == 200
+
+    resp = _undo(client, courier_token, booking_id)
+    assert resp.status_code == 409
+
+
+# --- Label verification gate (PR1) ----------------------------------------
+
+
+def _scan_label(client, token, order_id, label):
+    return client.post(
+        "/api/picking/scan-label",
+        json={"order_id": order_id, "label_reference": label},
+        headers=auth_header(token),
+    )
+
+
+def _complete_order(db, org, code, ean, ref):
+    sku = _make_barcode_sku(db, org, code, ean)
+    order, _ = _make_active_order(db, org, sku, quantity=1, booked=1)
+    order.status = "completed"
+    order.channel_reference = ref
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+def test_label_match_ships_order(client, db, courier_token):
+    org = _barcode_org(db, "socks-lbl-ok")
+    order = _complete_order(db, org, "SOK-L1", "8700000002001", "1262")
+
+    resp = _scan_label(client, courier_token, order.id, "1262")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "shipped"
+
+    db.refresh(order)
+    assert order.status == "shipped"
+
+
+def test_label_match_strips_leading_hash(client, db, courier_token):
+    org = _barcode_org(db, "socks-lbl-hash")
+    order = _complete_order(db, org, "SOK-L2", "8700000002002", "1263")
+
+    resp = _scan_label(client, courier_token, order.id, "#1263")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "shipped"
+
+
+def test_label_mismatch_blocks(client, db, courier_token):
+    org = _barcode_org(db, "socks-lbl-bad")
+    order = _complete_order(db, org, "SOK-L3", "8700000002003", "1262")
+
+    resp = _scan_label(client, courier_token, order.id, "9999")
+    assert resp.status_code == 409
+
+    db.refresh(order)
+    assert order.status == "completed"  # unchanged
+
+
+def test_label_blocked_when_not_complete(client, db, courier_token):
+    org = _barcode_org(db, "socks-lbl-active")
+    sku = _make_barcode_sku(db, org, "SOK-L4", "8700000002004")
+    order, _ = _make_active_order(db, org, sku, quantity=2, booked=1)
+    order.channel_reference = "1262"
+    db.commit()
+
+    resp = _scan_label(client, courier_token, order.id, "1262")
+    assert resp.status_code == 400
+
+
+def test_label_blocked_when_already_shipped(client, db, courier_token):
+    org = _barcode_org(db, "socks-lbl-twice")
+    order = _complete_order(db, org, "SOK-L5", "8700000002005", "1262")
+
+    assert _scan_label(client, courier_token, order.id, "1262").status_code == 200
+    resp = _scan_label(client, courier_token, order.id, "1262")
+    assert resp.status_code == 409
+
+
+def test_label_blocked_without_channel_reference(client, db, courier_token):
+    org = _barcode_org(db, "socks-lbl-noref")
+    sku = _make_barcode_sku(db, org, "SOK-L6", "8700000002006")
+    order, _ = _make_active_order(db, org, sku, quantity=1, booked=1)
+    order.status = "completed"
+    db.commit()
+
+    resp = _scan_label(client, courier_token, order.id, "1262")
+    assert resp.status_code == 409

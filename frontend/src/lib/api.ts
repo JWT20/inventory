@@ -372,6 +372,15 @@ export const api = {
   // Picking - barcode/EAN (1 scan = 1 unit booked on the selected order)
   scanEan: (orderId: number, ean: string) =>
     json("/picking/scan-ean", "POST", { order_id: orderId, ean }),
+  // Undo a single scanned unit (wrong/damaged item).
+  undoScan: (bookingId: number) =>
+    json("/picking/undo", "POST", { booking_id: bookingId }),
+  // Shipping-label verification gate: ships a fully-picked barcode order.
+  scanLabel: (orderId: number, labelReference: string) =>
+    json("/picking/scan-label", "POST", {
+      order_id: orderId,
+      label_reference: labelReference,
+    }),
 
   // Receiving - book (1 scan = 1 besteleenheid = 1 booking)
   bookBox: (blob: Blob, orderId: number, scanMode: "box" | "bottle" = "box") => {

@@ -42,7 +42,7 @@ def recompute_order_status(order: Order, lines: list[OrderLine]) -> None:
     Orders awaiting approval stay pending_approval regardless of line edits;
     approval is an explicit merchant action.
     """
-    if order.status in ("completed", "cancelled", "closed", "pending_approval"):
+    if order.status in ("completed", "shipped", "cancelled", "closed", "pending_approval"):
         return
     all_have_images = all(len(l.sku.reference_images) > 0 for l in lines)
     all_booked = all(l.booked_count >= l.quantity for l in lines)
@@ -183,4 +183,87 @@ def apply_booking(
         remaining=remaining_for_line(line),
         order_status=order.status,
         order_completed=order.status == "completed",
+    )
+
+
+@dataclass
+class UndoResult:
+    """Everything a caller needs to build an UndoScanResponse without re-querying."""
+
+    order_id: int
+    order_line_id: int
+    sku_id: int
+    remaining: int
+    order_status: str
+
+
+def undo_booking(db: Session, *, booking_id: int, performed_by: int) -> UndoResult:
+    """Reverse a single booking: drop the unit, restock it, un-complete the order.
+
+    The inverse of one ``apply_booking`` unit. Mirrors its discipline — locks the
+    order's lines, mutates on fresh state, commits once. Restock is a *positive*
+    ``pick`` movement so it nets out against the original pick in any report that
+    sums pick movements.
+
+    A shipped order is terminal: the courier cannot undo a unit once the label
+    gate has closed the order.
+    """
+    booking = db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(404, "Boeking niet gevonden")
+
+    # Lock + refresh the order's lines, same as apply_booking.
+    lines = (
+        db.query(OrderLine)
+        .filter(OrderLine.order_id == booking.order_id)
+        .with_for_update()
+        .populate_existing()
+        .all()
+    )
+    order = db.get(Order, booking.order_id)
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+    db.refresh(order, with_for_update=True)
+
+    if order.status == "shipped":
+        raise HTTPException(409, "Order is al verzonden; terugdraaien niet mogelijk")
+
+    line = next((l for l in lines if l.id == booking.order_line_id), None)
+    if line is None:
+        raise HTTPException(404, "Orderregel hoort niet bij deze boeking")
+
+    sku_id = booking.sku_id
+    org_id = order.organization_id
+
+    # Drop the unit and delete the booking row.
+    line.booked_count = max(0, line.booked_count - 1)
+    db.delete(booking)
+    db.flush()
+
+    # Restock (+1). Positive ``pick`` movement → nets out against the original.
+    apply_stock_movement(
+        db,
+        sku_id=sku_id,
+        organization_id=org_id,
+        quantity=1,
+        movement_type="pick",
+        reference_type="booking_undo",
+        reference_id=None,
+        performed_by=performed_by,
+    )
+
+    # A completed order that is no longer fully booked reopens for picking; clear
+    # the finalize stamp so the monthly report does not count a reverted order.
+    if order.status == "completed":
+        order.status = "active"
+        order.finalized_at = None
+
+    db.commit()
+
+    return UndoResult(
+        order_id=order.id,
+        order_line_id=line.id,
+        sku_id=sku_id,
+        remaining=remaining_for_line(line),
+        order_status=order.status,
     )
