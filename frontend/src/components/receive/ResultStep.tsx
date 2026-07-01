@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
+import { fireCompletion } from "@/lib/celebrate";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ImageSlideshow } from "@/components/image-slideshow";
@@ -30,6 +31,11 @@ export function ResultStep({
   const [totalBooked, setTotalBooked] = useState(booking.booked_quantity ?? 1);
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
 
+  // Celebrate when this booking was the one that completed the order.
+  useEffect(() => {
+    if (booking.order_completed) fireCompletion();
+  }, [booking.order_completed]);
+
   async function handleBookMore() {
     if (!booking.order_line_id) return;
     setBookingMore(true);
@@ -44,6 +50,7 @@ export function ResultStep({
       setRemaining(result.remaining_quantity ?? 0);
       setMoreQuantity(1);
       toast.success(`${actualBooked}× extra geboekt`);
+      if (result.order_completed) fireCompletion();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Boeken mislukt";
       if (msg.includes("allocation_cap_reached") || msg.includes("Toewijzingslimiet")) {
