@@ -930,6 +930,7 @@ def confirm_booking(
         confidence=data.get("confidence", 0.0),
         booked_quantity=result.booked_quantity,
         remaining_quantity=remaining,
+        order_completed=result.order_completed,
     )
 
 
@@ -1177,6 +1178,7 @@ def book_more(
         reference_image_urls=_all_reference_image_urls(db, sku.id),
         booked_quantity=result.booked_quantity,
         remaining_quantity=remaining,
+        order_completed=result.order_completed,
     )
 
 

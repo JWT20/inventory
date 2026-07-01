@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, type FormEvent } from "react";
 import { toast } from "@/App";
 import { api, ApiError } from "@/lib/api";
+import { fireCompletion } from "@/lib/celebrate";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { EanBookingResult, Order } from "./types";
@@ -36,6 +37,7 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
       if (result.order_completed) {
         setCompleted(true);
         toast.success("Order compleet");
+        fireCompletion();
       }
     } catch (err: unknown) {
       const msg = err instanceof ApiError ? err.message : "Scanfout";

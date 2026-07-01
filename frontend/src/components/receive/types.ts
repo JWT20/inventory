@@ -54,6 +54,7 @@ export interface BookingResult {
   confidence?: number;
   booked_quantity?: number;
   remaining_quantity?: number;
+  order_completed?: boolean;
 }
 
 export interface AlternativeMatch {

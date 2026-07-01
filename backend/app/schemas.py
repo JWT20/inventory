@@ -641,6 +641,7 @@ class BookingResponse(BaseModel):
     confidence: float = 0.0
     booked_quantity: int = 1
     remaining_quantity: int = 0
+    order_completed: bool = False
 
     model_config = {"from_attributes": True}
 

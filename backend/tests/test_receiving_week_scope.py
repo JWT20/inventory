@@ -218,6 +218,38 @@ def test_confirm_books_exact_order_line_and_order_id(
     booking = db.get(Booking, body["id"])
     assert booking.order_id == fallback_order.id
     assert booking.order_line_id == fallback_line.id
+    # Partial pick (1 of 3) must not signal completion to the picker.
+    assert body["order_completed"] is False
+
+
+def test_confirm_signals_order_completed_on_last_unit(
+    client, db, courier_token, courier_user, sample_org
+):
+    """Vision confirm exposes order_completed so the picker gets fireworks."""
+    sku = _make_sku(db)
+    customer = _make_customer(db, sample_org, "Solo")
+    order = _make_order(db, sample_org, "SOLO")
+    line = _make_line(db, order, sku, customer, quantity=1)
+    _set_stock(db, sku, sample_org, 1)
+    db.commit()
+
+    token = _signer.dumps({
+        "order_id": order.id,
+        "order_line_id": line.id,
+        "sku_id": sku.id,
+        "confidence": 0.99,
+        "scan_image_key": "scans/test.jpg",
+        "user_id": courier_user.id,
+    })
+
+    resp = client.post(
+        "/api/receiving/book/confirm",
+        json={"confirmation_token": token, "quantity": 1},
+        headers=auth_header(courier_token),
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["order_completed"] is True
 
 
 def test_book_more_uses_order_line_id(client, db, courier_token, sample_org):
