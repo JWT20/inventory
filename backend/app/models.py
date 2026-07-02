@@ -196,6 +196,11 @@ class SKU(Base):
     )
     organization: Mapped["Organization | None"] = relationship()
     supplier: Mapped["Supplier | None"] = relationship()
+    # Pick locations this barcode product lives at. Empty for vision/wine
+    # products, which are never shelf-picked (enforced in the locations router).
+    location_links: Mapped[list["SKULocation"]] = relationship(
+        back_populates="sku", cascade="all, delete-orphan"
+    )
 
     @property
     def attributes_dict(self) -> dict[str, str]:
@@ -746,3 +751,61 @@ class ChannelSyncLog(Base):
     )
 
     organization: Mapped["Organization | None"] = relationship()
+
+
+class Location(Base):
+    """A physical pick location in the warehouse (row/cabinet/shelf).
+
+    Managed by the courier (warehouse worker). ``code`` is the scannable barcode
+    printed on the shelf; the pick flow verifies a scanned code against it before
+    the products at that location may be booked. Locations are warehouse-global
+    (``organization_id`` optional) because one courier operation serves multiple
+    merchants from the same physical space; ``code`` is therefore unique globally.
+    """
+    __tablename__ = "locations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True
+    )
+    code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    rij: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    kast: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    plank: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), nullable=False
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    sku_links: Mapped[list["SKULocation"]] = relationship(
+        back_populates="location", cascade="all, delete-orphan"
+    )
+
+
+class SKULocation(Base):
+    """Links a barcode SKU to a pick location (many-to-many).
+
+    Only barcode products may be linked — vision/wine products are picked by
+    photo, not by shelf, and stay out of this system entirely (enforced in the
+    router). ``is_primary`` marks the main pick spot when a product lives in
+    more than one place.
+    """
+    __tablename__ = "sku_locations"
+    __table_args__ = (
+        UniqueConstraint("sku_id", "location_id", name="uq_sku_locations_sku_location"),
+        Index("ix_sku_locations_location_id", "location_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="CASCADE"))
+    location_id: Mapped[int] = mapped_column(
+        ForeignKey("locations.id", ondelete="CASCADE")
+    )
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), nullable=False
+    )
+
+    sku: Mapped["SKU"] = relationship(back_populates="location_links")
+    location: Mapped["Location"] = relationship(back_populates="sku_links")

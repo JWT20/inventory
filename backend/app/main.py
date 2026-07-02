@@ -22,7 +22,7 @@ from app.models import User
 from app.events import init_producer, shutdown_producer
 from app.services.langfuse_client import get_langfuse, shutdown_langfuse
 from app.services.storage import storage, LocalStorage
-from app.routers import auth, channels, customers, inventory, orders, picking, product_attributes, receiving, skus, suppliers
+from app.routers import auth, channels, customers, inventory, locations, orders, picking, product_attributes, receiving, skus, suppliers
 from app.routers.skus import sweep_stale_reference_images
 
 logging.basicConfig(level=logging.INFO)
@@ -165,6 +165,7 @@ app.include_router(channels.router, prefix="/api")
 app.include_router(inventory.router, prefix="/api")
 app.include_router(product_attributes.router, prefix="/api")
 app.include_router(suppliers.router, prefix="/api")
+app.include_router(locations.router, prefix="/api")
 
 
 @app.get("/api/health")

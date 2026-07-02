@@ -1093,3 +1093,57 @@ class MonthlyBoxesOrganization(BaseModel):
 
 class MonthlyBoxesResponse(BaseModel):
     organizations: list[MonthlyBoxesOrganization] = []
+
+
+# --- Pick locations (barcode-only, courier-managed) ------------------------
+
+class LocationSKU(BaseModel):
+    """A barcode product linked to a location."""
+    sku_id: int
+    sku_code: str
+    name: str
+    ean: str | None = None
+    organization_name: str | None = None
+    is_primary: bool = True
+
+
+class LocationResponse(BaseModel):
+    id: int
+    code: str
+    rij: str | None = None
+    kast: str | None = None
+    plank: str | None = None
+    active: bool = True
+    created_at: datetime
+    skus: list[LocationSKU] = []
+
+    model_config = {"from_attributes": True}
+
+
+class LocationCreate(BaseModel):
+    code: str = Field(..., min_length=1, max_length=50)
+    rij: str | None = Field(None, max_length=20)
+    kast: str | None = Field(None, max_length=20)
+    plank: str | None = Field(None, max_length=20)
+
+
+class LocationUpdate(BaseModel):
+    code: str | None = Field(None, min_length=1, max_length=50)
+    rij: str | None = Field(None, max_length=20)
+    kast: str | None = Field(None, max_length=20)
+    plank: str | None = Field(None, max_length=20)
+    active: bool | None = None
+
+
+class LinkSKURequest(BaseModel):
+    sku_id: int = Field(..., gt=0)
+    is_primary: bool = True
+
+
+class AvailableSKU(BaseModel):
+    """A barcode product that can be linked to a location."""
+    id: int
+    sku_code: str
+    name: str
+    ean: str | None = None
+    organization_name: str | None = None
