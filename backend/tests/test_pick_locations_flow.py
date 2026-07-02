@@ -147,6 +147,22 @@ def test_scan_ean_books_from_correct_location(client, db, courier_token):
     assert resp.json()["booked_quantity"] == 1
 
 
+def test_order_response_pick_location_excludes_inactive(client, db, courier_token):
+    org = _org(db, "pl-resp")
+    sku = _sku(db, org, "SOK-RP", "8711111111122")
+    loc = _location(db, "AB123", sku)
+    order = _order(db, org, sku)
+
+    resp = client.get(f"/api/orders/{order.id}", headers=auth_header(courier_token))
+    assert resp.status_code == 200
+    assert resp.json()["lines"][0]["pick_location"] == "AB123"
+
+    loc.active = False
+    db.commit()
+    resp2 = client.get(f"/api/orders/{order.id}", headers=auth_header(courier_token))
+    assert resp2.json()["lines"][0]["pick_location"] is None
+
+
 def test_scan_location_inactive_rejected(client, db, courier_token):
     org = _org(db, "pl-inactive")
     sku = _sku(db, org, "SOK-IA", "8711111111120")

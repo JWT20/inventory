@@ -83,14 +83,20 @@ def _as_float(value: Decimal | float | None) -> float | None:
 def _primary_location_code(sku) -> str | None:
     """Scannable code of a barcode product's primary pick location, if any.
 
-    Prefers the ``is_primary`` link; falls back to the first. NULL for vision
-    products and barcode products that have not been placed on a shelf yet.
+    Only *active* locations count — an inactive one would send the picker into
+    the location phase for a shelf that /scan-location then rejects with a 404.
+    Prefers the ``is_primary`` link; falls back to the first active one. NULL for
+    vision products and barcode products not on an active shelf.
     """
-    links = getattr(sku, "location_links", None) or []
-    if not links:
+    active = [
+        lnk
+        for lnk in (getattr(sku, "location_links", None) or [])
+        if lnk.location and lnk.location.active
+    ]
+    if not active:
         return None
-    primary = next((lnk for lnk in links if lnk.is_primary), links[0])
-    return primary.location.code if primary.location else None
+    primary = next((lnk for lnk in active if lnk.is_primary), active[0])
+    return primary.location.code
 
 
 def _order_line_to_response(
