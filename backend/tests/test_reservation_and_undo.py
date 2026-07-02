@@ -151,6 +151,19 @@ def test_courier_list_includes_completed_channel_barcode(client, db, courier_tok
     assert order.id in [o["id"] for o in resp.json()]
 
 
+def test_courier_list_excludes_completed_manual(client, db, courier_token):
+    # #3 regression: a completed *manual* order is terminal (no label) and must
+    # not enter the default courier worklist, or a burst of them would fill the
+    # limit=100 window and hide active/te-verzenden orders.
+    org = _org(db, "no-manual-completed")
+    sku = _sku(db, org, "SOK-7", "8712000000077")
+    order = _order(db, org, sku, channel="manual", status="completed")
+
+    resp = client.get("/api/orders", headers=auth_header(courier_token))
+    assert resp.status_code == 200
+    assert order.id not in [o["id"] for o in resp.json()]
+
+
 def test_ean_change_clears_shopify_cache(client, db):
     # #6: changing the EAN invalidates the cached inventory_item_id (resolved via
     # the old EAN).

@@ -450,13 +450,21 @@ def list_orders(
                 "completed", "shipped", "cancelled", "closed",
             )))
         else:
-            # "completed" is included so a fully-picked barcode channel order
-            # stays reachable for the shipping-label step after a refresh or
-            # navigating away (it is no longer "active"). "shipped" and terminal
-            # states stay behind include_history.
+            # Open work, plus *only* completed channel orders that still need
+            # their shipping-label step ("Te verzenden"). Completed manual orders
+            # are terminal (no label) and must stay out — otherwise a burst of
+            # them would fill the sorted limit=100 window and hide active work.
+            # "shipped"/terminal states stay behind include_history.
             query = query.filter(
-                Order.status.in_(
-                    ("pending_approval", "pending_images", "active", "completed")
+                or_(
+                    Order.status.in_(
+                        ("pending_approval", "pending_images", "active")
+                    ),
+                    and_(
+                        Order.status == "completed",
+                        Order.channel != "manual",
+                        Order.channel_reference.isnot(None),
+                    ),
                 )
             )
     elif user.role == "customer":
