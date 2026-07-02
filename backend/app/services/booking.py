@@ -160,7 +160,17 @@ def apply_booking(
     line.booked_count += quantity
     db.flush()  # server-default created_at is populated after this
 
-    # 5. Deduct stock (org derived from the locked order).
+    # 5. Release this channel order's reservation *before* deducting stock, then
+    #    deduct. Order matters: a fully-reserved product has available == 0, so
+    #    the stock guard would 409 unless the unit's reservation is freed first.
+    #    Only channel orders reserve (at activation) — a manual order must never
+    #    touch the shared reservation, or it would release stock a channel order
+    #    still holds and cause overselling. Same transaction: a later stock 409
+    #    rolls the release back too.
+    if order.channel != "manual":
+        adjust_reservation(
+            db, sku_id=sku_id, organization_id=order.organization_id, delta=-quantity
+        )
     apply_stock_movement(
         db,
         sku_id=sku_id,
@@ -170,12 +180,6 @@ def apply_booking(
         reference_type="booking",
         reference_id=last_booking.id,
         performed_by=scanned_by,
-    )
-    # Release the matching reservation as the unit leaves: on_hand and reserved
-    # drop together, so the channel-visible ``available`` is unchanged. Clamped,
-    # so a pick on a never-reserved (vision) product is a no-op.
-    adjust_reservation(
-        db, sku_id=sku_id, organization_id=order.organization_id, delta=-quantity
     )
 
     # 6. Recompute status on the fresh lines, then commit.
@@ -214,9 +218,17 @@ def undo_booking(db: Session, *, booking_id: int, performed_by: int) -> UndoResu
     A shipped order is terminal: the courier cannot undo a unit once the label
     gate has closed the order.
     """
-    booking = db.get(Booking, booking_id)
+    # Lock the booking row first so two concurrent undos of the same unit
+    # serialize here: the first deletes it, the second then finds it gone and is
+    # rejected — without the lock both would restock the same unit.
+    booking = (
+        db.query(Booking)
+        .filter(Booking.id == booking_id)
+        .with_for_update()
+        .first()
+    )
     if not booking:
-        raise HTTPException(404, "Boeking niet gevonden")
+        raise HTTPException(409, "Deze boeking is al teruggedraaid")
 
     # Lock + refresh the order's lines, same as apply_booking.
     lines = (
@@ -258,7 +270,10 @@ def undo_booking(db: Session, *, booking_id: int, performed_by: int) -> UndoResu
         performed_by=performed_by,
     )
     # Re-reserve the unit the order still needs (inverse of the pick release).
-    adjust_reservation(db, sku_id=sku_id, organization_id=org_id, delta=1)
+    # Only for channel orders, mirroring apply_booking — a manual undo must not
+    # inflate the shared reservation.
+    if order.channel != "manual":
+        adjust_reservation(db, sku_id=sku_id, organization_id=org_id, delta=1)
 
     # A completed order that is no longer fully booked reopens for picking; clear
     # the finalize stamp so the monthly report does not count a reverted order.

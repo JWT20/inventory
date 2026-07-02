@@ -450,8 +450,14 @@ def list_orders(
                 "completed", "shipped", "cancelled", "closed",
             )))
         else:
+            # "completed" is included so a fully-picked barcode channel order
+            # stays reachable for the shipping-label step after a refresh or
+            # navigating away (it is no longer "active"). "shipped" and terminal
+            # states stay behind include_history.
             query = query.filter(
-                Order.status.in_(("pending_approval", "pending_images", "active"))
+                Order.status.in_(
+                    ("pending_approval", "pending_images", "active", "completed")
+                )
             )
     elif user.role == "customer":
         if not user.customer_id:
