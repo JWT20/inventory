@@ -8,6 +8,9 @@ export interface OrderLine {
   quantity: number;
   booked_count: number;
   is_bottle: boolean;
+  // Scannable code of this product's pick location (barcode only). null when
+  // the product has no shelf, or for vision orders.
+  pick_location?: string | null;
 }
 
 export interface Order {
@@ -53,6 +56,20 @@ export interface LabelScanResult {
   order_id: number;
   status: string;
   reference: string;
+}
+
+export interface LocationScanSKU {
+  sku_id: number;
+  sku_code: string;
+  sku_name: string;
+  ean: string | null;
+  remaining_quantity: number;
+}
+
+export interface LocationScanResult {
+  order_id: number;
+  location_code: string;
+  skus: LocationScanSKU[];
 }
 
 export type ScanMode = "box" | "bottle";

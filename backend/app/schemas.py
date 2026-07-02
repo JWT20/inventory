@@ -460,6 +460,9 @@ class OrderLineResponse(BaseModel):
     booked_count: int
     has_image: bool
     is_bottle: bool = False
+    # Scannable code of the product's primary pick location (barcode products
+    # only). NULL for vision/wine and for barcode products without a location.
+    pick_location: str | None = None
     show_prices: bool = True
     unit_price: float | None = None
     discount_type: str | None = None
@@ -584,6 +587,10 @@ class ChannelReconciliation(BaseModel):
 class EanScanRequest(BaseModel):
     order_id: int = Field(..., gt=0)
     ean: str = Field(..., min_length=1)
+    # The location the courier last scanned. When the product has pick locations
+    # this must match one of them (hufterproef: no picking from the wrong shelf).
+    # Optional so orders without located products keep working unchanged.
+    location_code: str | None = None
 
 
 class EanScanResponse(BaseModel):
@@ -1147,3 +1154,23 @@ class AvailableSKU(BaseModel):
     name: str
     ean: str | None = None
     organization_name: str | None = None
+
+
+class LocationScanRequest(BaseModel):
+    order_id: int = Field(..., gt=0)
+    location_code: str = Field(..., min_length=1)
+
+
+class LocationScanSKU(BaseModel):
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    ean: str | None = None
+    remaining_quantity: int
+
+
+class LocationScanResponse(BaseModel):
+    """The products of an order that live at a just-scanned location."""
+    order_id: int
+    location_code: str
+    skus: list[LocationScanSKU] = []

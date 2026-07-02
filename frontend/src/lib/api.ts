@@ -385,9 +385,21 @@ export const api = {
         organizationId ? `?organization_id=${organizationId}` : ""
       }`,
     ),
-  // Picking - barcode/EAN (1 scan = 1 unit booked on the selected order)
-  scanEan: (orderId: number, ean: string) =>
-    json("/picking/scan-ean", "POST", { order_id: orderId, ean }),
+  // Picking - barcode/EAN (1 scan = 1 unit booked on the selected order).
+  // locationCode is the shelf the courier last scanned; the backend enforces
+  // that a located product may only be booked from its own shelf.
+  scanEan: (orderId: number, ean: string, locationCode?: string | null) =>
+    json("/picking/scan-ean", "POST", {
+      order_id: orderId,
+      ean,
+      location_code: locationCode ?? undefined,
+    }),
+  // Verify a scanned shelf code and get this order's products that live there.
+  scanLocation: (orderId: number, locationCode: string) =>
+    json("/picking/scan-location", "POST", {
+      order_id: orderId,
+      location_code: locationCode,
+    }),
   // Undo a single scanned unit (wrong/damaged item).
   undoScan: (bookingId: number) =>
     json("/picking/undo", "POST", { booking_id: bookingId }),

@@ -80,6 +80,19 @@ def _as_float(value: Decimal | float | None) -> float | None:
     return float(value)
 
 
+def _primary_location_code(sku) -> str | None:
+    """Scannable code of a barcode product's primary pick location, if any.
+
+    Prefers the ``is_primary`` link; falls back to the first. NULL for vision
+    products and barcode products that have not been placed on a shelf yet.
+    """
+    links = getattr(sku, "location_links", None) or []
+    if not links:
+        return None
+    primary = next((lnk for lnk in links if lnk.is_primary), links[0])
+    return primary.location.code if primary.location else None
+
+
 def _order_line_to_response(
     line: OrderLine,
     sku_default_prices: dict[int, float | None],
@@ -132,6 +145,7 @@ def _order_line_to_response(
         booked_count=line.booked_count,
         has_image=len(line.sku.reference_images) > 0,
         is_bottle=line.sku.is_bottle,
+        pick_location=_primary_location_code(line.sku),
         show_prices=customer_show_prices,
         unit_price=unit_price if customer_show_prices else None,
         discount_type=discount_type if customer_show_prices else None,
