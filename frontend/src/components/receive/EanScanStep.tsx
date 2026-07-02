@@ -137,14 +137,23 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
         setPhase("label");
         return;
       }
-      // If this shelf is now fully picked and located work remains elsewhere,
-      // send the courier back to scan the next location.
+      // If this shelf is now fully picked, decide where to go next. Only return
+      // to the location phase when OTHER located shelves still have open work;
+      // if all that remains is unlocated products, stay in the scan phase (they
+      // are bookable without a location) — otherwise a mixed order would dead-end
+      // in a location phase with no shelf left to scan.
       if (activeLocation) {
         const here = lines.filter((l) => l.pick_location === activeLocation);
         const hereDone = here.every((l) => (nextBooked[l.id] ?? 0) >= l.quantity);
         if (hereDone) {
+          const openLocatedElsewhere = lines.some(
+            (l) =>
+              l.pick_location &&
+              l.pick_location !== activeLocation &&
+              (nextBooked[l.id] ?? 0) < l.quantity,
+          );
           setActiveLocation(null);
-          setPhase("location");
+          setPhase(openLocatedElsewhere ? "location" : "scan");
         }
       }
     } catch (err: unknown) {
@@ -312,7 +321,7 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
           >
             {busy ? "Boeken…" : "Boek"}
           </Button>
-          {hasLocations && (
+          {openLocations.length > 0 && (
             <button
               type="button"
               onClick={() => {

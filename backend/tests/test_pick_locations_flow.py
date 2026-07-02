@@ -147,6 +147,32 @@ def test_scan_ean_books_from_correct_location(client, db, courier_token):
     assert resp.json()["booked_quantity"] == 1
 
 
+def test_scan_location_inactive_rejected(client, db, courier_token):
+    org = _org(db, "pl-inactive")
+    sku = _sku(db, org, "SOK-IA", "8711111111120")
+    loc = _location(db, "AB123", sku)
+    loc.active = False
+    db.commit()
+    order = _order(db, org, sku)
+
+    resp = _scan_location(client, courier_token, order.id, "AB123")
+    assert resp.status_code == 404
+
+
+def test_inactive_location_not_enforced_on_scan_ean(client, db, courier_token):
+    # A product whose only location is inactive falls back to ungated (no shelf
+    # to scan), so it stays pickable — deactivating just removes the gate.
+    org = _org(db, "pl-ia-ean")
+    sku = _sku(db, org, "SOK-IE", "8711111111121")
+    loc = _location(db, "AB123", sku)
+    loc.active = False
+    db.commit()
+    order = _order(db, org, sku)
+
+    resp = _scan_ean(client, courier_token, order.id, "8711111111121")
+    assert resp.status_code == 200
+
+
 def test_scan_ean_unlocated_product_needs_no_location(client, db, courier_token):
     org = _org(db, "pl-unloc")
     sku = _sku(db, org, "SOK-N", "8711111111118")  # no location linked

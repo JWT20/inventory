@@ -90,7 +90,9 @@ def scan_ean(
     # on. Products without locations (unplaced, or legacy) skip this entirely so
     # existing barcode orders keep working.
     sku_location_codes = {
-        link.location.code for link in sku.location_links if link.location
+        link.location.code
+        for link in sku.location_links
+        if link.location and link.location.active
     }
     if sku_location_codes:
         scanned = (body.location_code or "").strip()
@@ -251,7 +253,11 @@ def scan_location(
     assert_order_module(order, "barcode_picking", user)
 
     code = body.location_code.strip()
-    location = db.query(Location).filter(Location.code == code).first()
+    location = (
+        db.query(Location)
+        .filter(Location.code == code, Location.active.is_(True))
+        .first()
+    )
     if not location:
         raise HTTPException(404, f"Onbekende locatie {code}")
 
