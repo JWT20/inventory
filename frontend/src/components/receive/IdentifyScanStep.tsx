@@ -19,6 +19,8 @@ export function IdentifyScanStep({
   onBack: () => void;
 }) {
   const [scanning, setScanning] = useState(false);
+  // Frozen frame shown over the live camera while recognition runs.
+  const [snapshot, setSnapshot] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -57,11 +59,15 @@ export function IdentifyScanStep({
     canvas.height = videoRef.current.videoHeight;
     canvas.getContext("2d")!.drawImage(videoRef.current, 0, 0);
 
+    // Freeze the captured frame over the live camera while we recognize it.
+    setSnapshot(canvas.toDataURL("image/jpeg", 0.75));
+
     const blob = await new Promise<Blob | null>((resolve) =>
       canvas.toBlob(resolve, "image/jpeg", 0.75),
     );
     if (!blob) {
       setScanning(false);
+      setSnapshot(null);
       return;
     }
 
@@ -73,9 +79,11 @@ export function IdentifyScanStep({
         toast.error(
           `${scanMode === "bottle" ? "Fles" : "Doos"} niet herkend — geen match gevonden`,
         );
+        setSnapshot(null);
       }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Scanfout");
+      setSnapshot(null);
     } finally {
       setScanning(false);
     }
@@ -106,6 +114,19 @@ export function IdentifyScanStep({
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="w-[70%] h-[70%] border-[3px] border-white/50 rounded-2xl" />
         </div>
+        {snapshot && (
+          <>
+            <img
+              src={snapshot}
+              alt="Gemaakte scan"
+              className="absolute inset-0 w-full h-full object-cover"
+            />
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/40">
+              <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/40 border-t-white" />
+              <span className="text-white text-sm font-medium">Herkennen…</span>
+            </div>
+          </>
+        )}
       </div>
       <Button
         size="lg"

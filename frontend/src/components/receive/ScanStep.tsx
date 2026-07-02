@@ -23,6 +23,9 @@ export function ScanStep({
   onBack: () => void;
 }) {
   const [scanning, setScanning] = useState(false);
+  // Frozen frame shown over the live camera while recognition runs, so the
+  // courier sees exactly what was captured instead of a still-running camera.
+  const [snapshot, setSnapshot] = useState<string | null>(null);
   const [nextPick, setNextPick] = useState<NextPick | null>(null);
   const [nextPickLoading, setNextPickLoading] = useState(true);
   const [nextPickFailed, setNextPickFailed] = useState(false);
@@ -154,11 +157,15 @@ export function ScanStep({
     canvas.height = videoRef.current.videoHeight;
     canvas.getContext("2d")!.drawImage(videoRef.current, 0, 0);
 
+    // Freeze the captured frame over the live camera while we recognize it.
+    setSnapshot(canvas.toDataURL("image/jpeg", 0.75));
+
     const blob = await new Promise<Blob | null>((resolve) =>
       canvas.toBlob(resolve, "image/jpeg", 0.75),
     );
     if (!blob) {
       setScanning(false);
+      setSnapshot(null);
       return;
     }
 
@@ -181,8 +188,10 @@ export function ScanStep({
         (err.detail as { error?: string }).error === "needs_reference_image"
       ) {
         setNeedsRef(err.detail as typeof needsRef);
+        setSnapshot(null);
       } else {
         toast.error(err instanceof Error ? err.message : "Scanfout");
+        setSnapshot(null);
       }
     } finally {
       setScanning(false);
@@ -317,6 +326,19 @@ export function ScanStep({
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="w-[70%] h-[70%] border-[3px] border-white/50 rounded-2xl" />
         </div>
+        {snapshot && (
+          <>
+            <img
+              src={snapshot}
+              alt="Gemaakte scan"
+              className="absolute inset-0 w-full h-full object-cover"
+            />
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/40">
+              <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/40 border-t-white" />
+              <span className="text-white text-sm font-medium">Herkennen…</span>
+            </div>
+          </>
+        )}
       </div>
       <Button
         size="lg"
