@@ -164,6 +164,18 @@ def test_courier_list_excludes_completed_manual(client, db, courier_token):
     assert order.id not in [o["id"] for o in resp.json()]
 
 
+def test_barcode_line_counts_as_has_image(client, db, courier_token):
+    # A barcode product needs no reference photo, so its order line reports
+    # has_image=True — otherwise the order lands in the "Wacht op foto's" bucket.
+    org = _org(db, "barcode-hasimg")
+    sku = _sku(db, org, "SOK-8", "8712000000084")
+    order = _order(db, org, sku, channel="shopify")
+
+    resp = client.get(f"/api/orders/{order.id}", headers=auth_header(courier_token))
+    assert resp.status_code == 200
+    assert resp.json()["lines"][0]["has_image"] is True
+
+
 def test_ean_change_clears_shopify_cache(client, db):
     # #6: changing the EAN invalidates the cached inventory_item_id (resolved via
     # the old EAN).

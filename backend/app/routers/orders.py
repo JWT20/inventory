@@ -149,7 +149,10 @@ def _order_line_to_response(
         delivery_day=line.delivery_day,
         quantity=line.quantity,
         booked_count=line.booked_count,
-        has_image=len(line.sku.reference_images) > 0,
+        # Barcode products are picked by EAN, never by photo, so they never need
+        # a reference image — treat them as "has image" so they don't fall into
+        # the "Wacht op foto's" bucket or prompt a camera capture.
+        has_image=len(line.sku.reference_images) > 0 or line.sku.product_type == "barcode",
         is_bottle=line.sku.is_bottle,
         pick_location=_primary_location_code(line.sku),
         show_prices=customer_show_prices,
