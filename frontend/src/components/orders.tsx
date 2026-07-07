@@ -116,27 +116,33 @@ const isoWeekString = (d: Date): string => {
   return `${thu.getFullYear()}-W${String(week).padStart(2, "0")}`;
 };
 
-// Orders placed from Saturday onward belong to the coming week: the current ISO
-// week is all but over, so "this week" should mean the next Monday–Sunday span.
-const businessToday = (): Date => {
-  const d = new Date();
-  const day = d.getDay(); // 0 = Sunday, 6 = Saturday
-  if (day === 6 || day === 0) d.setDate(d.getDate() + 7);
-  return d;
+// Monday–Sunday date range of the ISO week containing `d`, e.g. "30 jun – 6 jul".
+// Month is only repeated when the span crosses into a different month.
+const weekDateRange = (d: Date): string => {
+  const monday = new Date(d);
+  monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  const sameMonth = monday.getMonth() === sunday.getMonth();
+  const fmtDay = (x: Date) => x.toLocaleDateString("nl-NL", { day: "numeric" });
+  const fmtDayMonth = (x: Date) =>
+    x.toLocaleDateString("nl-NL", { day: "numeric", month: "short" });
+  const start = sameMonth ? fmtDay(monday) : fmtDayMonth(monday);
+  return `${start} – ${fmtDayMonth(sunday)}`;
 };
 
 const upcomingWeekOptions = (count = 4): { value: string; label: string }[] =>
   Array.from({ length: count }, (_, i) => {
-    const d = businessToday();
+    const d = new Date();
     d.setDate(d.getDate() + i * 7);
     const value = isoWeekString(d);
-    const num = value.split("-W")[1];
+    const range = weekDateRange(d);
     const label =
       i === 0
-        ? `Deze week (week ${num})`
+        ? `Deze week · ${range}`
         : i === 1
-          ? `Volgende week (week ${num})`
-          : `Week ${num}`;
+          ? `Volgende week · ${range}`
+          : range;
     return { value, label };
   });
 
@@ -1279,7 +1285,7 @@ function OrderDetailDialog({
 }) {
   const { user } = useAuth();
   const [activating, setActivating] = useState(false);
-  const [approveWeek, setApproveWeek] = useState(() => isoWeekString(businessToday()));
+  const [approveWeek, setApproveWeek] = useState(() => isoWeekString(new Date()));
   const [closing, setClosing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [uploadingSkuId, setUploadingSkuId] = useState<number | null>(null);
