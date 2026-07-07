@@ -30,7 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ChevronDown, Minus, Plus, Trash2, FileText } from "lucide-react";
+import { ChevronDown, Minus, Plus, Trash2, FileText, Search, X } from "lucide-react";
 import {
   unitLabel,
   formatBoxesBottles,
@@ -42,7 +42,9 @@ interface SKUOption {
   sku_code: string;
   name: string;
   is_bottle?: boolean;
-  category?: string;
+  category?: string | null;
+  producent?: string | null;
+  supplier_name?: string | null;
   attributes?: Record<string, string>;
 }
 
@@ -1128,28 +1130,13 @@ function ManualOrderDialog({
                   {/* Add other SKU — only available to non-customer roles */}
                   {user?.role !== "customer" && (
                     <div className="pt-2">
-                      <Select
-                        value=""
-                        onValueChange={(v) => {
-                          if (v) addExtraSku(Number(v));
-                        }}
-                      >
-                        <SelectTrigger className="h-9 text-sm">
-                          <SelectValue placeholder="+ Ander product toevoegen..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {allSkus
-                            .filter(
-                              (s) => !currentLines.some((l) => l.sku_id === s.id),
-                            )
-                            .map((s) => (
-                              <SelectItem key={s.id} value={String(s.id)}>
-                                {s.name} ({s.sku_code})
-                                {s.is_bottle ? " · fles" : ""}
-                              </SelectItem>
-                            ))}
-                        </SelectContent>
-                      </Select>
+                      <SkuSearchPicker
+                        skus={allSkus.filter(
+                          (s) => !currentLines.some((l) => l.sku_id === s.id),
+                        )}
+                        onSelect={addExtraSku}
+                        label="Ander product toevoegen..."
+                      />
                     </div>
                   )}
                 </div>
@@ -1178,6 +1165,111 @@ function ManualOrderDialog({
         </div>
       </SheetContent>
     </Sheet>
+  );
+}
+
+// Searchable product picker: a "+ toevoegen" button that expands into a search
+// box + result list. Filters client-side on the same fields the product page
+// searches on (name, code, category, producent, supplier).
+function SkuSearchPicker({
+  skus,
+  onSelect,
+  label = "+ Product toevoegen...",
+}: {
+  skus: SKUOption[];
+  onSelect: (skuId: number) => void;
+  label?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open]);
+
+  const q = query.trim().toLowerCase();
+  const matches = q
+    ? skus.filter((s) =>
+        [s.name, s.sku_code, s.category, s.producent, s.supplier_name]
+          .some((f) => f?.toLowerCase().includes(q)),
+      )
+    : skus;
+
+  function pick(skuId: number) {
+    onSelect(skuId);
+    setQuery("");
+    setOpen(false);
+  }
+
+  if (!open) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        className="h-9 w-full justify-start text-sm text-muted-foreground"
+        onClick={() => setOpen(true)}
+      >
+        <Plus className="h-4 w-4 mr-1" />
+        {label}
+      </Button>
+    );
+  }
+
+  return (
+    <div className="border border-border rounded-md">
+      <div className="flex items-center gap-1 px-2 border-b border-border">
+        <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setQuery("");
+              setOpen(false);
+            }
+          }}
+          placeholder="Zoek op naam, code, producent..."
+          className="h-9 flex-1 bg-transparent text-sm outline-none"
+        />
+        <button
+          type="button"
+          onClick={() => {
+            setQuery("");
+            setOpen(false);
+          }}
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label="Sluiten"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="max-h-48 overflow-y-auto">
+        {matches.length === 0 ? (
+          <p className="text-xs text-muted-foreground p-2">
+            Geen producten gevonden
+          </p>
+        ) : (
+          matches.map((s) => (
+            <button
+              type="button"
+              key={s.id}
+              onClick={() => pick(s.id)}
+              className="flex w-full items-center gap-2 px-2 py-1.5 text-sm text-left hover:bg-muted"
+            >
+              <span className="flex-1 truncate">
+                {s.name}
+                {s.is_bottle ? " · fles" : ""}
+              </span>
+              <span className="text-xs text-muted-foreground shrink-0">
+                {s.sku_code}
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1669,26 +1761,12 @@ function OrderDetailDialog({
                 </div>
               ))}
               {canEditLines && order.lines[0]?.customer_id != null && (
-                <Select
-                  value=""
-                  onValueChange={(v) => {
-                    if (v) addLine(Number(v));
-                  }}
-                >
-                  <SelectTrigger className="h-9 text-sm">
-                    <SelectValue placeholder="+ Product toevoegen..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {allSkus
-                      .filter((s) => !order.lines.some((l) => l.sku_id === s.id))
-                      .map((s) => (
-                        <SelectItem key={s.id} value={String(s.id)}>
-                          {s.name} ({s.sku_code})
-                          {s.is_bottle ? " · fles" : ""}
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
+                <SkuSearchPicker
+                  skus={allSkus.filter(
+                    (s) => !order.lines.some((l) => l.sku_id === s.id),
+                  )}
+                  onSelect={addLine}
+                />
               )}
             </div>
           </div>

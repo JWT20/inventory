@@ -297,11 +297,18 @@ class SKUResponse(BaseModel):
 
 
 class SKUOption(BaseModel):
-    """Lightweight SKU projection for pickers (no attributes/images)."""
+    """Lightweight SKU projection for pickers (no attributes/images).
+
+    Carries the same fields the product page searches on (category, producent,
+    supplier) so picker search boxes can filter client-side on all of them.
+    """
     id: int
     sku_code: str
     name: str
     is_bottle: bool = False
+    category: str | None = None
+    producent: str | None = None
+    supplier_name: str | None = None
 
     model_config = {"from_attributes": True}
 

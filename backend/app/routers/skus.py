@@ -395,7 +395,26 @@ def list_sku_options(
     don't pull large SKUResponse payloads. Returns all matching SKUs — the
     projection is cheap, so there is no truncating page limit.
     """
-    query = db.query(SKU.id, SKU.sku_code, SKU.name, SKU.is_bottle)
+    # Pull the producent attribute (one row per SKU at most) as a subquery so it
+    # joins cheaply without inflating rows.
+    producent_subq = (
+        db.query(SKUAttribute.sku_id, SKUAttribute.value.label("producent"))
+        .filter(SKUAttribute.key == "producent")
+        .subquery()
+    )
+    query = (
+        db.query(
+            SKU.id,
+            SKU.sku_code,
+            SKU.name,
+            SKU.is_bottle,
+            SKU.category,
+            Supplier.name.label("supplier_name"),
+            producent_subq.c.producent,
+        )
+        .outerjoin(Supplier, SKU.supplier_id == Supplier.id)
+        .outerjoin(producent_subq, producent_subq.c.sku_id == SKU.id)
+    )
     if active_only:
         query = query.filter(SKU.active.is_(True))
     if not user.is_platform_admin:
@@ -408,7 +427,15 @@ def list_sku_options(
         query = query.filter(SKU.organization_id == organization_id)
     rows = query.order_by(SKU.name).all()
     return [
-        SKUOption(id=r.id, sku_code=r.sku_code, name=r.name, is_bottle=r.is_bottle)
+        SKUOption(
+            id=r.id,
+            sku_code=r.sku_code,
+            name=r.name,
+            is_bottle=r.is_bottle,
+            category=r.category,
+            producent=r.producent,
+            supplier_name=r.supplier_name,
+        )
         for r in rows
     ]
 
