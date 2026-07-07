@@ -116,9 +116,18 @@ const isoWeekString = (d: Date): string => {
   return `${thu.getFullYear()}-W${String(week).padStart(2, "0")}`;
 };
 
+// Orders placed from Saturday onward belong to the coming week: the current ISO
+// week is all but over, so "this week" should mean the next Monday–Sunday span.
+const businessToday = (): Date => {
+  const d = new Date();
+  const day = d.getDay(); // 0 = Sunday, 6 = Saturday
+  if (day === 6 || day === 0) d.setDate(d.getDate() + 7);
+  return d;
+};
+
 const upcomingWeekOptions = (count = 4): { value: string; label: string }[] =>
   Array.from({ length: count }, (_, i) => {
-    const d = new Date();
+    const d = businessToday();
     d.setDate(d.getDate() + i * 7);
     const value = isoWeekString(d);
     const num = value.split("-W")[1];
@@ -1270,7 +1279,7 @@ function OrderDetailDialog({
 }) {
   const { user } = useAuth();
   const [activating, setActivating] = useState(false);
-  const [approveWeek, setApproveWeek] = useState(() => isoWeekString(new Date()));
+  const [approveWeek, setApproveWeek] = useState(() => isoWeekString(businessToday()));
   const [closing, setClosing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [uploadingSkuId, setUploadingSkuId] = useState<number | null>(null);
