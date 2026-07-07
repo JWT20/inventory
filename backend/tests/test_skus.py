@@ -66,8 +66,41 @@ class TestListSKUOptions:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
-        assert set(data[0].keys()) == {"id", "sku_code", "name", "is_bottle"}
+        assert set(data[0].keys()) == {
+            "id",
+            "sku_code",
+            "name",
+            "is_bottle",
+            "category",
+            "producent",
+            "supplier_name",
+        }
         assert data[0]["sku_code"] == "WINE-001"
+
+    def test_options_carry_search_fields(self, client, db, courier_token):
+        """category, producent attribute and supplier name feed picker search."""
+        from app.models import SKU, SKUAttribute, Supplier
+
+        supplier = Supplier(name="Kaapse Wijnen")
+        db.add(supplier)
+        db.flush()
+        sku = SKU(
+            sku_code="WINE-SF",
+            name="Zoekbare Wijn",
+            category="rood",
+            supplier_id=supplier.id,
+        )
+        db.add(sku)
+        db.flush()
+        db.add(SKUAttribute(sku_id=sku.id, key="producent", value="Château Test"))
+        db.commit()
+
+        resp = client.get("/api/skus/options", headers=auth_header(courier_token))
+        assert resp.status_code == 200
+        row = next(s for s in resp.json() if s["sku_code"] == "WINE-SF")
+        assert row["category"] == "rood"
+        assert row["producent"] == "Château Test"
+        assert row["supplier_name"] == "Kaapse Wijnen"
 
     def test_options_active_only(self, client, db, courier_token, sample_sku):
         from app.models import SKU
