@@ -18,6 +18,7 @@ from app.models import (
 )
 from app.services.booking import (
     apply_booking,
+    promote_pending_images_orders_for_sku,
     recompute_order_status,
     remaining_for_line,
 )
@@ -122,6 +123,86 @@ def test_recompute_pending_images_stays_when_image_missing(db, sample_org):
     recompute_order_status(order, [line])
 
     assert order.status == "pending_images"
+
+
+def test_promote_pending_images_orders_activates_after_image_added(db, sample_org):
+    """Adding an image to the SKU must flip its pending_images order to active.
+
+    Simulates the courier photographing a SKU an order was waiting on: the image
+    row already exists (as at upload time), and the promotion helper — called
+    from the image upload/scan paths — recomputes the order.
+    """
+    sku = _sku(db, "PI", with_image=True)
+    cust = _customer(db, sample_org)
+    order = _order(db, sample_org, "PI1", status="pending_images")
+    _line(db, order, sku, cust, quantity=3)
+    db.commit()
+
+    changed = promote_pending_images_orders_for_sku(db, sku.id)
+    db.commit()
+
+    assert order.status == "active"
+    assert [o.id for o in changed] == [order.id]
+
+
+def test_promote_pending_images_reads_fresh_after_stale_collection_load(db, sample_org):
+    """Regression: the image row is added AFTER the sku's collection was loaded.
+
+    Reproduces the receiving path, which reads ``sku.reference_images`` (loading
+    it as empty) before adding the new image via ``sku_id`` + flush. Setting only
+    ``sku_id`` does not append to the already-loaded collection, so a naive gate
+    would still see zero images and leave the order stuck. The helper must expire
+    and re-read so the order is promoted.
+    """
+    sku = _sku(db, "PIS", with_image=False)
+    cust = _customer(db, sample_org)
+    order = _order(db, sample_org, "PIS1", status="pending_images")
+    _line(db, order, sku, cust, quantity=1)
+    db.commit()
+
+    # Caller loads the (empty) collection into the identity-mapped instance.
+    assert sku.reference_images == []
+    # ...then adds the image row by sku_id + flush, without touching the collection.
+    db.add(ReferenceImage(sku_id=sku.id, image_path="PIS.jpg", processing_status="done"))
+    db.flush()
+    # Sanity: the cached collection is indeed still stale/empty here.
+    assert sku.reference_images == []
+
+    changed = promote_pending_images_orders_for_sku(db, sku.id)
+    db.commit()
+
+    assert order.status == "active"
+    assert [o.id for o in changed] == [order.id]
+
+
+def test_promote_pending_images_stays_when_other_line_lacks_image(db, sample_org):
+    """An order stays pending_images while any of its lines still lacks an image."""
+    sku_imaged = _sku(db, "PI2a", with_image=True)
+    sku_bare = _sku(db, "PI2b", with_image=False)
+    cust = _customer(db, sample_org)
+    order = _order(db, sample_org, "PI2", status="pending_images")
+    _line(db, order, sku_imaged, cust, quantity=1)
+    _line(db, order, sku_bare, cust, quantity=1)
+    db.commit()
+
+    changed = promote_pending_images_orders_for_sku(db, sku_imaged.id)
+
+    assert order.status == "pending_images"
+    assert changed == []
+
+
+def test_promote_pending_images_ignores_active_orders(db, sample_org):
+    """Only pending_images orders are touched; an active order is left alone."""
+    sku = _sku(db, "PI3", with_image=True)
+    cust = _customer(db, sample_org)
+    order = _order(db, sample_org, "PI3o", status="active")
+    _line(db, order, sku, cust, quantity=2)
+    db.commit()
+
+    changed = promote_pending_images_orders_for_sku(db, sku.id)
+
+    assert changed == []
+    assert order.status == "active"
 
 
 @pytest.mark.parametrize("status", ["completed", "cancelled", "closed", "pending_approval"])

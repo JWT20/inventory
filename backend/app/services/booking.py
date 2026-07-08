@@ -56,6 +56,44 @@ def recompute_order_status(order: Order, lines: list[OrderLine]) -> None:
         order.status = "active"
 
 
+def promote_pending_images_orders_for_sku(db: Session, sku_id: int) -> list[Order]:
+    """Re-evaluate every ``pending_images`` order that contains ``sku_id``.
+
+    Adding a reference image to a SKU can complete the "every line has an image"
+    condition for an order that was parked in ``pending_images``. The image
+    upload/scan paths only recompute ``SKU.active`` (see
+    :func:`app.services.product_status.recompute_active`); without this the order
+    stays stuck until some unrelated action (re-approve, line edit, booking)
+    happens to recompute it — so the courier "can't pick" the order.
+
+    Loads orders from ``db`` so lazy-loaded ``line.sku.reference_images`` reflects
+    committed rows. Does NOT commit — the caller owns the transaction. Returns the
+    orders whose status actually changed.
+    """
+    orders = (
+        db.query(Order)
+        .join(OrderLine, OrderLine.order_id == Order.id)
+        .filter(Order.status == "pending_images", OrderLine.sku_id == sku_id)
+        .distinct()
+        .all()
+    )
+    changed: list[Order] = []
+    for order in orders:
+        # The image gate reads ``line.sku.reference_images``. A caller in the
+        # same request may have loaded that collection (as empty) *before* it
+        # added the new image row — setting ``sku_id`` alone does not append to
+        # an already-loaded collection, so it would still read stale/empty.
+        # Expire it so ``recompute_order_status`` re-reads from the DB and sees
+        # the freshly-flushed image.
+        for line in order.lines:
+            db.expire(line.sku, ["reference_images"])
+        before = order.status
+        recompute_order_status(order, order.lines)
+        if order.status != before:
+            changed.append(order)
+    return changed
+
+
 def apply_booking(
     db: Session,
     *,

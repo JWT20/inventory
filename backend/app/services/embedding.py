@@ -7,7 +7,7 @@ import base64
 
 from google import genai
 from google.genai import types
-from google.genai.errors import ClientError
+from google.genai.errors import APIError
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pillow_heif import register_heif_opener
 import io
@@ -41,6 +41,71 @@ MAX_RETRIES = 3
 RETRY_BASE_DELAY = 10  # seconds
 MAX_VISION_DIMENSION = 1024  # px – downscale before sending to Gemini
 MAX_UPLOAD_DIMENSION = 2048  # px – cap stored reference images (bounds file size)
+
+# HTTP status codes worth retrying: 429 (rate limit) plus transient 5xx. Gemini
+# "high demand" spikes surface as 502/503 UNAVAILABLE — a ServerError, not a
+# ClientError — so catching only ClientError/429 let those fail instantly.
+_RETRYABLE_CODES = frozenset({429, 500, 502, 503, 504})
+
+
+def _is_retryable(exc: APIError) -> bool:
+    return getattr(exc, "code", None) in _RETRYABLE_CODES
+
+
+def _models_with_fallback(primary: str, fallback: str | None) -> list[str]:
+    """Primary model first, then a distinct non-empty fallback (if any)."""
+    models = [primary]
+    if fallback and fallback != primary:
+        models.append(fallback)
+    return models
+
+
+async def _generate_content_with_retry(
+    client: genai.Client, *, models: list[str], label: str, **kwargs
+):
+    """Call ``generate_content`` with retry + cross-model fallback.
+
+    Each model in ``models`` is retried up to ``MAX_RETRIES`` times on a
+    retryable error (429/5xx) with linear backoff; once a model exhausts its
+    retries on a retryable error the next model is tried. Non-retryable errors
+    propagate immediately. The caller must supply ``contents`` (and optionally
+    ``config``) via kwargs; ``model`` is injected per attempt.
+
+    Concurrency: the semaphore is held only around the actual API call, never
+    across the backoff sleep. Otherwise, during a 5xx storm sleeping tasks would
+    pin every slot and starve healthy requests. Re-acquiring per attempt still
+    caps in-flight calls at ``gemini_max_concurrent`` (backpressure preserved,
+    no thundering herd on recovery).
+    """
+    last_exc: APIError | None = None
+    for model_index, model in enumerate(models):
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                async with _get_semaphore():
+                    return await client.aio.models.generate_content(model=model, **kwargs)
+            except APIError as e:
+                last_exc = e
+                if _is_retryable(e) and attempt < MAX_RETRIES:
+                    delay = RETRY_BASE_DELAY * attempt
+                    logger.warning(
+                        "Gemini %s transient error %s (model=%s attempt=%d/%d), retrying in %ds",
+                        label, getattr(e, "code", "?"), model, attempt, MAX_RETRIES, delay,
+                    )
+                    await asyncio.sleep(delay)  # outside the semaphore on purpose
+                    continue
+                if _is_retryable(e) and model_index < len(models) - 1:
+                    logger.warning(
+                        "Gemini %s exhausted retries on model=%s (code=%s), falling back to %s",
+                        label, model, getattr(e, "code", "?"), models[model_index + 1],
+                    )
+                    break  # try next model
+                logger.exception(
+                    "Gemini %s API call failed (model=%s, attempt=%d)", label, model, attempt
+                )
+                raise
+    # Only reached if every model broke out on a retryable error.
+    assert last_exc is not None
+    raise last_exc
 
 _client: genai.Client | None = None
 
@@ -263,10 +328,15 @@ async def _call_vision(
     prompt: str,
     *,
     model: str | None = None,
+    fallback_model: str | None = None,
     system_instruction: str | None = None,
     response_schema: types.SchemaUnion | None = None,
 ) -> str:
     """Call Gemini Vision asynchronously with retry logic. Returns raw response text.
+
+    Transient errors (429 rate limit, 5xx "high demand" UNAVAILABLE) are
+    retried with backoff and, if the primary model keeps failing, retried on
+    ``fallback_model`` (defaults to ``gemini_vision_fallback_model``).
 
     When ``response_schema`` is given, structured output is enabled
     (``response_mime_type=application/json`` + schema) so the model is
@@ -274,14 +344,13 @@ async def _call_vision(
     the prompt only — this removes the "not valid JSON" failure class.
     """
     model = model or settings.gemini_vision_model
+    fallback_model = fallback_model or settings.gemini_vision_fallback_model
+    models = _models_with_fallback(model, fallback_model)
     client = _get_client()
     logger.info("Calling Gemini Vision model=%s", model)
     t0 = time.perf_counter()
 
-    generate_kwargs: dict = {
-        "model": model,
-        "contents": [prompt, image],
-    }
+    generate_kwargs: dict = {"contents": [prompt, image]}
     config_kwargs: dict = {}
     if system_instruction:
         config_kwargs["system_instruction"] = system_instruction
@@ -291,19 +360,9 @@ async def _call_vision(
     if config_kwargs:
         generate_kwargs["config"] = types.GenerateContentConfig(**config_kwargs)
 
-    async with _get_semaphore():
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                response = await client.aio.models.generate_content(**generate_kwargs)
-                break
-            except ClientError as e:
-                if e.code == 429 and attempt < MAX_RETRIES:
-                    delay = RETRY_BASE_DELAY * attempt
-                    logger.warning("Gemini rate limited (attempt %d/%d), retrying in %ds", attempt, MAX_RETRIES, delay)
-                    await asyncio.sleep(delay)
-                else:
-                    logger.exception("Gemini Vision API call failed (model=%s, attempt=%d)", model, attempt)
-                    raise
+    response = await _generate_content_with_retry(
+        client, models=models, label="Vision", **generate_kwargs
+    )
 
     vision_ms = (time.perf_counter() - t0) * 1000
     finish_reason = _finish_reason(response)
@@ -349,33 +408,30 @@ async def _call_text(
     prompt: str,
     *,
     model: str | None = None,
+    fallback_model: str | None = None,
     system_instruction: str | None = None,
 ) -> str:
-    """Call Gemini with text-only input (no image). Returns raw response text."""
+    """Call Gemini with text-only input (no image). Returns raw response text.
+
+    Retries transient 429/5xx errors and falls back across models, matching
+    :func:`_call_vision`.
+    """
     model = model or settings.gemini_vision_model
+    fallback_model = fallback_model or settings.gemini_vision_fallback_model
+    models = _models_with_fallback(model, fallback_model)
     client = _get_client()
     logger.info("Calling Gemini text model=%s", model)
     t0 = time.perf_counter()
 
-    generate_kwargs: dict = {"model": model, "contents": [prompt]}
+    generate_kwargs: dict = {"contents": [prompt]}
     if system_instruction:
         generate_kwargs["config"] = types.GenerateContentConfig(
             system_instruction=system_instruction,
         )
 
-    async with _get_semaphore():
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                response = await client.aio.models.generate_content(**generate_kwargs)
-                break
-            except ClientError as e:
-                if e.code == 429 and attempt < MAX_RETRIES:
-                    delay = RETRY_BASE_DELAY * attempt
-                    logger.warning("Gemini rate limited (attempt %d/%d), retrying in %ds", attempt, MAX_RETRIES, delay)
-                    await asyncio.sleep(delay)
-                else:
-                    logger.exception("Gemini text API call failed (model=%s, attempt=%d)", model, attempt)
-                    raise
+    response = await _generate_content_with_retry(
+        client, models=models, label="text", **generate_kwargs
+    )
 
     logger.info("[TIMING] gemini_text=%.0fms", (time.perf_counter() - t0) * 1000)
 
@@ -456,23 +512,25 @@ async def generate_embedding(text: str) -> list[float]:
     logger.info("Calling Gemini Embedding model=%s", settings.gemini_embedding_model)
     t0 = time.perf_counter()
 
-    async with _get_semaphore():
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
+    # Semaphore held only around each call, backoff sleep outside it — see
+    # _generate_content_with_retry for the rationale (no slot-pinning by sleepers).
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            async with _get_semaphore():
                 result = await client.aio.models.embed_content(
                     model=settings.gemini_embedding_model,
                     contents=text,
                     config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIM),
                 )
-                break
-            except ClientError as e:
-                if e.code == 429 and attempt < MAX_RETRIES:
-                    delay = RETRY_BASE_DELAY * attempt
-                    logger.warning("Gemini rate limited (attempt %d/%d), retrying in %ds", attempt, MAX_RETRIES, delay)
-                    await asyncio.sleep(delay)
-                else:
-                    logger.exception("Gemini Embedding API call failed (model=%s, attempt=%d)", settings.gemini_embedding_model, attempt)
-                    raise
+            break
+        except APIError as e:
+            if _is_retryable(e) and attempt < MAX_RETRIES:
+                delay = RETRY_BASE_DELAY * attempt
+                logger.warning("Gemini embedding transient error %s (attempt %d/%d), retrying in %ds", getattr(e, "code", "?"), attempt, MAX_RETRIES, delay)
+                await asyncio.sleep(delay)
+            else:
+                logger.exception("Gemini Embedding API call failed (model=%s, attempt=%d)", settings.gemini_embedding_model, attempt)
+                raise
 
     embedding_ms = (time.perf_counter() - t0) * 1000
 
@@ -664,6 +722,7 @@ async def _extract_shipment_from_image(image: Image.Image, system_prompt: str) -
         image,
         EXTRACT_SHIPMENT_USER_PROMPT,
         model=settings.gemini_extraction_model,
+        fallback_model=settings.gemini_extraction_fallback_model,
         system_instruction=system_prompt,
     )
     return _parse_shipment_json(raw_text)
@@ -735,6 +794,7 @@ async def extract_shipment_text(text: str) -> dict:
     raw_text = await _call_text(
         prompt,
         model=settings.gemini_extraction_model,
+        fallback_model=settings.gemini_extraction_fallback_model,
         system_instruction=system_prompt,
     )
     return _parse_shipment_json(raw_text)
@@ -764,27 +824,12 @@ async def match_shipment_article_name(
     )
 
     client = _get_client()
-    async with _get_semaphore():
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                response = await client.aio.models.generate_content(
-                    model=settings.gemini_vision_model,
-                    contents=[prompt],
-                )
-                break
-            except ClientError as e:
-                if e.code == 429 and attempt < MAX_RETRIES:
-                    delay = RETRY_BASE_DELAY * attempt
-                    logger.warning(
-                        "Gemini rate limited on article matcher (attempt %d/%d), retrying in %ds",
-                        attempt, MAX_RETRIES, delay,
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    logger.exception(
-                        "Article-name matcher API call failed (attempt=%d)", attempt
-                    )
-                    raise
+    models = _models_with_fallback(
+        settings.gemini_vision_model, settings.gemini_vision_fallback_model
+    )
+    response = await _generate_content_with_retry(
+        client, models=models, label="article-name matcher", contents=[prompt]
+    )
     cleaned = _strip_markdown_fences((response.text or "").strip())
 
     import json as _json

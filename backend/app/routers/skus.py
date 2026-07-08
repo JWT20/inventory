@@ -51,6 +51,7 @@ from app.services.embedding import (
     normalize_upload_to_jpeg,
 )
 from PIL import UnidentifiedImageError
+from app.services.booking import promote_pending_images_orders_for_sku
 from app.services.product_status import is_complete, recompute_active
 from app.services.storage import storage
 
@@ -752,6 +753,13 @@ async def upload_reference_image(
     db.add(ref_image)
     db.commit()
     db.refresh(ref_image)
+
+    # The order-promotion gate is "every line's SKU has a reference image row"
+    # (matches order approval), so a freshly-uploaded image can unblock an order
+    # parked in pending_images. Promote now instead of leaving it stuck until an
+    # unrelated recompute happens.
+    if promote_pending_images_orders_for_sku(db, sku_id):
+        db.commit()
 
     background_tasks.add_task(
         _process_reference_image,
