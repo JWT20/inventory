@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,6 +30,7 @@ def _make_image() -> Image.Image:
 def _make_response(text: str) -> MagicMock:
     resp = MagicMock()
     resp.text = text
+    resp.usage_metadata = None
     return resp
 
 
@@ -125,6 +127,35 @@ def test_call_vision_falls_back_to_second_model_on_persistent_5xx():
     assert result == '{"is_package": true}'
     models_used = [c.kwargs["model"] for c in mock_client.aio.models.generate_content.call_args_list]
     assert models_used == ["primary-model", "primary-model", "primary-model", "fallback-model"]
+
+
+def test_call_vision_records_fallback_model_in_langfuse(caplog):
+    """Langfuse must show the model that actually produced the response."""
+    mock_response = _make_response('{"is_package": true}')
+    mock_client = MagicMock()
+    mock_client.aio.models.generate_content = AsyncMock(
+        side_effect=[_server_error(503), _server_error(503), _server_error(503), mock_response]
+    )
+    mock_langfuse = MagicMock()
+    caplog.set_level(logging.WARNING, logger="app.services.embedding")
+
+    with patch("app.services.embedding._get_client", return_value=mock_client), \
+         patch("app.services.embedding._get_semaphore", return_value=asyncio.Semaphore(1)), \
+         patch("app.services.embedding.asyncio.sleep", new=AsyncMock()), \
+         patch("app.services.embedding.get_langfuse_client", return_value=mock_langfuse):
+        result = asyncio.run(
+            _call_vision(_make_image(), "p", model="primary-model", fallback_model="fallback-model")
+        )
+
+    assert result == '{"is_package": true}'
+    langfuse_kwargs = mock_langfuse.update_current_generation.call_args.kwargs
+    assert langfuse_kwargs["model"] == "fallback-model"
+    assert langfuse_kwargs["metadata"] == {
+        "requested_model": "primary-model",
+        "fallback_used": True,
+        "fallback_from": "primary-model",
+    }
+    assert "switching models to fallback-model" in caplog.text
 
 
 def test_call_vision_releases_semaphore_during_backoff():
