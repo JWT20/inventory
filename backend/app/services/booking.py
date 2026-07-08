@@ -79,6 +79,14 @@ def promote_pending_images_orders_for_sku(db: Session, sku_id: int) -> list[Orde
     )
     changed: list[Order] = []
     for order in orders:
+        # The image gate reads ``line.sku.reference_images``. A caller in the
+        # same request may have loaded that collection (as empty) *before* it
+        # added the new image row — setting ``sku_id`` alone does not append to
+        # an already-loaded collection, so it would still read stale/empty.
+        # Expire it so ``recompute_order_status`` re-reads from the DB and sees
+        # the freshly-flushed image.
+        for line in order.lines:
+            db.expire(line.sku, ["reference_images"])
         before = order.status
         recompute_order_status(order, order.lines)
         if order.status != before:

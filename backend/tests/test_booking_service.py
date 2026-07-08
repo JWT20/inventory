@@ -145,6 +145,36 @@ def test_promote_pending_images_orders_activates_after_image_added(db, sample_or
     assert [o.id for o in changed] == [order.id]
 
 
+def test_promote_pending_images_reads_fresh_after_stale_collection_load(db, sample_org):
+    """Regression: the image row is added AFTER the sku's collection was loaded.
+
+    Reproduces the receiving path, which reads ``sku.reference_images`` (loading
+    it as empty) before adding the new image via ``sku_id`` + flush. Setting only
+    ``sku_id`` does not append to the already-loaded collection, so a naive gate
+    would still see zero images and leave the order stuck. The helper must expire
+    and re-read so the order is promoted.
+    """
+    sku = _sku(db, "PIS", with_image=False)
+    cust = _customer(db, sample_org)
+    order = _order(db, sample_org, "PIS1", status="pending_images")
+    _line(db, order, sku, cust, quantity=1)
+    db.commit()
+
+    # Caller loads the (empty) collection into the identity-mapped instance.
+    assert sku.reference_images == []
+    # ...then adds the image row by sku_id + flush, without touching the collection.
+    db.add(ReferenceImage(sku_id=sku.id, image_path="PIS.jpg", processing_status="done"))
+    db.flush()
+    # Sanity: the cached collection is indeed still stale/empty here.
+    assert sku.reference_images == []
+
+    changed = promote_pending_images_orders_for_sku(db, sku.id)
+    db.commit()
+
+    assert order.status == "active"
+    assert [o.id for o in changed] == [order.id]
+
+
 def test_promote_pending_images_stays_when_other_line_lacks_image(db, sample_org):
     """An order stays pending_images while any of its lines still lacks an image."""
     sku_imaged = _sku(db, "PI2a", with_image=True)
