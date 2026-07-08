@@ -69,7 +69,9 @@ async def _generate_content_with_retry(
     retryable error (429/5xx) with linear backoff; once a model exhausts its
     retries on a retryable error the next model is tried. Non-retryable errors
     propagate immediately. The caller must supply ``contents`` (and optionally
-    ``config``) via kwargs; ``model`` is injected per attempt.
+    ``config``) via kwargs; ``model`` is injected per attempt. Returns the
+    response and the model that actually succeeded, so observability records the
+    fallback model instead of the originally requested one.
 
     Concurrency: the semaphore is held only around the actual API call, never
     across the backoff sleep. Otherwise, during a 5xx storm sleeping tasks would
@@ -82,7 +84,8 @@ async def _generate_content_with_retry(
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 async with _get_semaphore():
-                    return await client.aio.models.generate_content(model=model, **kwargs)
+                    response = await client.aio.models.generate_content(model=model, **kwargs)
+                return response, model
             except APIError as e:
                 last_exc = e
                 if _is_retryable(e) and attempt < MAX_RETRIES:
@@ -95,7 +98,7 @@ async def _generate_content_with_retry(
                     continue
                 if _is_retryable(e) and model_index < len(models) - 1:
                     logger.warning(
-                        "Gemini %s exhausted retries on model=%s (code=%s), falling back to %s",
+                        "Gemini %s exhausted retries on model=%s (code=%s), switching models to %s",
                         label, model, getattr(e, "code", "?"), models[model_index + 1],
                     )
                     break  # try next model
@@ -360,13 +363,17 @@ async def _call_vision(
     if config_kwargs:
         generate_kwargs["config"] = types.GenerateContentConfig(**config_kwargs)
 
-    response = await _generate_content_with_retry(
+    response, used_model = await _generate_content_with_retry(
         client, models=models, label="Vision", **generate_kwargs
     )
+    fallback_used = used_model != model
 
     vision_ms = (time.perf_counter() - t0) * 1000
     finish_reason = _finish_reason(response)
-    logger.info("[TIMING] gemini_vision=%.0fms finish_reason=%s", vision_ms, finish_reason)
+    logger.info(
+        "[TIMING] gemini_vision=%.0fms model=%s requested_model=%s fallback_used=%s finish_reason=%s",
+        vision_ms, used_model, model, fallback_used, finish_reason,
+    )
     # A non-STOP finish (MAX_TOKENS/SAFETY/RECITATION) means the text is partial
     # or blocked — the usual root cause behind an unparseable response below.
     if finish_reason is not None and "STOP" not in finish_reason:
@@ -392,9 +399,14 @@ async def _call_vision(
             ]},
         )
         langfuse.update_current_generation(
-            model=model,
+            model=used_model,
             input=langfuse_input,
             output=response.text,
+            metadata={
+                "requested_model": model,
+                "fallback_used": fallback_used,
+                "fallback_from": model if fallback_used else None,
+            },
             usage_details=_usage_details_from_gemini(response) or None,
         )
     except Exception:
@@ -429,11 +441,15 @@ async def _call_text(
             system_instruction=system_instruction,
         )
 
-    response = await _generate_content_with_retry(
+    response, used_model = await _generate_content_with_retry(
         client, models=models, label="text", **generate_kwargs
     )
+    fallback_used = used_model != model
 
-    logger.info("[TIMING] gemini_text=%.0fms", (time.perf_counter() - t0) * 1000)
+    logger.info(
+        "[TIMING] gemini_text=%.0fms model=%s requested_model=%s fallback_used=%s",
+        (time.perf_counter() - t0) * 1000, used_model, model, fallback_used,
+    )
 
     try:
         langfuse = get_langfuse_client()
@@ -442,9 +458,14 @@ async def _call_text(
             langfuse_input.append({"role": "system", "content": system_instruction})
         langfuse_input.append({"role": "user", "content": prompt})
         langfuse.update_current_generation(
-            model=model,
+            model=used_model,
             input=langfuse_input,
             output=response.text,
+            metadata={
+                "requested_model": model,
+                "fallback_used": fallback_used,
+                "fallback_from": model if fallback_used else None,
+            },
             usage_details=_usage_details_from_gemini(response) or None,
         )
     except Exception:
@@ -827,7 +848,7 @@ async def match_shipment_article_name(
     models = _models_with_fallback(
         settings.gemini_vision_model, settings.gemini_vision_fallback_model
     )
-    response = await _generate_content_with_retry(
+    response, _used_model = await _generate_content_with_retry(
         client, models=models, label="article-name matcher", contents=[prompt]
     )
     cleaned = _strip_markdown_fences((response.text or "").strip())
