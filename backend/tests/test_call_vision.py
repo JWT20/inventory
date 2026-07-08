@@ -127,6 +127,34 @@ def test_call_vision_falls_back_to_second_model_on_persistent_5xx():
     assert models_used == ["primary-model", "primary-model", "primary-model", "fallback-model"]
 
 
+def test_call_vision_releases_semaphore_during_backoff():
+    """The concurrency slot must be free while a task sleeps between retries.
+
+    Holding the semaphore across the backoff sleep would let sleeping tasks pin
+    every slot during a 5xx storm and starve healthy requests.
+    """
+    sem = asyncio.Semaphore(1)
+    mock_response = _make_response('{"is_package": true}')
+    mock_client = MagicMock()
+    mock_client.aio.models.generate_content = AsyncMock(
+        side_effect=[_server_error(502), mock_response]
+    )
+
+    locked_during_sleep = {}
+
+    async def fake_sleep(_delay):
+        # value restored → slot released while we're in backoff.
+        locked_during_sleep["locked"] = sem.locked()
+
+    with patch("app.services.embedding._get_client", return_value=mock_client), \
+         patch("app.services.embedding._get_semaphore", return_value=sem), \
+         patch("app.services.embedding.asyncio.sleep", new=fake_sleep), \
+         patch("app.services.embedding.get_langfuse_client", side_effect=Exception("no langfuse")):
+        asyncio.run(_call_vision(_make_image(), "p"))
+
+    assert locked_during_sleep["locked"] is False
+
+
 def test_call_vision_does_not_retry_non_retryable_client_error():
     """A 400-class error must propagate immediately without retry/fallback."""
     from google.genai.errors import ClientError

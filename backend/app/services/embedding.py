@@ -70,12 +70,19 @@ async def _generate_content_with_retry(
     retries on a retryable error the next model is tried. Non-retryable errors
     propagate immediately. The caller must supply ``contents`` (and optionally
     ``config``) via kwargs; ``model`` is injected per attempt.
+
+    Concurrency: the semaphore is held only around the actual API call, never
+    across the backoff sleep. Otherwise, during a 5xx storm sleeping tasks would
+    pin every slot and starve healthy requests. Re-acquiring per attempt still
+    caps in-flight calls at ``gemini_max_concurrent`` (backpressure preserved,
+    no thundering herd on recovery).
     """
     last_exc: APIError | None = None
     for model_index, model in enumerate(models):
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                return await client.aio.models.generate_content(model=model, **kwargs)
+                async with _get_semaphore():
+                    return await client.aio.models.generate_content(model=model, **kwargs)
             except APIError as e:
                 last_exc = e
                 if _is_retryable(e) and attempt < MAX_RETRIES:
@@ -84,7 +91,7 @@ async def _generate_content_with_retry(
                         "Gemini %s transient error %s (model=%s attempt=%d/%d), retrying in %ds",
                         label, getattr(e, "code", "?"), model, attempt, MAX_RETRIES, delay,
                     )
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(delay)  # outside the semaphore on purpose
                     continue
                 if _is_retryable(e) and model_index < len(models) - 1:
                     logger.warning(
@@ -353,10 +360,9 @@ async def _call_vision(
     if config_kwargs:
         generate_kwargs["config"] = types.GenerateContentConfig(**config_kwargs)
 
-    async with _get_semaphore():
-        response = await _generate_content_with_retry(
-            client, models=models, label="Vision", **generate_kwargs
-        )
+    response = await _generate_content_with_retry(
+        client, models=models, label="Vision", **generate_kwargs
+    )
 
     vision_ms = (time.perf_counter() - t0) * 1000
     finish_reason = _finish_reason(response)
@@ -423,10 +429,9 @@ async def _call_text(
             system_instruction=system_instruction,
         )
 
-    async with _get_semaphore():
-        response = await _generate_content_with_retry(
-            client, models=models, label="text", **generate_kwargs
-        )
+    response = await _generate_content_with_retry(
+        client, models=models, label="text", **generate_kwargs
+    )
 
     logger.info("[TIMING] gemini_text=%.0fms", (time.perf_counter() - t0) * 1000)
 
@@ -507,23 +512,25 @@ async def generate_embedding(text: str) -> list[float]:
     logger.info("Calling Gemini Embedding model=%s", settings.gemini_embedding_model)
     t0 = time.perf_counter()
 
-    async with _get_semaphore():
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
+    # Semaphore held only around each call, backoff sleep outside it — see
+    # _generate_content_with_retry for the rationale (no slot-pinning by sleepers).
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            async with _get_semaphore():
                 result = await client.aio.models.embed_content(
                     model=settings.gemini_embedding_model,
                     contents=text,
                     config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIM),
                 )
-                break
-            except APIError as e:
-                if _is_retryable(e) and attempt < MAX_RETRIES:
-                    delay = RETRY_BASE_DELAY * attempt
-                    logger.warning("Gemini embedding transient error %s (attempt %d/%d), retrying in %ds", getattr(e, "code", "?"), attempt, MAX_RETRIES, delay)
-                    await asyncio.sleep(delay)
-                else:
-                    logger.exception("Gemini Embedding API call failed (model=%s, attempt=%d)", settings.gemini_embedding_model, attempt)
-                    raise
+            break
+        except APIError as e:
+            if _is_retryable(e) and attempt < MAX_RETRIES:
+                delay = RETRY_BASE_DELAY * attempt
+                logger.warning("Gemini embedding transient error %s (attempt %d/%d), retrying in %ds", getattr(e, "code", "?"), attempt, MAX_RETRIES, delay)
+                await asyncio.sleep(delay)
+            else:
+                logger.exception("Gemini Embedding API call failed (model=%s, attempt=%d)", settings.gemini_embedding_model, attempt)
+                raise
 
     embedding_ms = (time.perf_counter() - t0) * 1000
 
@@ -820,10 +827,9 @@ async def match_shipment_article_name(
     models = _models_with_fallback(
         settings.gemini_vision_model, settings.gemini_vision_fallback_model
     )
-    async with _get_semaphore():
-        response = await _generate_content_with_retry(
-            client, models=models, label="article-name matcher", contents=[prompt]
-        )
+    response = await _generate_content_with_retry(
+        client, models=models, label="article-name matcher", contents=[prompt]
+    )
     cleaned = _strip_markdown_fences((response.text or "").strip())
 
     import json as _json
