@@ -75,6 +75,77 @@ def test_call_vision_with_system_instruction_passes_config():
 
 
 # ---------------------------------------------------------------------------
+# _call_vision — transient 5xx ("high demand") retry + model fallback
+# ---------------------------------------------------------------------------
+
+
+def _server_error(code: int):
+    from google.genai.errors import ServerError
+
+    return ServerError(code, {"error": {"message": "high demand", "status": "UNAVAILABLE"}})
+
+
+def test_call_vision_retries_transient_502_then_succeeds():
+    """A 502 UNAVAILABLE (ServerError, not ClientError) must be retried, not raised."""
+    mock_response = _make_response('{"is_package": true}')
+    mock_client = MagicMock()
+    mock_client.aio.models.generate_content = AsyncMock(
+        side_effect=[_server_error(502), mock_response]
+    )
+
+    with patch("app.services.embedding._get_client", return_value=mock_client), \
+         patch("app.services.embedding._get_semaphore", return_value=asyncio.Semaphore(1)), \
+         patch("app.services.embedding.asyncio.sleep", new=AsyncMock()), \
+         patch("app.services.embedding.get_langfuse_client", side_effect=Exception("no langfuse")):
+        result = asyncio.run(_call_vision(_make_image(), "test prompt"))
+
+    assert result == '{"is_package": true}'
+    assert mock_client.aio.models.generate_content.call_count == 2
+
+
+def test_call_vision_falls_back_to_second_model_on_persistent_5xx():
+    """When the primary model keeps 5xx-ing, the fallback model is tried."""
+    from app.config import settings
+
+    mock_response = _make_response('{"is_package": true}')
+    # Primary exhausts all retries (MAX_RETRIES 503s), then fallback succeeds.
+    mock_client = MagicMock()
+    mock_client.aio.models.generate_content = AsyncMock(
+        side_effect=[_server_error(503), _server_error(503), _server_error(503), mock_response]
+    )
+
+    with patch("app.services.embedding._get_client", return_value=mock_client), \
+         patch("app.services.embedding._get_semaphore", return_value=asyncio.Semaphore(1)), \
+         patch("app.services.embedding.asyncio.sleep", new=AsyncMock()), \
+         patch("app.services.embedding.get_langfuse_client", side_effect=Exception("no langfuse")):
+        result = asyncio.run(
+            _call_vision(_make_image(), "p", model="primary-model", fallback_model="fallback-model")
+        )
+
+    assert result == '{"is_package": true}'
+    models_used = [c.kwargs["model"] for c in mock_client.aio.models.generate_content.call_args_list]
+    assert models_used == ["primary-model", "primary-model", "primary-model", "fallback-model"]
+
+
+def test_call_vision_does_not_retry_non_retryable_client_error():
+    """A 400-class error must propagate immediately without retry/fallback."""
+    from google.genai.errors import ClientError
+
+    err = ClientError(400, {"error": {"message": "bad request", "status": "INVALID_ARGUMENT"}})
+    mock_client = MagicMock()
+    mock_client.aio.models.generate_content = AsyncMock(side_effect=err)
+
+    with patch("app.services.embedding._get_client", return_value=mock_client), \
+         patch("app.services.embedding._get_semaphore", return_value=asyncio.Semaphore(1)), \
+         patch("app.services.embedding.asyncio.sleep", new=AsyncMock()), \
+         patch("app.services.embedding.get_langfuse_client", side_effect=Exception("no langfuse")):
+        with pytest.raises(ClientError):
+            asyncio.run(_call_vision(_make_image(), "p", fallback_model=""))
+
+    assert mock_client.aio.models.generate_content.call_count == 1
+
+
+# ---------------------------------------------------------------------------
 # parse_classify_and_describe_response — hard-fail instead of garbage fallback
 # ---------------------------------------------------------------------------
 

@@ -13,7 +13,7 @@ from app.database import get_db
 from app.events import publish_event
 from app.models import SKU, InventoryBalance, Order, OrderLine, Organization, ReferenceImage, User
 from app.routers.skus import _check_duplicate_embedding, _sku_to_response
-from app.services.booking import apply_booking
+from app.services.booking import apply_booking, promote_pending_images_orders_for_sku
 from app.schemas import (
     AlternativeMatch,
     BookingConfirmation,
@@ -1006,6 +1006,7 @@ async def register_reference_and_book(
     db.add(ref_image)
     db.flush()
     recompute_active(sku, db)
+    promote_pending_images_orders_for_sku(db, sku.id)
     db.commit()
     db.refresh(sku)
 

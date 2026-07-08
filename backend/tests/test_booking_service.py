@@ -18,6 +18,7 @@ from app.models import (
 )
 from app.services.booking import (
     apply_booking,
+    promote_pending_images_orders_for_sku,
     recompute_order_status,
     remaining_for_line,
 )
@@ -122,6 +123,56 @@ def test_recompute_pending_images_stays_when_image_missing(db, sample_org):
     recompute_order_status(order, [line])
 
     assert order.status == "pending_images"
+
+
+def test_promote_pending_images_orders_activates_after_image_added(db, sample_org):
+    """Adding an image to the SKU must flip its pending_images order to active.
+
+    Simulates the courier photographing a SKU an order was waiting on: the image
+    row already exists (as at upload time), and the promotion helper — called
+    from the image upload/scan paths — recomputes the order.
+    """
+    sku = _sku(db, "PI", with_image=True)
+    cust = _customer(db, sample_org)
+    order = _order(db, sample_org, "PI1", status="pending_images")
+    _line(db, order, sku, cust, quantity=3)
+    db.commit()
+
+    changed = promote_pending_images_orders_for_sku(db, sku.id)
+    db.commit()
+
+    assert order.status == "active"
+    assert [o.id for o in changed] == [order.id]
+
+
+def test_promote_pending_images_stays_when_other_line_lacks_image(db, sample_org):
+    """An order stays pending_images while any of its lines still lacks an image."""
+    sku_imaged = _sku(db, "PI2a", with_image=True)
+    sku_bare = _sku(db, "PI2b", with_image=False)
+    cust = _customer(db, sample_org)
+    order = _order(db, sample_org, "PI2", status="pending_images")
+    _line(db, order, sku_imaged, cust, quantity=1)
+    _line(db, order, sku_bare, cust, quantity=1)
+    db.commit()
+
+    changed = promote_pending_images_orders_for_sku(db, sku_imaged.id)
+
+    assert order.status == "pending_images"
+    assert changed == []
+
+
+def test_promote_pending_images_ignores_active_orders(db, sample_org):
+    """Only pending_images orders are touched; an active order is left alone."""
+    sku = _sku(db, "PI3", with_image=True)
+    cust = _customer(db, sample_org)
+    order = _order(db, sample_org, "PI3o", status="active")
+    _line(db, order, sku, cust, quantity=2)
+    db.commit()
+
+    changed = promote_pending_images_orders_for_sku(db, sku.id)
+
+    assert changed == []
+    assert order.status == "active"
 
 
 @pytest.mark.parametrize("status", ["completed", "cancelled", "closed", "pending_approval"])

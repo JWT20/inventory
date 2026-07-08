@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     gemini_vision_model: str = "gemini-2.5-flash"
     gemini_extraction_model: str = "gemini-2.5-pro"  # stronger model for document extraction
     gemini_embedding_model: str = "gemini-embedding-001"
+    # Fallback models tried when the primary keeps returning transient 5xx
+    # ("high demand" 502/503 UNAVAILABLE). Empty string disables the fallback.
+    gemini_vision_fallback_model: str = "gemini-2.0-flash"
+    gemini_extraction_fallback_model: str = "gemini-2.5-flash"
     gemini_max_concurrent: int = 5  # max concurrent Gemini API requests
     gemini_extraction_max_dimension: int = 2048  # px – longest side for pakbon/invoice extraction (table digits need more resolution than box classification)
     match_threshold: float = 0.80
