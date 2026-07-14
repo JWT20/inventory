@@ -79,6 +79,22 @@ _FULFILLABLE_FINANCIAL_STATUSES = {"paid"}
 _SHIPPED_FULFILLMENT_STATUSES = {"fulfilled"}
 
 
+def _release_order_reservation(db: Session, order, org_id: int) -> list[int]:
+    """Release the reservation an active order was holding — its open (unbooked)
+    quantity per SKU. Used when an active order is parked back to a blocked state.
+    Returns the affected SKU ids so the caller can push the freshened available.
+    """
+    released: list[int] = []
+    for line in order.lines:
+        open_qty = line.quantity - line.booked_count
+        if open_qty > 0:
+            adjust_reservation(
+                db, sku_id=line.sku_id, organization_id=org_id, delta=-open_qty
+            )
+            released.append(line.sku_id)
+    return released
+
+
 def import_channel_order(
     db: Session, connection: ChannelConnection, order: NormalizedChannelOrder
 ) -> ImportResult:
@@ -141,6 +157,13 @@ def import_channel_order(
     # we reserve exactly once — never on a plain re-sync of an already-active order.
     became_active = False
 
+    # Bookings mean the courier already started picking — never silently rebuild
+    # or reconcile such an order.
+    has_bookings = (not created) and any(
+        line.booked_count > 0 for line in existing.lines
+    )
+    released_sku_ids: list[int] = []
+
     if created:
         db_order = Order(
             organization_id=org_id,
@@ -160,17 +183,35 @@ def import_channel_order(
         became_active = target_status == "active"
     else:
         db_order = existing
-        # Promote a parked order now that conditions allow: an order first seen in
-        # observe-mode (pre-live) or parked in pending_product (missing catalog
-        # entry) moves to its new target once the connection is live / the product
-        # exists. Never downgrade or touch an order that already progressed
-        # (active/completed/shipped/cancelled/closed).
-        if (
-            db_order.status in ("observed", "pending_product")
-            and target_status in ("active", "pending_product")
+        status = db_order.status
+        if status in ("observed", "pending_product") and target_status in (
+            "active",
+            "pending_product",
         ):
+            # Cutover (observed→active), product added (pending_product→active), or
+            # still waiting (→pending_product). Reserves on reaching active.
             db_order.status = target_status
             became_active = target_status == "active"
+        elif status == "pending_product" and target_status == "observed":
+            # The blocked order later became non-fulfillable/fulfilled at the
+            # channel → drop the block so it stops showing "Wacht op product" (and
+            # stops triggering self-heal re-syncs).
+            db_order.status = "observed"
+        elif status == "active" and has_unmatched:
+            # An already-active order gained an unknown line (edited at the
+            # channel, or imported partially before this guard existed). It must
+            # not stay pickable-but-incomplete.
+            if has_bookings:
+                # Picking already started — hand to a human, don't auto-reconcile
+                # or drop the booked work.
+                db_order.status = "needs_review"
+            else:
+                # Nothing picked yet: park as blocked and release its reservation
+                # (it re-reserves if it self-heals back to active once the missing
+                # product is added).
+                released_sku_ids = _release_order_reservation(db, db_order, org_id)
+                db_order.status = "pending_product"
+        # active + fully matched, or terminal states: left untouched (reserve once).
         if order.ordered_at is not None:
             db_order.ordered_at = order.ordered_at
         # Backfill / refresh the order number on re-import (e.g. for orders
@@ -184,8 +225,7 @@ def import_channel_order(
 
     # Rebuild the matched lines on re-import from the up-front match pass. Safe
     # because parked orders (observed/pending_product) are inert; never touch an
-    # order that already has bookings (a live-mode concern for fase 4).
-    has_bookings = any(line.booked_count > 0 for line in db_order.lines)
+    # order that already has bookings (needs_review / mid-pick).
     if not created and not has_bookings:
         for line in list(db_order.lines):
             db.delete(line)
@@ -234,7 +274,9 @@ def import_channel_order(
     # promote path db_order.lines is stale — expire it to reload the fresh rows,
     # otherwise a cutover would activate the order without reserving any stock.
     db.expire(db_order, ["lines"])
-    reserved_sku_ids: list[int] = []
+    # Released reservations (an active order parked back to blocked) also changed
+    # the channel-visible available, so push them alongside any freshly reserved.
+    reserved_sku_ids: list[int] = list(released_sku_ids)
     if became_active:
         for line in db_order.lines:
             open_qty = line.quantity - line.booked_count
@@ -265,20 +307,37 @@ def resync_channel_for_new_ean(
 
     Mirrors :func:`app.services.booking.promote_pending_images_orders_for_sku` in
     spirit; here the unmatched line lives only at the channel, so recovery runs
-    through a re-sync rather than a local relationship recompute. No-op when the
-    org has no blocked order or no live connection. Does NOT commit.
+    through a re-sync rather than a local relationship recompute. Only fires when a
+    blocked order is actually waiting for *this* EAN — otherwise every unrelated
+    catalogue change would trigger a full-history re-sync. No-op when nothing is
+    blocked on it or there is no live connection. Does NOT commit.
     """
     if not ean:
         return False
-    blocked = (
-        db.query(Order)
+    # External ids of the org's currently-blocked orders.
+    blocked_ext_ids = [
+        row[0]
+        for row in db.query(Order.external_id)
         .filter(
             Order.organization_id == organization_id,
             Order.status == "pending_product",
+            Order.external_id.isnot(None),
         )
-        .first()
+        .all()
+    ]
+    if not blocked_ext_ids:
+        return False
+    # Does any blocked order's recorded unmatched set contain this EAN?
+    logs = (
+        db.query(ChannelSyncLog)
+        .filter(
+            ChannelSyncLog.organization_id == organization_id,
+            ChannelSyncLog.external_id.in_(blocked_ext_ids),
+        )
+        .all()
     )
-    if blocked is None:
+    waiting = any(ean in json.loads(log.unmatched_eans or "[]") for log in logs)
+    if not waiting:
         return False
     connections = (
         db.query(ChannelConnection)

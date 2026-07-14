@@ -46,6 +46,7 @@ function isFulfilled(s: string | null): boolean {
 const ORDER_STATUS_LABELS: Record<string, string> = {
   observed: "Observe",
   pending_product: "Wacht op product",
+  needs_review: "Handmatige controle",
   active: "Actief",
   completed: "Voltooid",
   shipped: "Verzonden",
@@ -177,7 +178,9 @@ export function ChannelsPage() {
   const status = recon?.status;
   const isLive = status?.mode === "live";
   const blockedCount =
-    recon?.orders.filter((o) => o.status === "pending_product").length ?? 0;
+    recon?.orders.filter(
+      (o) => o.status === "pending_product" || o.status === "needs_review",
+    ).length ?? 0;
 
   return (
     <div className="space-y-4">
@@ -300,7 +303,8 @@ export function ChannelsPage() {
             {recon && recon.orders.length > 0 ? (
               <div className="divide-y divide-border">
                 {recon.orders.map((o) => {
-                  const blocked = o.status === "pending_product";
+                  const blocked =
+                    o.status === "pending_product" || o.status === "needs_review";
                   return (
                   <div key={o.external_id} className="px-4 py-3 flex justify-between items-start gap-3">
                     <div className="min-w-0">

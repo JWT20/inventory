@@ -486,10 +486,13 @@ def list_orders(
         return []
 
     # Inert channel orders belong to the reconciliation view (Fase 3), not the
-    # normal order list: "observed" (not live yet) and "pending_product" (blocked
-    # on a missing catalog entry). The courier filters above already exclude them;
-    # this also keeps them out of admin/owner listings.
-    query = query.filter(Order.status.notin_(("observed", "pending_product")))
+    # normal order list: "observed" (not live yet), "pending_product" (blocked on a
+    # missing catalog entry) and "needs_review" (an active order that gained an
+    # unknown line while being picked). The courier filters above already exclude
+    # them; this also keeps them out of admin/owner listings.
+    query = query.filter(
+        Order.status.notin_(("observed", "pending_product", "needs_review"))
+    )
 
     if week:
         # Barcode/channel orders are born active without a delivery week, so they
