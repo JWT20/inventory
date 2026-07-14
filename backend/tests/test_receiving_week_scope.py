@@ -141,22 +141,41 @@ def test_scope_matches_open_line_in_another_week(db, sample_org):
     assert cap_remaining == 3
 
 
-def test_scope_prefers_earliest_week_fifo(db, sample_org):
+def test_scope_prefers_context_order_over_earlier_week(db, sample_org):
     sku = _make_sku(db)
     early_customer = _make_customer(db, sample_org, "Early")
     late_customer = _make_customer(db, sample_org, "Late")
     early_order = _make_order(db, sample_org, "EARLY", week="2026-W21")
     late_order = _make_order(db, sample_org, "LATE", week="2026-W22")
-    early_line = _make_line(db, early_order, sku, early_customer, quantity=8)
-    _make_line(db, late_order, sku, late_customer, quantity=8)
+    _make_line(db, early_order, sku, early_customer, quantity=8)
+    late_line = _make_line(db, late_order, sku, late_customer, quantity=8)
     _set_stock(db, sku, sample_org, 10)
 
-    # Context order is the later week, yet FIFO routes the box to the earliest week.
     selected, cap_remaining = _select_order_line_for_scope(db, late_order, sku.id)
 
-    assert selected.id == early_line.id
+    assert selected.id == late_line.id
     # Cap is computed per week independently, so it is not split with the later week.
     assert cap_remaining == 8
+
+
+def test_scope_falls_back_to_earliest_week_when_context_does_not_need_sku(
+    db, sample_org
+):
+    context_sku = _make_sku(db, "CONTEXT")
+    scanned_sku = _make_sku(db, "SCANNED")
+    customer = _make_customer(db, sample_org, "Customer")
+    context = _make_order(db, sample_org, "CTX", week="2026-W22")
+    _make_line(db, context, context_sku, customer, quantity=1)
+    late = _make_order(db, sample_org, "LATE", week="2026-W23")
+    _make_line(db, late, scanned_sku, customer, quantity=2)
+    early = _make_order(db, sample_org, "EARLY", week="2026-W20")
+    early_line = _make_line(db, early, scanned_sku, customer, quantity=2)
+    _set_stock(db, scanned_sku, sample_org, 4)
+
+    selected, cap_remaining = _select_order_line_for_scope(db, context, scanned_sku.id)
+
+    assert selected.id == early_line.id
+    assert cap_remaining == 2
 
 
 def test_scheduled_scan_skips_adhoc_null_week_orders(db, sample_org):

@@ -149,7 +149,7 @@ def _select_order_line_for_scope(
     context_order: "Order",
     sku_id: int,
 ) -> tuple["OrderLine", int]:
-    """Pick the exact order line for a scan: startorder first, then week fallback."""
+    """Pick the exact order line for a scan: start order first, then week fallback."""
     lines = _open_scope_lines_query(db, context_order, sku_id).all()
     if not lines:
         raise HTTPException(
@@ -169,11 +169,11 @@ def _select_order_line_for_scope(
             f"Toewijzingslimiet bereikt voor deze SKU in {_scope_label(context_order)}",
         )
 
-    def sort_key(item: tuple["OrderLine", int]) -> tuple[str, int, int, int]:
+    def sort_key(item: tuple["OrderLine", int]) -> tuple[int, str, int, int]:
         line, _cap_remaining = item
         return (
-            line.order.delivery_week or "",
             0 if line.order_id == context_order.id else 1,
+            line.order.delivery_week or "",
             _DELIVERY_DAY_SORT.get(line.delivery_day, 9),
             line.id,
         )
@@ -606,7 +606,8 @@ async def book_box(
         if embedding is None:
             embedding = await generate_embedding(description)
 
-        # Match against open SKUs across all open orders (FIFO across weeks).
+        # Match across all open orders; the context order is booked first and
+        # other weeks remain available as a FIFO fallback.
         scope_sku_ids = set(_scope_sku_ids(db, order))
         if not scope_sku_ids:
             raise HTTPException(
