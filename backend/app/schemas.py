@@ -514,6 +514,7 @@ class OrderLineDeleteResponse(BaseModel):
 
 class WeeklyPickPhotoResponse(BaseModel):
     order_line_id: int
+    order_line_ids: list[int]
     sku_id: int
     wine_name: str
     image_url: str | None = None

@@ -568,6 +568,7 @@ def weekly_pick_photos(
         items.append(
             WeeklyPickPhotoResponse(
                 order_line_id=line.id,
+                order_line_ids=sorted(l.id for l in sku_lines),
                 sku_id=line.sku_id,
                 wine_name=line.sku.name,
                 image_url=image_url,

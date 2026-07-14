@@ -282,7 +282,7 @@ export function ScanStep({
   let carouselSubcaptions: string[];
   let carouselStart: number;
   const weekStart = weekPhotos.findIndex(
-    (p) => p.order_line_id === nextPick?.order_line_id,
+    (p) => nextPick !== null && p.order_line_ids.includes(nextPick.order_line_id),
   );
   if (weekStart >= 0) {
     carouselImages = weekPhotos.map((p) => p.image_url as string);

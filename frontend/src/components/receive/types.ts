@@ -126,6 +126,7 @@ export interface IdentifyResult {
 
 export interface WeeklyPickPhoto {
   order_line_id: number;
+  order_line_ids: number[];
   sku_id: number;
   wine_name: string;
   image_url: string | null;
