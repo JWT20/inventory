@@ -23,11 +23,14 @@ from app.schemas import (
     ChannelModeRequest,
     ChannelOrderRow,
     ChannelReconciliation,
+    ChannelReviewResolveRequest,
+    ChannelReviewResolveResponse,
     ChannelStatus,
     ChannelSyncSummary,
     InventoryPushSummary,
 )
 from app.services.inventory_sync import push_available, push_inventory_to_shopify
+from app.services.stock import adjust_reservation
 from app.services.shopify import (
     ShopifyClient,
     build_authorize_url,
@@ -338,6 +341,56 @@ def push_inventory(
     )
 
 
+@router.post(
+    "/shopify/orders/{order_id}/resolve",
+    response_model=ChannelReviewResolveResponse,
+)
+def resolve_review_order(
+    order_id: int,
+    body: ChannelReviewResolveRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_platform_admin),
+):
+    """Resolve a channel order parked in ``needs_review`` (an active order that
+    changed at the channel while being picked). ``cancel`` releases its remaining
+    reservation and cancels it; ``resume`` puts it back on the pick list.
+
+    needs_review orders never had their reservation released, so ``resume`` only
+    flips the status (the reservation is still intact) while ``cancel`` frees it.
+    """
+    order = db.get(Order, order_id)
+    if order is None or order.channel == "manual":
+        raise HTTPException(404, "Kanaalorder niet gevonden")
+    if order.status != "needs_review":
+        raise HTTPException(400, "Order staat niet op handmatige controle")
+
+    if body.action == "cancel":
+        freed: list[int] = []
+        for line in order.lines:
+            open_qty = line.quantity - line.booked_count
+            if open_qty > 0:
+                adjust_reservation(
+                    db, sku_id=line.sku_id,
+                    organization_id=order.organization_id, delta=-open_qty,
+                )
+                freed.append(line.sku_id)
+        order.status = "cancelled"
+        db.commit()
+        for sku_id in set(freed):
+            background_tasks.add_task(
+                push_inventory_to_shopify, sku_id, order.organization_id
+            )
+    elif body.action == "resume":
+        # Reservation is still held from when it was active — just re-open it.
+        order.status = "active"
+        db.commit()
+    else:
+        raise HTTPException(400, "Onbekende actie — kies 'cancel' of 'resume'")
+
+    return ChannelReviewResolveResponse(status=order.status)
+
+
 @router.get("/shopify/reconciliation", response_model=ChannelReconciliation)
 def shopify_reconciliation(
     organization_id: int | None = Query(None),
@@ -375,6 +428,7 @@ def shopify_reconciliation(
         order = orders_by_ext.get(log.external_id)
         rows.append(
             ChannelOrderRow(
+                order_id=order.id if order else None,
                 external_id=log.external_id,
                 reference=order.reference if order else None,
                 channel_reference=order.channel_reference if order else None,

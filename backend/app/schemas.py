@@ -568,7 +568,18 @@ class ChannelStatus(BaseModel):
     last_synced_at: datetime | None = None
 
 
+class ChannelReviewResolveRequest(BaseModel):
+    """Resolve a needs_review channel order: cancel it or resume picking."""
+    action: str  # "cancel" | "resume"
+
+
+class ChannelReviewResolveResponse(BaseModel):
+    status: str
+
+
 class ChannelOrderRow(BaseModel):
+    # Internal order id — lets the reconciliation UI resolve a needs_review order.
+    order_id: int | None = None
     external_id: str
     reference: str | None = None
     # The channel's human order number (Shopify order name, e.g. "1262"); this is

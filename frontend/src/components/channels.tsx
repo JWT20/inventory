@@ -26,6 +26,7 @@ interface ChannelStatus {
 }
 
 interface ReconRow {
+  order_id: number | null;
   external_id: string;
   reference: string | null;
   channel_reference: string | null;
@@ -54,6 +55,14 @@ const ORDER_STATUS_LABELS: Record<string, string> = {
   closed: "Gesloten",
 };
 
+// Best-effort reason an active order landed in needs_review, derived from the
+// state we already have (no stored reason). Order of checks = most specific first.
+function reviewReason(o: ReconRow): string {
+  if (o.channel_fulfillment_status === "fulfilled") return "Elders verzonden";
+  if (o.unmatched_eans.length > 0) return "Onbekend product tijdens picken";
+  return "Geannuleerd/gewijzigd tijdens picken";
+}
+
 interface Reconciliation {
   status: ChannelStatus;
   orders: ReconRow[];
@@ -73,6 +82,7 @@ export function ChannelsPage() {
   const [syncing, setSyncing] = useState(false);
   const [changingMode, setChangingMode] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const [resolving, setResolving] = useState(false);
 
   // Only orgs that actually run channel orders can be connected.
   useEffect(() => {
@@ -172,6 +182,19 @@ export function ChannelsPage() {
       toast.error(err instanceof Error ? err.message : "Push mislukt");
     } finally {
       setPushing(false);
+    }
+  }
+
+  async function resolveOrder(orderId: number, action: "cancel" | "resume") {
+    setResolving(true);
+    try {
+      await api.channelResolveOrder(orderId, action);
+      toast.success(action === "cancel" ? "Order geannuleerd" : "Order hervat");
+      await load();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Actie mislukt");
+    } finally {
+      setResolving(false);
     }
   }
 
@@ -305,6 +328,7 @@ export function ChannelsPage() {
                 {recon.orders.map((o) => {
                   const blocked =
                     o.status === "pending_product" || o.status === "needs_review";
+                  const needsReview = o.status === "needs_review";
                   return (
                   <div key={o.external_id} className="px-4 py-3 flex justify-between items-start gap-3">
                     <div className="min-w-0">
@@ -338,6 +362,33 @@ export function ChannelsPage() {
                             {o.unmatched_eans.join(", ")}
                           </span>
                         </p>
+                      )}
+                      {needsReview && (
+                        <div className="mt-1">
+                          <p className="text-xs text-red-600">
+                            Reden: {reviewReason(o)}
+                          </p>
+                          {o.order_id != null && (
+                            <div className="flex gap-2 mt-1">
+                              <Button
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                disabled={resolving}
+                                onClick={() => resolveOrder(o.order_id!, "resume")}
+                              >
+                                Hervatten
+                              </Button>
+                              <Button
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                disabled={resolving}
+                                onClick={() => resolveOrder(o.order_id!, "cancel")}
+                              >
+                                Annuleren
+                              </Button>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                     <div className="text-right text-xs shrink-0">
