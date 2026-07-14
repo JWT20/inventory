@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 interface ImageLightboxProps {
   images: string[];
   captions?: string[];
+  subcaptions?: string[];
   startIndex?: number;
   open: boolean;
   onClose: () => void;
@@ -16,6 +17,7 @@ const SWIPE_THRESHOLD = 50;
 export function ImageLightbox({
   images,
   captions,
+  subcaptions,
   startIndex = 0,
   open,
   onClose,
@@ -379,9 +381,14 @@ export function ImageLightbox({
       )}
 
       {/* Caption */}
-      {captions?.[index] && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 max-w-[90%] truncate bg-white/10 text-white text-sm px-3 py-1 rounded-full text-center">
-          {captions[index]}
+      {(captions?.[index] || subcaptions?.[index]) && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 max-w-[90%] bg-white/10 text-white px-3 py-2 rounded-lg text-center">
+          {captions?.[index] && (
+            <p className="text-sm font-medium">{captions[index]}</p>
+          )}
+          {subcaptions?.[index] && (
+            <p className="text-xs text-white/80 mt-0.5">{subcaptions[index]}</p>
+          )}
         </div>
       )}
     </div>
