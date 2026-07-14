@@ -552,6 +552,11 @@ class InventoryPushSummary(BaseModel):
     failed: int
 
 
+class ChannelModeRequest(BaseModel):
+    """Set a channel connection to ``observe`` or ``live`` (the go-live cutover)."""
+    mode: str
+
+
 class ChannelConnectUrl(BaseModel):
     url: str
 
