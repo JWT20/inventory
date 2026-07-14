@@ -360,6 +360,17 @@ def sync_shopify(db: Session, connection: ChannelConnection, client=None) -> Syn
     re-seen but never duplicated. Advances the cursor to the newest updatedAt.
     Does NOT commit — the caller owns the transaction.
     """
+    # Serialize concurrent syncs of the same connection. A manual "sync now" and
+    # the background poller (or two API replicas) can otherwise both re-see the
+    # same order, both promote it observed/pending_product → active, and both
+    # reserve its stock — a read-then-write race that double-reserves. Locking the
+    # connection row makes the second sync wait for the first to commit, then
+    # resume from the freshly-advanced cursor so it re-processes nothing.
+    # Postgres takes a real row lock; SQLite (tests) ignores FOR UPDATE silently.
+    db.query(ChannelConnection).filter(
+        ChannelConnection.id == connection.id
+    ).with_for_update().first()
+
     # Strictly per-connection credentials: NEVER fall back to global env
     # credentials, or any org with the (default-on) channel_orders module could
     # pull the configured shop into its own tenant.
