@@ -197,10 +197,19 @@ def import_channel_order(
             # channel → drop the block so it stops showing "Wacht op product" (and
             # stops triggering self-heal re-syncs).
             db_order.status = "observed"
+        elif status == "active" and target_status == "observed":
+            # The order was cancelled / refunded / unpaid, or fulfilled elsewhere
+            # at the channel → it must leave the pick list. Release its reservation
+            # and cancel it, unless picking already started (then a human decides).
+            if has_bookings:
+                db_order.status = "needs_review"
+            else:
+                released_sku_ids = _release_order_reservation(db, db_order, org_id)
+                db_order.status = "cancelled"
         elif status == "active" and has_unmatched:
-            # An already-active order gained an unknown line (edited at the
-            # channel, or imported partially before this guard existed). It must
-            # not stay pickable-but-incomplete.
+            # An already-active (still fulfillable) order gained an unknown line
+            # (edited at the channel, or imported partially before this guard
+            # existed). It must not stay pickable-but-incomplete.
             if has_bookings:
                 # Picking already started — hand to a human, don't auto-reconcile
                 # or drop the booked work.
@@ -211,7 +220,8 @@ def import_channel_order(
                 # product is added).
                 released_sku_ids = _release_order_reservation(db, db_order, org_id)
                 db_order.status = "pending_product"
-        # active + fully matched, or terminal states: left untouched (reserve once).
+        # active + fully matched + fulfillable, or terminal states: left untouched
+        # (reserve once).
         if order.ordered_at is not None:
             db_order.ordered_at = order.ordered_at
         # Backfill / refresh the order number on re-import (e.g. for orders
