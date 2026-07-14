@@ -366,10 +366,21 @@ def sync_shopify(db: Session, connection: ChannelConnection, client=None) -> Syn
     # reserve its stock — a read-then-write race that double-reserves. Locking the
     # connection row makes the second sync wait for the first to commit, then
     # resume from the freshly-advanced cursor so it re-processes nothing.
-    # Postgres takes a real row lock; SQLite (tests) ignores FOR UPDATE silently.
-    db.query(ChannelConnection).filter(
-        ChannelConnection.id == connection.id
-    ).with_for_update().first()
+    #
+    # Flush our own pending writes first (e.g. the go-live mode/cursor change the
+    # caller just made) so the locked re-read returns them, then populate_existing()
+    # refreshes the in-session connection from the freshly-locked row — otherwise
+    # the identity-mapped object would keep a stale cursor/mode from *before* we
+    # waited on the lock, and we'd sync from an old cursor or an old mode. Postgres
+    # takes a real row lock; SQLite (tests) ignores FOR UPDATE but still refreshes.
+    db.flush()
+    connection = (
+        db.query(ChannelConnection)
+        .filter(ChannelConnection.id == connection.id)
+        .populate_existing()
+        .with_for_update()
+        .one()
+    )
 
     # Strictly per-connection credentials: NEVER fall back to global env
     # credentials, or any org with the (default-on) channel_orders module could
