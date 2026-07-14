@@ -283,3 +283,99 @@ def test_observed_orders_excluded_from_order_list(client, db, courier_token, own
     resp = client.get("/api/orders", headers=auth_header(courier_token))
     assert resp.status_code == 200
     assert all(o["status"] != "observed" for o in resp.json())
+
+
+# --- pending_product: unknown-EAN blocking (mirror of pending_images) --------
+
+def test_live_unmatched_order_parks_pending_product(db):
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-block")
+    conn = _connection(db, org, mode="live")
+    sku = _sku(db, org, "SOK-1", "8710000000200")  # only one of two is known
+    order = _order(external_id="SHOP-BLK", lines=[
+        NormalizedLine(ean="8710000000200", quantity=1),
+        NormalizedLine(ean="8710000000201", quantity=2),  # unknown product
+    ])
+    r = import_channel_order(db, conn, order)
+    db.commit()
+
+    o = db.get(Order, r.order_id)
+    assert o.status == "pending_product"  # blocked, never active
+    assert len(o.lines) == 1              # only the matched line is built
+    assert r.unmatched_eans == ["8710000000201"]
+    # Blocked order reserves nothing (not active).
+    bal = db.query(InventoryBalance).filter_by(sku_id=sku.id).first()
+    assert bal is None or bal.quantity_reserved == 0
+
+
+def test_pending_product_self_heals_to_active_on_resync(db):
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-heal")
+    conn = _connection(db, org, mode="live")
+    _sku(db, org, "SOK-1", "8710000000210")
+    order = _order(external_id="SHOP-HEAL", lines=[
+        NormalizedLine(ean="8710000000210", quantity=1),
+        NormalizedLine(ean="8710000000211", quantity=1),
+    ])
+    r1 = import_channel_order(db, conn, order)
+    db.commit()
+    assert db.get(Order, r1.order_id).status == "pending_product"
+
+    # Add the missing product; the same order re-seen now fully matches.
+    sku2 = _sku(db, org, "SOK-2", "8710000000211")
+    r2 = import_channel_order(db, conn, order)
+    db.commit()
+
+    o = db.get(Order, r2.order_id)
+    assert r2.created is False
+    assert o.status == "active"            # promoted
+    assert len(o.lines) == 2               # both lines now built
+    bal = db.query(InventoryBalance).filter_by(sku_id=sku2.id).first()
+    assert bal is not None and bal.quantity_reserved == 1  # reserved on promote
+
+
+def test_observe_mode_unmatched_stays_observed(db):
+    org = _org(db, "socks-obs-block")
+    conn = _connection(db, org, mode="observe")
+    _sku(db, org, "SOK-1", "8710000000220")
+    order = _order(external_id="SHOP-OBS", lines=[
+        NormalizedLine(ean="8710000000220", quantity=1),
+        NormalizedLine(ean="8710000000221", quantity=1),  # unknown
+    ])
+    r = import_channel_order(db, conn, order)
+    db.commit()
+    # In observe nothing is pickable anyway → plain observed, not pending_product.
+    assert db.get(Order, r.order_id).status == "observed"
+
+
+def test_resync_hook_resets_cursor_when_blocked_order_exists(db):
+    from app.services.channel_import import resync_channel_for_new_ean
+
+    org = _org(db, "socks-hook")
+    conn = _connection(db, org, mode="live")
+    conn.cursor = "2026-06-01T00:00:00Z"
+    db.add(Order(organization_id=org.id, channel="shopify", external_id="X1",
+                 reference="R1", status="pending_product"))
+    db.commit()
+
+    changed = resync_channel_for_new_ean(db, org.id, "8710000000300")
+    db.commit()
+    assert changed is True
+    db.refresh(conn)
+    assert conn.cursor is None  # forces a full re-sync so the order re-promotes
+
+
+def test_resync_hook_noop_without_blocked_order(db):
+    from app.services.channel_import import resync_channel_for_new_ean
+
+    org = _org(db, "socks-hook-noop")
+    conn = _connection(db, org, mode="live")
+    conn.cursor = "2026-06-01T00:00:00Z"
+    db.commit()
+
+    changed = resync_channel_for_new_ean(db, org.id, "8710000000301")
+    assert changed is False
+    db.refresh(conn)
+    assert conn.cursor == "2026-06-01T00:00:00Z"  # untouched

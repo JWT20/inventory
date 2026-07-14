@@ -191,6 +191,7 @@ interface CustomerSkuLine {
 const STATUS_LABELS: Record<string, string> = {
   pending_approval: "Wacht op goedkeuring",
   pending_images: "Wacht op beelden",
+  pending_product: "Wacht op product",
   active: "Actief",
   completed: "Voltooid",
   shipped: "Verzonden",
@@ -201,6 +202,7 @@ const STATUS_LABELS: Record<string, string> = {
 const STATUS_VARIANT: Record<string, "active" | "inactive"> = {
   pending_approval: "inactive",
   pending_images: "inactive",
+  pending_product: "inactive",
   active: "active",
   completed: "active",
   shipped: "active",

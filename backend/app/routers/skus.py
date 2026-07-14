@@ -52,6 +52,7 @@ from app.services.embedding import (
 )
 from PIL import UnidentifiedImageError
 from app.services.booking import promote_pending_images_orders_for_sku
+from app.services.channel_import import resync_channel_for_new_ean
 from app.services.product_status import is_complete, recompute_active
 from app.services.storage import storage
 
@@ -516,6 +517,10 @@ def create_sku(
             raise HTTPException(400, f"EAN '{data.ean}' bestaat al bij deze handelaar")
         raise
     recompute_active(sku, db)
+    # A newly-created product may be the missing catalog entry that a channel
+    # order is parked on (pending_product) — flag a re-sync so it self-heals.
+    if sku.ean:
+        resync_channel_for_new_ean(db, sku.organization_id, sku.ean)
     db.commit()
     db.refresh(sku)
     publish_event(
@@ -637,6 +642,11 @@ def update_sku(
         recompute_active(sku, db)
     if is_complete(sku) and sku.attributes_dict.get("status") == "concept":
         sku.set_attribute("status", "done")
+
+    # A changed/added EAN may match a channel order parked in pending_product —
+    # flag a re-sync so that order self-heals to active on the next pull.
+    if ean_changed and sku.ean:
+        resync_channel_for_new_ean(db, sku.organization_id, sku.ean)
 
     attempted_ean = sku.ean  # read before commit; sku expires on rollback
     try:

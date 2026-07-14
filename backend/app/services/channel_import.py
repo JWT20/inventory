@@ -90,18 +90,40 @@ def import_channel_order(
     """
     org_id = connection.organization_id
     channel = connection.channel
-    # Live-mode only makes an order pickable when it is actually fulfillable
-    # (paid) AND not already shipped. Cancelled/refunded/unpaid orders stay inert
-    # ("observed") so we never ship a cancelled order; already-fulfilled orders
-    # (shipped from home or labelled by the courier) stay out of the pick list so
-    # we never pick something twice. Full cancellation→restock is fase 4.
     fulfillable = order.financial_status in _FULFILLABLE_FINANCIAL_STATUSES
     already_shipped = order.fulfillment_status in _SHIPPED_FULFILLMENT_STATUSES
-    target_status = (
-        "active"
-        if (connection.mode == "live" and fulfillable and not already_shipped)
-        else "observed"
-    )
+
+    # Resolve every line to a SKU (by EAN, within the org) up front — a pure read
+    # pass — so the status decision below can see whether the order is fully
+    # matched. An order with an unknown product must never silently activate with
+    # that product dropped.
+    matched_items: list[tuple[SKU, int]] = []
+    unmatched: list[str] = []
+    for nl in order.lines:
+        sku = None
+        if nl.ean:
+            sku = (
+                db.query(SKU)
+                .filter(SKU.organization_id == org_id, SKU.ean == nl.ean)
+                .first()
+            )
+        if sku is None:
+            unmatched.append(nl.ean or "(geen EAN)")
+        else:
+            matched_items.append((sku, nl.quantity))
+    matched = len(matched_items)
+    has_unmatched = bool(unmatched)
+
+    # Live-mode makes an order pickable only when it is fulfillable (paid), not
+    # already shipped, AND every line matched a product. An order with an unknown
+    # EAN parks in "pending_product" (visible as blocked, never in the pick list)
+    # instead of activating with the missing product dropped — it self-heals to
+    # active on a re-sync once the product is added. Non-live / unpaid / shipped /
+    # cancelled orders stay inert ("observed"). Full cancellation→restock is fase 4.
+    if connection.mode == "live" and fulfillable and not already_shipped:
+        target_status = "pending_product" if has_unmatched else "active"
+    else:
+        target_status = "observed"
 
     existing = (
         db.query(Order)
@@ -138,13 +160,17 @@ def import_channel_order(
         became_active = target_status == "active"
     else:
         db_order = existing
-        # Cutover: an order first imported in observe-mode must become pickable
-        # once the connection goes live and the order is re-seen. Only promote
-        # observed → active; never downgrade or touch an order that already
-        # progressed (active/completed/cancelled/closed).
-        if db_order.status == "observed" and target_status == "active":
-            db_order.status = "active"
-            became_active = True
+        # Promote a parked order now that conditions allow: an order first seen in
+        # observe-mode (pre-live) or parked in pending_product (missing catalog
+        # entry) moves to its new target once the connection is live / the product
+        # exists. Never downgrade or touch an order that already progressed
+        # (active/completed/shipped/cancelled/closed).
+        if (
+            db_order.status in ("observed", "pending_product")
+            and target_status in ("active", "pending_product")
+        ):
+            db_order.status = target_status
+            became_active = target_status == "active"
         if order.ordered_at is not None:
             db_order.ordered_at = order.ordered_at
         # Backfill / refresh the order number on re-import (e.g. for orders
@@ -156,12 +182,9 @@ def import_channel_order(
         # observe view must reflect that.
         db_order.channel_fulfillment_status = order.fulfillment_status
 
-    matched = 0
-    unmatched: list[str] = []
-
-    # Rebuild the matched lines on re-import. Safe because observe orders are
-    # inert; never touch an order that already has bookings (a live-mode concern
-    # for fase 4).
+    # Rebuild the matched lines on re-import from the up-front match pass. Safe
+    # because parked orders (observed/pending_product) are inert; never touch an
+    # order that already has bookings (a live-mode concern for fase 4).
     has_bookings = any(line.booked_count > 0 for line in db_order.lines)
     if not created and not has_bookings:
         for line in list(db_order.lines):
@@ -169,26 +192,15 @@ def import_channel_order(
         db.flush()
 
     rebuild_lines = created or not has_bookings
-    for nl in order.lines:
-        sku = None
-        if nl.ean:
-            sku = (
-                db.query(SKU)
-                .filter(SKU.organization_id == org_id, SKU.ean == nl.ean)
-                .first()
-            )
-        if sku is None:
-            unmatched.append(nl.ean or "(geen EAN)")
-            continue
-        matched += 1
-        if rebuild_lines:
+    if rebuild_lines:
+        for sku, quantity in matched_items:
             db.add(
                 OrderLine(
                     order_id=db_order.id,
                     sku_id=sku.id,
                     klant=order.customer_name or "",
                     customer_id=None,
-                    quantity=nl.quantity,
+                    quantity=quantity,
                 )
             )
 
@@ -239,3 +251,46 @@ def import_channel_order(
         unmatched_eans=unmatched,
         reserved_sku_ids=reserved_sku_ids,
     )
+
+
+def resync_channel_for_new_ean(
+    db: Session, organization_id: int, ean: str | None
+) -> bool:
+    """Self-heal hook for the ``pending_product`` block.
+
+    An order parked in ``pending_product`` waits for a missing catalog entry. When
+    a product with an EAN is created/changed, flag the org's live channel
+    connections for a full re-sync (reset the cursor) so the next sync re-sees the
+    blocked order and — now that the product exists — promotes it to ``active``.
+
+    Mirrors :func:`app.services.booking.promote_pending_images_orders_for_sku` in
+    spirit; here the unmatched line lives only at the channel, so recovery runs
+    through a re-sync rather than a local relationship recompute. No-op when the
+    org has no blocked order or no live connection. Does NOT commit.
+    """
+    if not ean:
+        return False
+    blocked = (
+        db.query(Order)
+        .filter(
+            Order.organization_id == organization_id,
+            Order.status == "pending_product",
+        )
+        .first()
+    )
+    if blocked is None:
+        return False
+    connections = (
+        db.query(ChannelConnection)
+        .filter(
+            ChannelConnection.organization_id == organization_id,
+            ChannelConnection.mode == "live",
+        )
+        .all()
+    )
+    changed = False
+    for conn in connections:
+        if conn.cursor is not None:
+            conn.cursor = None
+            changed = True
+    return changed
