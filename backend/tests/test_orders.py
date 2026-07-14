@@ -346,13 +346,41 @@ class TestWeeklyPickPhotos:
             status="active",
             delivery_week="2026-W21",
         )
-        db.add(order)
+        other_order = Order(
+            organization_id=sample_org.id,
+            created_by=owner_user.id,
+            reference="ORD-CUSTOMERS-OTHER",
+            status="active",
+            delivery_week="2026-W21",
+        )
+        db.add_all([order, other_order])
         db.commit()
+        open_line_a = OrderLine(
+            order_id=order.id,
+            sku_id=sku.id,
+            customer_id=cust_a.id,
+            quantity=3,
+            booked_count=1,
+        )
+        open_line_b = OrderLine(
+            order_id=other_order.id,
+            sku_id=sku.id,
+            customer_id=cust_b.id,
+            quantity=2,
+            booked_count=0,
+        )
+        done_line = OrderLine(
+            order_id=order.id,
+            sku_id=sku.id,
+            customer_id=cust_done.id,
+            quantity=2,
+            booked_count=2,
+        )
         db.add_all([
-            OrderLine(order_id=order.id, sku_id=sku.id, customer_id=cust_a.id, quantity=3, booked_count=1),
-            OrderLine(order_id=order.id, sku_id=sku.id, customer_id=cust_b.id, quantity=2, booked_count=0),
+            open_line_a,
+            open_line_b,
             # Fully picked for this customer — must not appear.
-            OrderLine(order_id=order.id, sku_id=sku.id, customer_id=cust_done.id, quantity=2, booked_count=2),
+            done_line,
         ])
         db.commit()
 
@@ -366,6 +394,8 @@ class TestWeeklyPickPhotos:
         assert len(data) == 1
         # Sorted case-insensitively, only customers with open boxes.
         assert data[0]["customers"] == ["Anna", "Bram"]
+        assert data[0]["order_line_ids"] == sorted([open_line_a.id, open_line_b.id])
+        assert done_line.id not in data[0]["order_line_ids"]
 
 
 class TestCustomerSkuRestrictions:
