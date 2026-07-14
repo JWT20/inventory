@@ -279,6 +279,7 @@ export function ScanStep({
   // photo so the lightbox never opens on the wrong wine.
   let carouselImages: string[];
   let carouselCaptions: string[];
+  let carouselSubcaptions: string[];
   let carouselStart: number;
   const weekStart = weekPhotos.findIndex(
     (p) => p.order_line_id === nextPick?.order_line_id,
@@ -286,14 +287,21 @@ export function ScanStep({
   if (weekStart >= 0) {
     carouselImages = weekPhotos.map((p) => p.image_url as string);
     carouselCaptions = weekPhotos.map((p) => p.wine_name);
+    carouselSubcaptions = weekPhotos.map((p) =>
+      p.customers.length > 0 ? `Voor: ${p.customers.join(", ")}` : "",
+    );
     carouselStart = weekStart;
   } else if (nextPick?.image_url) {
     carouselImages = [nextPick.image_url];
     carouselCaptions = [nextPick.sku_name];
+    carouselSubcaptions = [
+      nextPick.customer_name ? `Voor: ${nextPick.customer_name}` : "",
+    ];
     carouselStart = 0;
   } else {
     carouselImages = [];
     carouselCaptions = [];
+    carouselSubcaptions = [];
     carouselStart = 0;
   }
 
@@ -427,6 +435,7 @@ export function ScanStep({
       <ImageLightbox
         images={carouselImages}
         captions={carouselCaptions}
+        subcaptions={carouselSubcaptions}
         startIndex={carouselStart}
         open={nextPickLightbox}
         onClose={() => setNextPickLightbox(false)}
