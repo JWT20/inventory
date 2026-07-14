@@ -185,24 +185,42 @@ def test_next_pick_rejects_other_org_for_owner(client, db, owner_token, sample_o
     assert resp.status_code == 403
 
 
-def test_next_pick_prefers_earlier_week_over_context_order(
+def test_next_pick_prefers_context_order_over_earlier_week(
     client, db, courier_token, sample_org
 ):
-    """book_box books week FIFO, so an earlier week is suggested first even
-    when the context order still has open lines — the card must agree with
-    where the scan actually lands."""
+    """Opening an order should suggest that order before an older week."""
     sku = _make_sku(db)
     cust = _make_customer(db, sample_org, "Alpha")
     early = _make_order(db, sample_org, "EARLY", week="2026-W20")
-    early_line = _make_line(db, early, sku, cust, quantity=2)
+    _make_line(db, early, sku, cust, quantity=2)
     context = _make_order(db, sample_org, "CTX", week="2026-W21")
-    _make_line(db, context, sku, cust, quantity=2)
+    context_line = _make_line(db, context, sku, cust, quantity=2)
     db.commit()
 
     resp = _get(client, courier_token, context.id)
     assert resp.status_code == 200
     body = resp.json()
-    # Earlier week wins; labelled other_order, not "in deze order".
+    assert body["source"] == "this_order"
+    assert body["order_id"] == context.id
+    assert body["order_line_id"] == context_line.id
+
+
+def test_next_pick_falls_back_to_earliest_other_week_when_context_full(
+    client, db, courier_token, sample_org
+):
+    sku = _make_sku(db)
+    cust = _make_customer(db, sample_org, "Alpha")
+    context = _make_order(db, sample_org, "CTX", week="2026-W21")
+    _make_line(db, context, sku, cust, quantity=1, booked_count=1)
+    late = _make_order(db, sample_org, "LATE", week="2026-W23")
+    _make_line(db, late, sku, cust, quantity=2)
+    early = _make_order(db, sample_org, "EARLY", week="2026-W20")
+    early_line = _make_line(db, early, sku, cust, quantity=2)
+    db.commit()
+
+    resp = _get(client, courier_token, context.id)
+    assert resp.status_code == 200
+    body = resp.json()
     assert body["source"] == "other_order"
     assert body["order_id"] == early.id
     assert body["order_line_id"] == early_line.id

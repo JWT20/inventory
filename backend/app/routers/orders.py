@@ -1027,13 +1027,13 @@ def _to_next_pick(line: OrderLine, order: Order, source: str) -> NextPickRespons
 def _next_pick_sort_key(line: OrderLine, order: Order, context_order_id: int):
     """Same ordering as receiving._select_order_line_for_scope.
 
-    Week FIFO first, then the started/context order within a week, then
-    delivery day, then line id — so the suggested line is exactly the one
-    book_box would book when that SKU is scanned.
+    Prefer the started/context order, then fall back to week FIFO, delivery
+    day, and line id — so opening an order shows one of its own products first
+    while the suggested line still matches where book_box will book the scan.
     """
     return (
-        order.delivery_week or "",
         0 if order.id == context_order_id else 1,
+        order.delivery_week or "",
         _DELIVERY_DAY_SORT.get(line.delivery_day, 9),
         line.id,
     )
@@ -1049,11 +1049,9 @@ def next_pick(
     """Suggestion photo for the next SKU to scan, for the given scan mode.
 
     Selects the line book_box would actually book, using the same scope and
-    ordering as receiving (week FIFO, then the started/context order within a
-    week). So even when the selected order still has open lines, an earlier
-    week of the same org is suggested first — exactly where the scan would
-    land — and the card is labelled "other_order" so it never claims "in deze
-    order" for a box that books elsewhere.
+    ordering as receiving (the started/context order first, then week FIFO as
+    fallback). This keeps the first suggestion tied to the order the picker
+    opened without letting the card and booking destination disagree.
 
     Scope mirrors receiving._open_scope_lines_query: a scheduled context order
     sweeps every active scheduled order in the org across all weeks; an ad-hoc
