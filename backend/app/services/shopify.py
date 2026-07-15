@@ -34,7 +34,13 @@ from app.services.channel_import import (
 
 logger = logging.getLogger(__name__)
 
-OAUTH_SCOPES = "read_orders,read_all_orders,read_products"
+# write_inventory + read_locations/read_inventory power the inventory write-back
+# (resolve location, set absolute available). Existing installs must reconnect to
+# grant the new scopes.
+OAUTH_SCOPES = (
+    "read_orders,read_all_orders,read_products,"
+    "read_locations,read_inventory,write_inventory"
+)
 _SHOP_DOMAIN_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$")
 
 
@@ -180,6 +186,35 @@ def to_normalized(node: dict) -> NormalizedChannelOrder:
     )
 
 
+# Inventory write-back queries/mutation. Resolve a variant's inventory_item_id
+# by its barcode (== our EAN), the shop's primary active location, and push an
+# absolute available quantity (idempotent, self-healing — a missed event never
+# drifts because the next push overwrites with the truth).
+_LOCATION_QUERY = """
+query {
+  locations(first: 1, query: "status:active") {
+    edges { node { id } }
+  }
+}
+"""
+
+_VARIANT_BY_BARCODE_QUERY = """
+query($q: String!) {
+  productVariants(first: 1, query: $q) {
+    edges { node { inventoryItem { id } } }
+  }
+}
+"""
+
+_SET_AVAILABLE_MUTATION = """
+mutation($input: InventorySetQuantitiesInput!) {
+  inventorySetQuantities(input: $input) {
+    userErrors { field message }
+  }
+}
+"""
+
+
 class ShopifyClient:
     """Minimal Shopify GraphQL Admin API client."""
 
@@ -257,6 +292,53 @@ class ShopifyClient:
                 break
             after = mpage.get("endCursor")
         node["lineItems"]["edges"] = edges
+
+    # --- Inventory write-back -------------------------------------------------
+
+    def primary_location_id(self) -> str | None:
+        """The shop's first active location gid, or None if none is exposed."""
+        data = self._post(_LOCATION_QUERY, {})
+        edges = (data.get("locations") or {}).get("edges") or []
+        return edges[0]["node"]["id"] if edges else None
+
+    def resolve_inventory_item_id(self, ean: str) -> str | None:
+        """The inventory_item gid for the variant carrying ``ean`` as its barcode,
+        or None if no such variant exists at the shop."""
+        data = self._post(_VARIANT_BY_BARCODE_QUERY, {"q": f"barcode:{ean}"})
+        edges = (data.get("productVariants") or {}).get("edges") or []
+        if not edges:
+            return None
+        return ((edges[0]["node"] or {}).get("inventoryItem") or {}).get("id")
+
+    def set_inventory_available(
+        self, inventory_item_id: str, location_id: str, available: int
+    ) -> None:
+        """Overwrite the absolute ``available`` quantity at ``location_id``.
+
+        ``ignoreCompareQuantity`` makes this an unconditional set (last write
+        wins) — exactly what we want when our warehouse is the source of truth.
+        Raises on Shopify userErrors so the caller can log a failed push.
+        """
+        data = self._post(
+            _SET_AVAILABLE_MUTATION,
+            {
+                "input": {
+                    "name": "available",
+                    "reason": "correction",
+                    "ignoreCompareQuantity": True,
+                    "quantities": [
+                        {
+                            "inventoryItemId": inventory_item_id,
+                            "locationId": location_id,
+                            "quantity": available,
+                        }
+                    ],
+                }
+            },
+        )
+        errors = (data.get("inventorySetQuantities") or {}).get("userErrors") or []
+        if errors:
+            raise RuntimeError(f"Shopify inventory set error: {errors}")
 
 
 @dataclass

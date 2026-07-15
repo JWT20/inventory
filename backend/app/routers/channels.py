@@ -17,14 +17,16 @@ from sqlalchemy.orm import Session
 from app.auth import require_platform_admin
 from app.config import settings
 from app.database import get_db
-from app.models import ChannelConnection, Order, Organization, User
+from app.models import ChannelConnection, Order, Organization, SKU, User
 from app.schemas import (
     ChannelConnectUrl,
     ChannelOrderRow,
     ChannelReconciliation,
     ChannelStatus,
     ChannelSyncSummary,
+    InventoryPushSummary,
 )
+from app.services.inventory_sync import push_available
 from app.services.shopify import (
     ShopifyClient,
     build_authorize_url,
@@ -214,6 +216,55 @@ def trigger_shopify_sync(
         created=summary.created,
         updated=summary.updated,
         unmatched=summary.unmatched,
+    )
+
+
+@router.post("/shopify/push-inventory", response_model=InventoryPushSummary)
+def push_inventory(
+    organization_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_platform_admin),
+):
+    """One-shot bulk push of the org's local stock to Shopify (start-alignment).
+
+    The write-back is event-driven (a SKU mirrors when it is picked/adjusted), so
+    a freshly (re)connected shop only catches up SKU-by-SKU. This pushes the
+    absolute available for every EAN product at once, so Shopify matches the
+    warehouse immediately after going live. Admin-only, like the order sync.
+
+    Synchronous with a per-SKU summary: a failed push is counted and the run
+    continues — one bad SKU never aborts the alignment.
+    """
+    org_id = _require_org_id(organization_id)
+    _assert_org_has_channel(db, org_id)
+    connection = _get_or_create_connection(db, org_id, "shopify")
+    if not connection.shop_domain or not connection.access_token:
+        raise HTTPException(
+            400, "Shopify is niet verbonden — koppel eerst via de Verbind-knop"
+        )
+    if connection.mode != "live":
+        raise HTTPException(
+            400, "Verbinding staat op observe — zet live voordat je voorraad pusht"
+        )
+
+    skus = (
+        db.query(SKU)
+        .filter(SKU.organization_id == org_id, SKU.ean.isnot(None))
+        .all()
+    )
+    pushed = skipped = failed = 0
+    for sku in skus:
+        try:
+            if push_available(db, sku.id, org_id):
+                pushed += 1
+            else:
+                skipped += 1
+        except Exception:  # one bad SKU must not abort the alignment
+            failed += 1
+            logger.exception("Bulk push failed for sku %s (org %s)", sku.id, org_id)
+    db.commit()
+    return InventoryPushSummary(
+        total=len(skus), pushed=pushed, skipped_no_variant=skipped, failed=failed
     )
 
 
