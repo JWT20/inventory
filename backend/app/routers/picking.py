@@ -20,9 +20,16 @@ from sqlalchemy.orm import Session
 from app.auth import assert_order_module, require_inbound_booker
 from app.database import get_db
 from app.events import publish_event
-from app.models import Order, OrderLine, SKU, User
-from app.schemas import EanScanRequest, EanScanResponse
-from app.services.booking import apply_booking
+from app.models import Booking, Order, OrderLine, SKU, User
+from app.schemas import (
+    EanScanRequest,
+    EanScanResponse,
+    LabelScanRequest,
+    LabelScanResponse,
+    UndoScanRequest,
+    UndoScanResponse,
+)
+from app.services.booking import apply_booking, undo_booking
 
 logger = logging.getLogger(__name__)
 
@@ -135,4 +142,114 @@ def scan_ean(
         booked_quantity=result.booked_quantity,
         remaining_quantity=result.remaining,
         order_completed=result.order_completed,
+        booking_id=result.last_booking_id,
+    )
+
+
+@router.post("/undo", response_model=UndoScanResponse)
+def undo_scan(
+    body: UndoScanRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_inbound_booker),
+):
+    """Undo one previously scanned unit (wrong/damaged item) on a barcode order.
+
+    Resolves the order via the booking, applies the same access + module guard as
+    scanning, then reverses the unit through the shared booking service.
+    """
+    booking = db.get(Booking, body.booking_id)
+    if not booking:
+        raise HTTPException(404, "Boeking niet gevonden")
+    order = db.get(Order, booking.order_id)
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+    if (
+        user.role in ("owner", "member")
+        and order.organization_id != user.organization_id
+    ):
+        raise HTTPException(403, "Geen toegang tot deze organisatie")
+    assert_order_module(order, "barcode_picking", user)
+
+    result = undo_booking(db, booking_id=booking.id, performed_by=user.id)
+
+    publish_event(
+        "booking_undone",
+        details={
+            "order_reference": order.reference,
+            "sku_id": result.sku_id,
+            "order_status": result.order_status,
+            "pick_method": "barcode",
+        },
+        user=user,
+        resource_type="booking",
+        resource_id=body.booking_id,
+    )
+
+    return UndoScanResponse(
+        order_id=result.order_id,
+        order_line_id=result.order_line_id,
+        sku_id=result.sku_id,
+        remaining_quantity=result.remaining,
+        order_status=result.order_status,
+    )
+
+
+@router.post("/scan-label", response_model=LabelScanResponse)
+def scan_label(
+    body: LabelScanRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_inbound_booker),
+):
+    """Shipping-label verification gate: the final step on a barcode order.
+
+    Veloyd prints the channel order number (``channel_reference``) on the label.
+    A fully picked order (status ``completed``) is only released to ``shipped``
+    when the scanned label matches that reference — this is what stops the right
+    box leaving with the wrong customer's label.
+    """
+    order = db.get(Order, body.order_id)
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+    if (
+        user.role in ("owner", "member")
+        and order.organization_id != user.organization_id
+    ):
+        raise HTTPException(403, "Geen toegang tot deze organisatie")
+    assert_order_module(order, "barcode_picking", user)
+
+    if order.status == "shipped":
+        raise HTTPException(409, "Order is al verzonden")
+    if order.status != "completed":
+        raise HTTPException(400, "Order is nog niet volledig gepickt")
+    if not order.channel_reference:
+        # Should not happen — channel orders always carry a reference. Fail loud
+        # rather than silently shipping an unverifiable order.
+        raise HTTPException(409, "Order mist een kanaalreferentie voor labelmatch")
+
+    # The label may carry a leading '#'; channel_reference is stored normalized
+    # without it (see Order.channel_reference).
+    label = body.label_reference.strip().lstrip("#")
+    if label != order.channel_reference:
+        raise HTTPException(409, "Label hoort bij een andere order")
+
+    order.status = "shipped"
+    order.mark_finalized()  # idempotent: already stamped at completion
+    db.commit()
+
+    publish_event(
+        "order_shipped",
+        details={
+            "order_reference": order.reference,
+            "channel_reference": order.channel_reference,
+            "pick_method": "barcode",
+        },
+        user=user,
+        resource_type="order",
+        resource_id=order.id,
+    )
+
+    return LabelScanResponse(
+        order_id=order.id,
+        status=order.status,
+        reference=order.channel_reference,
     )

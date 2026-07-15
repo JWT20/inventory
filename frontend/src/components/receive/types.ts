@@ -1,7 +1,13 @@
 export interface OrderLine {
+  id: number;
+  sku_id: number;
+  sku_code: string;
+  sku_name: string;
   delivery_day: string;
   customer_name: string;
   quantity: number;
+  booked_count: number;
+  is_bottle: boolean;
 }
 
 export interface Order {
@@ -32,6 +38,21 @@ export interface EanBookingResult {
   booked_quantity: number;
   remaining_quantity: number;
   order_completed: boolean;
+  booking_id: number;
+}
+
+export interface UndoScanResult {
+  order_id: number;
+  order_line_id: number;
+  sku_id: number;
+  remaining_quantity: number;
+  order_status: string;
+}
+
+export interface LabelScanResult {
+  order_id: number;
+  status: string;
+  reference: string;
 }
 
 export type ScanMode = "box" | "bottle";

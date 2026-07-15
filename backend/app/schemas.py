@@ -599,6 +599,34 @@ class EanScanResponse(BaseModel):
     booked_quantity: int
     remaining_quantity: int
     order_completed: bool
+    # Id of the booking this scan created, so the courier can undo exactly this
+    # unit if they grabbed the wrong/damaged item.
+    booking_id: int
+
+
+class UndoScanRequest(BaseModel):
+    booking_id: int = Field(..., gt=0)
+
+
+class UndoScanResponse(BaseModel):
+    """Result of undoing one previously scanned unit on a barcode order."""
+    order_id: int
+    order_line_id: int
+    sku_id: int
+    remaining_quantity: int
+    order_status: str
+
+
+class LabelScanRequest(BaseModel):
+    order_id: int = Field(..., gt=0)
+    label_reference: str = Field(..., min_length=1)
+
+
+class LabelScanResponse(BaseModel):
+    """Result of the shipping-label verification gate on a barcode order."""
+    order_id: int
+    status: str
+    reference: str
 
 
 class ManualOrderLineCreate(BaseModel):
