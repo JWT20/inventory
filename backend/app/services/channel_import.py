@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime
 import json
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
@@ -78,24 +79,65 @@ _FULFILLABLE_FINANCIAL_STATUSES = {"paid"}
 # Shopify fulfillment statuses that mean "already shipped" — such orders must
 # never become born-active/pickable, even in live mode, or the warehouse would
 # pick something that already left (shipped from home, or labelled by the
-# courier). Mirrors the observe UI's "verzonden" badge. Restock/cancellation is
-# a separate concern (fase 4).
+# courier). Mirrors the observe UI's "verzonden" badge. Because the importer
+# cannot infer which stock pool shipped it, this still requires review.
 _SHIPPED_FULFILLMENT_STATUSES = {"fulfilled"}
 
+# A partially fulfilled Shopify order is unsafe until line-level remaining
+# quantities are imported. Park it instead of assuming the original quantities
+# are still outstanding (which could ship the same unit twice).
+_PARTIALLY_SHIPPED_FULFILLMENT_STATUSES = {"partially_fulfilled"}
 
-def _release_order_reservation(db: Session, order, org_id: int) -> list[int]:
+REVIEW_UNKNOWN_EAN = "unknown_ean"
+REVIEW_CANCELLED_AFTER_PICK = "cancelled_after_pick"
+REVIEW_NON_FULFILLABLE_AFTER_PICK = "non_fulfillable_after_pick"
+REVIEW_FULFILLED_ELSEWHERE = "fulfilled_elsewhere"
+REVIEW_PARTIALLY_FULFILLED = "partially_fulfilled"
+REVIEW_ORDER_CHANGED_AFTER_PICK = "order_changed_after_pick"
+
+# Only these review causes may use the explicit cancel/restock decision. Other
+# causes need a different workflow and must remain safely parked.
+CANCELLATION_REVIEW_REASONS = frozenset(
+    {REVIEW_CANCELLED_AFTER_PICK, REVIEW_NON_FULFILLABLE_AFTER_PICK}
+)
+
+
+def _quantities_by_sku(
+    items: list[tuple[int, int]],
+) -> dict[int, int]:
+    quantities: dict[int, int] = defaultdict(int)
+    for sku_id, quantity in items:
+        quantities[sku_id] += max(0, quantity)
+    return dict(quantities)
+
+
+def _open_quantities_by_sku(lines: list[OrderLine]) -> dict[int, int]:
+    return _quantities_by_sku(
+        [(line.sku_id, line.quantity - line.booked_count) for line in lines]
+    )
+
+
+def _total_quantities_by_sku(lines: list[OrderLine]) -> dict[int, int]:
+    return _quantities_by_sku([(line.sku_id, line.quantity) for line in lines])
+
+
+def _release_order_reservation(
+    db: Session, lines: list[OrderLine], org_id: int
+) -> list[int]:
     """Release the reservation an active order was holding — its open (unbooked)
     quantity per SKU. Used when an active order is parked back to a blocked state.
     Returns the affected SKU ids so the caller can push the freshened available.
     """
     released: list[int] = []
-    for line in order.lines:
-        open_qty = line.quantity - line.booked_count
-        if open_qty > 0:
+    # Aggregate duplicate SKU lines and lock balances in a deterministic order.
+    # That makes concurrent imports for the same products serialize cleanly and
+    # avoids deadlocks caused by opposite line order.
+    for sku_id, open_qty in sorted(_open_quantities_by_sku(lines).items()):
+        if open_qty:
             adjust_reservation(
-                db, sku_id=line.sku_id, organization_id=org_id, delta=-open_qty
+                db, sku_id=sku_id, organization_id=org_id, delta=-open_qty
             )
-            released.append(line.sku_id)
+            released.append(sku_id)
     return released
 
 
@@ -112,6 +154,9 @@ def import_channel_order(
     channel = connection.channel
     fulfillable = order.financial_status in _FULFILLABLE_FINANCIAL_STATUSES
     already_shipped = order.fulfillment_status in _SHIPPED_FULFILLMENT_STATUSES
+    partially_shipped = (
+        order.fulfillment_status in _PARTIALLY_SHIPPED_FULFILLMENT_STATUSES
+    )
     # Shopify's authoritative cancellation signal — an order can be cancelled
     # without a refund (financial_status stays "paid"), so we must not rely on the
     # financial status alone to keep a cancelled order out of the pick list.
@@ -142,9 +187,17 @@ def import_channel_order(
     # already shipped, AND every line matched a product. An order with an unknown
     # EAN parks in "pending_product" (visible as blocked, never in the pick list)
     # instead of activating with the missing product dropped — it self-heals to
-    # active on a re-sync once the product is added. Non-live / unpaid / shipped /
-    # cancelled orders stay inert ("observed"). Full cancellation→restock is fase 4.
+    # active on a re-sync once the product is added. Partial fulfilments park for
+    # review until line-level remaining quantities are imported. Non-live /
+    # unpaid / shipped / cancelled orders stay inert ("observed").
     if (
+        connection.mode == "live"
+        and fulfillable
+        and partially_shipped
+        and not is_cancelled
+    ):
+        target_status = "needs_review"
+    elif (
         connection.mode == "live"
         and fulfillable
         and not already_shipped
@@ -165,6 +218,20 @@ def import_channel_order(
     )
     created = existing is None
 
+    # Use the same lock order as the picker: lines first, then the order. Status,
+    # booked counts, line replacement and reservation deltas are consequently one
+    # transaction instead of racing a scan in another request.
+    existing_lines: list[OrderLine] = []
+    if existing is not None:
+        existing_lines = (
+            db.query(OrderLine)
+            .filter(OrderLine.order_id == existing.id)
+            .with_for_update()
+            .populate_existing()
+            .all()
+        )
+        db.refresh(existing, with_for_update=True)
+
     # An order that crosses into "active" this import reserves its stock, so the
     # channel-visible available already excludes it (no oversell). Tracked here so
     # we reserve exactly once — never on a plain re-sync of an already-active order.
@@ -172,10 +239,14 @@ def import_channel_order(
 
     # Bookings mean the courier already started picking — never silently rebuild
     # or reconcile such an order.
-    has_bookings = (not created) and any(
-        line.booked_count > 0 for line in existing.lines
+    has_bookings = any(line.booked_count > 0 for line in existing_lines)
+    affected_sku_ids: list[int] = []
+    incoming_quantities = _quantities_by_sku(
+        [(sku.id, quantity) for sku, quantity in matched_items]
     )
-    released_sku_ids: list[int] = []
+    line_changed = (not created) and (
+        _total_quantities_by_sku(existing_lines) != incoming_quantities
+    )
 
     if created:
         db_order = Order(
@@ -188,6 +259,11 @@ def import_channel_order(
             channel_reference=order.reference,
             channel_fulfillment_status=order.fulfillment_status,
             status=target_status,
+            review_reason=(
+                REVIEW_PARTIALLY_FULFILLED
+                if target_status == "needs_review"
+                else None
+            ),
             ordered_at=order.ordered_at,
             created_by=None,
         )
@@ -200,16 +276,29 @@ def import_channel_order(
         if status in ("observed", "pending_product") and target_status in (
             "active",
             "pending_product",
+            "needs_review",
         ):
             # Cutover (observed→active), product added (pending_product→active), or
             # still waiting (→pending_product). Reserves on reaching active.
             db_order.status = target_status
             became_active = target_status == "active"
+            db_order.review_reason = (
+                REVIEW_PARTIALLY_FULFILLED
+                if target_status == "needs_review"
+                else None
+            )
         elif status == "pending_product" and target_status == "observed":
             # The blocked order later became non-fulfillable/fulfilled at the
             # channel → drop the block so it stops showing "Wacht op product" (and
             # stops triggering self-heal re-syncs).
             db_order.status = "observed"
+            db_order.review_reason = None
+        elif status == "active" and target_status == "needs_review":
+            # Until the importer knows Shopify's remaining quantity per line, a
+            # partial fulfilment is unsafe to pick. Keep the held reservation and
+            # original lines intact for later line-level reconciliation.
+            db_order.status = "needs_review"
+            db_order.review_reason = REVIEW_PARTIALLY_FULFILLED
         elif status == "active" and target_status == "observed":
             # The order should leave the pick list. WHY decides how:
             if already_shipped and not is_cancelled:
@@ -218,14 +307,25 @@ def import_channel_order(
                 # reservation would raise `available` and risk oversell — hand it
                 # to a human rather than guess a stock movement.
                 db_order.status = "needs_review"
+                db_order.review_reason = REVIEW_FULFILLED_ELSEWHERE
             elif has_bookings:
                 # Cancelled/refunded but picking already started — a human decides.
                 db_order.status = "needs_review"
+                db_order.review_reason = (
+                    REVIEW_CANCELLED_AFTER_PICK
+                    if is_cancelled
+                    else REVIEW_NON_FULFILLABLE_AFTER_PICK
+                    if not fulfillable
+                    else REVIEW_ORDER_CHANGED_AFTER_PICK
+                )
             else:
                 # Genuinely cancelled/refunded and nothing picked: release the
                 # reservation and cancel it.
-                released_sku_ids = _release_order_reservation(db, db_order, org_id)
+                affected_sku_ids.extend(
+                    _release_order_reservation(db, existing_lines, org_id)
+                )
                 db_order.status = "cancelled"
+                db_order.review_reason = None
         elif status == "active" and has_unmatched:
             # An already-active (still fulfillable) order gained an unknown line
             # (edited at the channel, or imported partially before this guard
@@ -234,12 +334,52 @@ def import_channel_order(
                 # Picking already started — hand to a human, don't auto-reconcile
                 # or drop the booked work.
                 db_order.status = "needs_review"
+                db_order.review_reason = REVIEW_UNKNOWN_EAN
             else:
                 # Nothing picked yet: park as blocked and release its reservation
                 # (it re-reserves if it self-heals back to active once the missing
                 # product is added).
-                released_sku_ids = _release_order_reservation(db, db_order, org_id)
+                affected_sku_ids.extend(
+                    _release_order_reservation(db, existing_lines, org_id)
+                )
                 db_order.status = "pending_product"
+                db_order.review_reason = None
+        elif status == "active" and target_status == "active" and line_changed:
+            if has_bookings:
+                # We cannot safely redistribute work after a physical pick.
+                db_order.status = "needs_review"
+                db_order.review_reason = REVIEW_ORDER_CHANGED_AFTER_PICK
+            else:
+                # Exact reservation delta for every product, applied in stable
+                # SKU order in the same transaction as replacing the lines.
+                old_open = _open_quantities_by_sku(existing_lines)
+                for sku_id in sorted(set(old_open) | set(incoming_quantities)):
+                    delta = (
+                        incoming_quantities.get(sku_id, 0)
+                        - old_open.get(sku_id, 0)
+                    )
+                    if delta:
+                        adjust_reservation(
+                            db,
+                            sku_id=sku_id,
+                            organization_id=org_id,
+                            delta=delta,
+                        )
+                        affected_sku_ids.append(sku_id)
+                db_order.review_reason = None
+        elif status == "needs_review":
+            # Never auto-resume a parked order. Refresh only causes that are
+            # authoritative in the latest channel snapshot.
+            if is_cancelled:
+                db_order.review_reason = REVIEW_CANCELLED_AFTER_PICK
+            elif not fulfillable:
+                db_order.review_reason = REVIEW_NON_FULFILLABLE_AFTER_PICK
+            elif already_shipped:
+                db_order.review_reason = REVIEW_FULFILLED_ELSEWHERE
+            elif partially_shipped:
+                db_order.review_reason = REVIEW_PARTIALLY_FULFILLED
+            elif has_unmatched:
+                db_order.review_reason = REVIEW_UNKNOWN_EAN
         # active + fully matched + fulfillable, or terminal states: left untouched
         # (reserve once).
         if order.ordered_at is not None:
@@ -256,12 +396,14 @@ def import_channel_order(
     # Rebuild the matched lines on re-import from the up-front match pass. Safe
     # because parked orders (observed/pending_product) are inert; never touch an
     # order that already has bookings (needs_review / mid-pick).
-    if not created and not has_bookings:
-        for line in list(db_order.lines):
+    rebuild_lines = created or (
+        not has_bookings and db_order.status != "needs_review"
+    )
+    if not created and rebuild_lines:
+        for line in existing_lines:
             db.delete(line)
         db.flush()
 
-    rebuild_lines = created or not has_bookings
     if rebuild_lines:
         for sku, quantity in matched_items:
             db.add(
@@ -304,24 +446,24 @@ def import_channel_order(
     # promote path db_order.lines is stale — expire it to reload the fresh rows,
     # otherwise a cutover would activate the order without reserving any stock.
     db.expire(db_order, ["lines"])
-    # Released reservations (an active order parked back to blocked) also changed
-    # the channel-visible available, so push them alongside any freshly reserved.
-    reserved_sku_ids: list[int] = list(released_sku_ids)
+    # Released/reconciled reservations also changed channel-visible available, so
+    # push them alongside any freshly reserved products.
+    reserved_sku_ids: list[int] = list(affected_sku_ids)
     if became_active:
-        for line in db_order.lines:
-            open_qty = line.quantity - line.booked_count
-            if open_qty > 0:
+        active_open = _open_quantities_by_sku(list(db_order.lines))
+        for sku_id, open_qty in sorted(active_open.items()):
+            if open_qty:
                 adjust_reservation(
-                    db, sku_id=line.sku_id, organization_id=org_id, delta=open_qty
+                    db, sku_id=sku_id, organization_id=org_id, delta=open_qty
                 )
-                reserved_sku_ids.append(line.sku_id)
+                reserved_sku_ids.append(sku_id)
 
     return ImportResult(
         order_id=db_order.id,
         created=created,
         matched_lines=matched,
         unmatched_eans=unmatched,
-        reserved_sku_ids=reserved_sku_ids,
+        reserved_sku_ids=sorted(set(reserved_sku_ids)),
     )
 
 

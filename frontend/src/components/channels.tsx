@@ -26,10 +26,12 @@ interface ChannelStatus {
 }
 
 interface ReconRow {
+  order_id: number | null;
   external_id: string;
   reference: string | null;
   channel_reference: string | null;
   channel_fulfillment_status: string | null;
+  review_reason: string | null;
   ordered_at: string | null;
   status: string | null;
   matched_lines: number;
@@ -54,6 +56,25 @@ const ORDER_STATUS_LABELS: Record<string, string> = {
   closed: "Gesloten",
 };
 
+function reviewReason(o: ReconRow): string {
+  const labels: Record<string, string> = {
+    cancelled_after_pick: "Geannuleerd in Shopify nadat het picken begon",
+    non_fulfillable_after_pick: "Niet meer te verzenden in Shopify nadat het picken begon",
+    fulfilled_elsewhere: "Elders verzonden",
+    partially_fulfilled: "Gedeeltelijk elders verzonden; resterende regels zijn nog onbekend",
+    unknown_ean: "Onbekend product tijdens picken",
+    order_changed_after_pick: "Product of aantal gewijzigd nadat het picken begon",
+  };
+  return o.review_reason ? (labels[o.review_reason] ?? o.review_reason) : "Reden onbekend";
+}
+
+function canResolveCancellation(o: ReconRow): boolean {
+  return (
+    o.review_reason === "cancelled_after_pick" ||
+    o.review_reason === "non_fulfillable_after_pick"
+  );
+}
+
 interface Reconciliation {
   status: ChannelStatus;
   orders: ReconRow[];
@@ -73,6 +94,7 @@ export function ChannelsPage() {
   const [syncing, setSyncing] = useState(false);
   const [changingMode, setChangingMode] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const [resolving, setResolving] = useState(false);
 
   // Only orgs that actually run channel orders can be connected.
   useEffect(() => {
@@ -172,6 +194,34 @@ export function ChannelsPage() {
       toast.error(err instanceof Error ? err.message : "Push mislukt");
     } finally {
       setPushing(false);
+    }
+  }
+
+  async function resolveOrder(
+    orderId: number,
+    action: "cancel_restock" | "cancel_without_restock",
+  ) {
+    const restock = action === "cancel_restock";
+    if (
+      !window.confirm(
+        restock
+          ? "Order annuleren en alle al gepickte producten terugboeken in de voorraad?"
+          : "Order annuleren zonder de al gepickte producten terug te boeken? Kies dit alleen als die producten niet terug in de voorraad liggen.",
+      )
+    ) {
+      return;
+    }
+    setResolving(true);
+    try {
+      await api.channelResolveOrder(orderId, action);
+      toast.success(
+        restock ? "Order geannuleerd en producten teruggeboekt" : "Order geannuleerd",
+      );
+      await load();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Actie mislukt");
+    } finally {
+      setResolving(false);
     }
   }
 
@@ -305,6 +355,7 @@ export function ChannelsPage() {
                 {recon.orders.map((o) => {
                   const blocked =
                     o.status === "pending_product" || o.status === "needs_review";
+                  const needsReview = o.status === "needs_review";
                   return (
                   <div key={o.external_id} className="px-4 py-3 flex justify-between items-start gap-3">
                     <div className="min-w-0">
@@ -338,6 +389,39 @@ export function ChannelsPage() {
                             {o.unmatched_eans.join(", ")}
                           </span>
                         </p>
+                      )}
+                      {needsReview && (
+                        <div className="mt-1">
+                          <p className="text-xs text-red-600">
+                            Reden: {reviewReason(o)}
+                          </p>
+                          {o.order_id != null && canResolveCancellation(o) ? (
+                            <div className="flex gap-2 mt-1">
+                              <Button
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                disabled={resolving}
+                                onClick={() => resolveOrder(o.order_id!, "cancel_restock")}
+                              >
+                                Annuleren + terugboeken
+                              </Button>
+                              <Button
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                disabled={resolving}
+                                onClick={() =>
+                                  resolveOrder(o.order_id!, "cancel_without_restock")
+                                }
+                              >
+                                Annuleren zonder terugboeken
+                              </Button>
+                            </div>
+                          ) : (
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Veilig geblokkeerd; deze situatie kan hier niet worden hervat.
+                            </p>
+                          )}
+                        </div>
                       )}
                     </div>
                     <div className="text-right text-xs shrink-0">

@@ -569,7 +569,18 @@ class ChannelStatus(BaseModel):
     last_synced_at: datetime | None = None
 
 
+class ChannelReviewResolveRequest(BaseModel):
+    """Resolve a cancelled channel order after picking already started."""
+    action: Literal["cancel_restock", "cancel_without_restock"]
+
+
+class ChannelReviewResolveResponse(BaseModel):
+    status: str
+
+
 class ChannelOrderRow(BaseModel):
+    # Internal order id — lets the reconciliation UI resolve a needs_review order.
+    order_id: int | None = None
     external_id: str
     reference: str | None = None
     # The channel's human order number (Shopify order name, e.g. "1262"); this is
@@ -578,6 +589,7 @@ class ChannelOrderRow(BaseModel):
     # The fulfillment state at the source channel ("fulfilled"/"unfulfilled"/…);
     # fulfilled orders will be kept out of the pick list at cutover.
     channel_fulfillment_status: str | None = None
+    review_reason: str | None = None
     ordered_at: datetime | None = None
     status: str | None = None
     matched_lines: int

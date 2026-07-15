@@ -197,6 +197,11 @@ export const api = {
     }),
   channelReconciliation: (orgId: number) =>
     request(`/channels/shopify/reconciliation?organization_id=${orgId}`),
+  channelResolveOrder: (
+    orderId: number,
+    action: "cancel_restock" | "cancel_without_restock",
+  ) =>
+    json(`/channels/shopify/orders/${orderId}/resolve`, "POST", { action }),
 
   // Suppliers
   listSuppliers: () => request("/suppliers"),

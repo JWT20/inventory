@@ -406,6 +406,10 @@ class Order(Base):
     # observe so already-shipped orders are visible; the cutover keeps fulfilled
     # orders out of the pick list. NULL for manual orders.
     channel_fulfillment_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # Why a channel order is parked in needs_review. Persisted so resolve actions
+    # can be gated on the actual operational cause instead of guessing from the
+    # latest reconciliation snapshot.
+    review_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
     # The order's timestamp at the source channel (e.g. Shopify createdAt). NULL
     # for manual orders. Distinct from created_at, which is the row insert time —
     # the reconciliation view sorts/shows by this, not the import moment.
