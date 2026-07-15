@@ -349,7 +349,7 @@ class CustomerSKU(Base):
     sku: Mapped["SKU"] = relationship()
 
 
-VALID_ORDER_STATUSES = ("pending_approval", "pending_images", "active", "completed", "cancelled", "closed", "observed")
+VALID_ORDER_STATUSES = ("pending_approval", "pending_images", "pending_product", "needs_review", "active", "completed", "cancelled", "closed", "observed")
 # "observed": a channel order imported in observe-mode — visible for
 # reconciliation but inert (not pickable, no stock movement). Promoted to
 # "active" at cutover (live mode).

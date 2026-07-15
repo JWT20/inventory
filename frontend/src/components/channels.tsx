@@ -42,6 +42,18 @@ function isFulfilled(s: string | null): boolean {
   return s === "fulfilled";
 }
 
+// Friendly labels for the imported-order status (mirrors the order overview).
+const ORDER_STATUS_LABELS: Record<string, string> = {
+  observed: "Observe",
+  pending_product: "Wacht op product",
+  needs_review: "Handmatige controle",
+  active: "Actief",
+  completed: "Voltooid",
+  shipped: "Verzonden",
+  cancelled: "Geannuleerd",
+  closed: "Gesloten",
+};
+
 interface Reconciliation {
   status: ChannelStatus;
   orders: ReconRow[];
@@ -165,6 +177,10 @@ export function ChannelsPage() {
 
   const status = recon?.status;
   const isLive = status?.mode === "live";
+  const blockedCount =
+    recon?.orders.filter(
+      (o) => o.status === "pending_product" || o.status === "needs_review",
+    ).length ?? 0;
 
   return (
     <div className="space-y-4">
@@ -270,8 +286,13 @@ export function ChannelsPage() {
 
           <Card className="p-0 overflow-hidden">
             <div className="px-4 py-3 border-b border-border">
-              <p className="text-sm font-semibold">
-                Binnengehaalde orders (observe){loading ? " — laden…" : ""}
+              <p className="text-sm font-semibold flex items-center gap-2">
+                Binnengehaalde orders{loading ? " — laden…" : ""}
+                {blockedCount > 0 && (
+                  <Badge variant="outline" className="text-xs border-red-300 bg-red-50 text-red-700">
+                    {blockedCount} geblokkeerd
+                  </Badge>
+                )}
               </p>
               <p className="text-xs text-muted-foreground mt-1">
                 Het ordernummer is wat Veloyd als referentie op het verzendlabel zet.
@@ -281,13 +302,25 @@ export function ChannelsPage() {
             </div>
             {recon && recon.orders.length > 0 ? (
               <div className="divide-y divide-border">
-                {recon.orders.map((o) => (
-                  <div key={o.external_id} className="px-4 py-3 flex justify-between items-center gap-3">
+                {recon.orders.map((o) => {
+                  const blocked =
+                    o.status === "pending_product" || o.status === "needs_review";
+                  return (
+                  <div key={o.external_id} className="px-4 py-3 flex justify-between items-start gap-3">
                     <div className="min-w-0">
                       <p className="text-sm font-medium">
                         Order {o.channel_reference ?? "—"}
                         {o.status && (
-                          <Badge variant="secondary" className="ml-2 text-xs">{o.status}</Badge>
+                          <Badge
+                            variant="outline"
+                            className={
+                              blocked
+                                ? "ml-2 text-xs border-red-300 bg-red-50 text-red-700"
+                                : "ml-2 text-xs"
+                            }
+                          >
+                            {ORDER_STATUS_LABELS[o.status] ?? o.status}
+                          </Badge>
                         )}
                         {isFulfilled(o.channel_fulfillment_status) ? (
                           <Badge variant="outline" className="ml-2 text-xs">verzonden</Badge>
@@ -298,15 +331,26 @@ export function ChannelsPage() {
                       <p className="text-xs text-muted-foreground">
                         Shopify-id {o.external_id} · {fmtDate(o.ordered_at)}
                       </p>
+                      {blocked && o.unmatched_eans.length > 0 && (
+                        <p className="text-xs text-red-600 mt-1">
+                          Onbekend product — voeg toe om te deblokkeren:{" "}
+                          <span className="font-mono break-all">
+                            {o.unmatched_eans.join(", ")}
+                          </span>
+                        </p>
+                      )}
                     </div>
                     <div className="text-right text-xs shrink-0">
                       <p className="text-emerald-700">{o.matched_lines} gematcht</p>
                       {o.unmatched_eans.length > 0 && (
-                        <p className="text-amber-600">{o.unmatched_eans.length} ontbreken</p>
+                        <p className={blocked ? "text-red-600" : "text-amber-600"}>
+                          {o.unmatched_eans.length} ontbreken
+                        </p>
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <p className="px-4 py-8 text-center text-sm text-muted-foreground">
