@@ -18,10 +18,12 @@ from app.models import (
     Customer,
     CustomerSKU,
     InventoryBalance,
+    Location,
     Order,
     OrderLine,
     Organization,
     SKU,
+    SKULocation,
     User,
 )
 
@@ -214,6 +216,37 @@ def seed_barcode(db) -> None:
     for code, name, ean in BARCODE_SKUS:
         print(f"  {ean}  ({name})")
     print(f"Labelstap: typ '{BARCODE_CHANNEL_REF}' (klopt) — iets anders = blokkade.")
+
+    seed_locations(db)
+
+
+# (code, rij, kast, plank, [sku_codes]) — pick locations for the barcode demo.
+BARCODE_LOCATIONS = [
+    ("AB123", "A", "B", "1", ["SOK-ROOD", "SOK-BLAU"]),
+    ("CD201", "C", "D", "2", ["SOK-GROEN"]),
+]
+
+
+def seed_locations(db) -> None:
+    """Pick locations + links for the barcode demo, so the Locaties-beheer
+    (koerier) has data and the follow-up pick flow can be tested."""
+    for code, rij, kast, plank, sku_codes in BARCODE_LOCATIONS:
+        loc = db.query(Location).filter_by(code=code).first()
+        if loc is None:
+            loc = Location(code=code, rij=rij, kast=kast, plank=plank)
+            db.add(loc)
+            db.flush()
+        for sku_code in sku_codes:
+            sku = db.query(SKU).filter_by(sku_code=sku_code).first()
+            if sku is None:
+                continue
+            exists = db.query(SKULocation).filter_by(
+                location_id=loc.id, sku_id=sku.id
+            ).first()
+            if exists is None:
+                db.add(SKULocation(location_id=loc.id, sku_id=sku.id))
+    db.commit()
+    print("Piklocaties: AB123 (Sokken Rood + Blauw), CD201 (Sokken Groen).")
 
 
 if __name__ == "__main__":

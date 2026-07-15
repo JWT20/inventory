@@ -198,6 +198,22 @@ export const api = {
   updateSupplier: (id: number, data: { name: string }) => json(`/suppliers/${id}`, "PATCH", data),
   deleteSupplier: (id: number) => request(`/suppliers/${id}`, { method: "DELETE" }),
 
+  // Pick locations (courier-only, barcode products)
+  listLocations: () => request("/locations"),
+  createLocation: (data: { code: string; rij?: string; kast?: string; plank?: string }) =>
+    json("/locations", "POST", data),
+  updateLocation: (
+    id: number,
+    data: { code?: string; rij?: string; kast?: string; plank?: string; active?: boolean },
+  ) => json(`/locations/${id}`, "PATCH", data),
+  deleteLocation: (id: number) => request(`/locations/${id}`, { method: "DELETE" }),
+  linkLocationSku: (locationId: number, skuId: number) =>
+    json(`/locations/${locationId}/skus`, "POST", { sku_id: skuId }),
+  unlinkLocationSku: (locationId: number, skuId: number) =>
+    request(`/locations/${locationId}/skus/${skuId}`, { method: "DELETE" }),
+  availableLocationSkus: (q: string) =>
+    request(`/locations/available-skus?q=${encodeURIComponent(q)}`),
+
   // SKUs
   listSKUs: (
     activeOnly = false,

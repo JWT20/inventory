@@ -10,6 +10,7 @@ import { SuppliersPage } from "@/components/suppliers";
 import { CustomersPage } from "@/components/customers";
 import { InventoryPage } from "@/components/inventory";
 import { InboundPage } from "@/components/inbound";
+import { LocationsPage } from "@/components/locations";
 import { WeeklySummaryPage } from "@/components/weekly-summary";
 import { MonthlyBoxesPage } from "@/components/monthly-boxes";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -17,7 +18,7 @@ import { LogOut } from "lucide-react";
 
 export { toast };
 
-type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "customers" | "suppliers" | "accounts" | "channels" | "weekly" | "monthly-boxes";
+type Page = "orders" | "receive" | "inbound" | "skus" | "inventory" | "customers" | "suppliers" | "accounts" | "channels" | "weekly" | "monthly-boxes" | "locations";
 
 const JURJEN_ORG_SLUG = "jurjen";
 
@@ -95,6 +96,11 @@ function Main() {
       show: isAdmin || (!isAdmin && user.role === "courier"),
     },
     {
+      id: "locations",
+      label: "Locaties",
+      show: !isAdmin && user.role === "courier",
+    },
+    {
       id: "channels",
       label: "Kanalen",
       show: isAdmin,
@@ -144,6 +150,7 @@ function Main() {
             {t.id === "inventory" && <InventoryPage />}
             {t.id === "weekly" && <WeeklySummaryPage />}
             {t.id === "monthly-boxes" && <MonthlyBoxesPage />}
+            {t.id === "locations" && <LocationsPage />}
             {t.id === "customers" && <CustomersPage />}
             {t.id === "suppliers" && <SuppliersPage />}
             {t.id === "channels" && <ChannelsPage />}
