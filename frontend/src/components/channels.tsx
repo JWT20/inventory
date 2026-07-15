@@ -59,6 +59,8 @@ export function ChannelsPage() {
   const [recon, setRecon] = useState<Reconciliation | null>(null);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [changingMode, setChangingMode] = useState(false);
+  const [pushing, setPushing] = useState(false);
 
   // Only orgs that actually run channel orders can be connected.
   useEffect(() => {
@@ -122,7 +124,47 @@ export function ChannelsPage() {
     }
   }
 
+  async function setMode(mode: "observe" | "live") {
+    if (!orgId) return;
+    if (
+      mode === "live" &&
+      !window.confirm(
+        "Shopify live zetten? Vanaf nu worden betaalde orders pickbaar en wordt " +
+          "voorraad naar Shopify teruggeschreven. Bestaande observe-orders worden " +
+          "opnieuw ingelezen en waar mogelijk geactiveerd.",
+      )
+    ) {
+      return;
+    }
+    setChangingMode(true);
+    try {
+      await api.channelSetMode(orgId, mode);
+      toast.success(mode === "live" ? "Shopify staat nu live" : "Terug naar observe");
+      await load();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Kan modus niet wijzigen");
+    } finally {
+      setChangingMode(false);
+    }
+  }
+
+  async function pushInventory() {
+    if (!orgId) return;
+    setPushing(true);
+    try {
+      const r = await api.channelPushInventory(orgId);
+      toast.success(
+        `Voorraad gepusht: ${r.pushed} bijgewerkt · ${r.skipped_no_variant} overgeslagen · ${r.failed} mislukt`,
+      );
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Push mislukt");
+    } finally {
+      setPushing(false);
+    }
+  }
+
   const status = recon?.status;
+  const isLive = status?.mode === "live";
 
   return (
     <div className="space-y-4">
@@ -157,6 +199,9 @@ export function ChannelsPage() {
                     <>
                       <Badge variant="default">Verbonden</Badge>
                       {status.shop_domain}
+                      <Badge variant={isLive ? "default" : "outline"}>
+                        {isLive ? "Live" : "Observe"}
+                      </Badge>
                     </>
                   ) : (
                     <Badge variant="outline">Niet verbonden</Badge>
@@ -164,11 +209,13 @@ export function ChannelsPage() {
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {status?.connected
-                    ? `Modus: ${status.mode ?? "observe"} · laatst gesynct: ${fmtDate(status.last_synced_at)}`
+                    ? isLive
+                      ? `Live — orders worden pickbaar en voorraad wordt teruggeschreven · laatst gesynct: ${fmtDate(status.last_synced_at)}`
+                      : `Observe — orders worden alleen ingelezen, niets gewijzigd · laatst gesynct: ${fmtDate(status.last_synced_at)}`
                     : "Koppel de Shopify-winkel om orders op te halen."}
                 </p>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <Button variant="outline" onClick={connect}>
                   {status?.connected ? "Opnieuw verbinden" : "Verbind Shopify"}
                 </Button>
@@ -183,6 +230,29 @@ export function ChannelsPage() {
                 >
                   Volledige hersync
                 </Button>
+                {status?.connected &&
+                  (isLive ? (
+                    <>
+                      <Button
+                        onClick={pushInventory}
+                        disabled={pushing}
+                        title="Zet de absolute voorraad van alle EAN-producten in één keer in Shopify."
+                      >
+                        {pushing ? "Bezig…" : "Voorraad gelijktrekken"}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => setMode("observe")}
+                        disabled={changingMode}
+                      >
+                        {changingMode ? "Bezig…" : "Terug naar observe"}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button onClick={() => setMode("live")} disabled={changingMode}>
+                      {changingMode ? "Live zetten…" : "Zet live"}
+                    </Button>
+                  ))}
               </div>
             </div>
           </Card>

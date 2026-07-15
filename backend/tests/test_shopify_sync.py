@@ -366,3 +366,30 @@ def test_reconciliation_lists_unmatched_eans(client, db, admin_token, sample_org
     assert body["orders"][0]["channel_reference"] == "1042"
     # Fulfillment status is surfaced so already-shipped orders are visible.
     assert body["orders"][0]["channel_fulfillment_status"] == "fulfilled"
+
+
+def test_sync_refreshes_stale_connection_under_lock(db):
+    """A connection loaded before a concurrent commit must be re-read under the
+    lock. A stale in-memory mode=live would otherwise activate orders after the
+    connection was flipped back to observe elsewhere."""
+    from tests.conftest import TestingSessionLocal
+
+    org = _org(db, "stale-conn")
+    conn = _connection(db, org, mode="live")
+    _sku(db, org, "SOK-1", "8710000012340")
+
+    # Another transaction flips the connection back to observe and commits, while
+    # db's identity-mapped `conn` still holds the stale mode=live.
+    other = TestingSessionLocal()
+    other.get(ChannelConnection, conn.id).mode = "observe"
+    other.commit()
+    other.close()
+    assert conn.mode == "live"  # stale
+
+    sync_shopify(db, conn, FakeClient([_node("7700", "8710000012340")]))
+    db.commit()
+
+    # populate_existing() under the lock refreshed mode → observe, so the order is
+    # imported inert (observed), NOT activated from a stale mode.
+    assert conn.mode == "observe"
+    assert db.query(Order).filter_by(external_id="7700").one().status == "observed"

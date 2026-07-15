@@ -20,6 +20,7 @@ from app.database import get_db
 from app.models import ChannelConnection, Order, Organization, SKU, User
 from app.schemas import (
     ChannelConnectUrl,
+    ChannelModeRequest,
     ChannelOrderRow,
     ChannelReconciliation,
     ChannelStatus,
@@ -107,6 +108,34 @@ def _status_for(conn: ChannelConnection | None) -> ChannelStatus:
         mode=conn.mode,
         last_synced_at=conn.last_synced_at,
     )
+
+
+def _sync_connection(
+    db: Session,
+    connection: ChannelConnection,
+    background_tasks: BackgroundTasks,
+    org_id: int,
+) -> "SyncSummary":
+    """Pull + import for one connection, commit, and schedule the reserved-SKU
+    pushes to Shopify. Shared by the manual sync and the go-live cutover.
+
+    Per-connection credentials only — no global env fallback (cross-tenant).
+    """
+    client = ShopifyClient(
+        shop_domain=connection.shop_domain,
+        access_token=connection.access_token,
+    )
+    if not client.configured:
+        raise HTTPException(
+            400, "Shopify is niet verbonden — koppel eerst via de Verbind-knop"
+        )
+    summary = sync_shopify(db, connection, client)
+    db.commit()
+    # Mirror newly-reserved SKUs to Shopify after the response (best-effort), so
+    # going live immediately drops the storefront available by the open orders.
+    for sku_id in summary.reserved_sku_ids:
+        background_tasks.add_task(push_inventory_to_shopify, sku_id, org_id)
+    return summary
 
 
 @router.get("/shopify/connect-url", response_model=ChannelConnectUrl)
@@ -208,29 +237,56 @@ def trigger_shopify_sync(
     org_id = _require_org_id(organization_id)
     _assert_org_has_channel(db, org_id)
     connection = _get_or_create_connection(db, org_id, "shopify")
-    # Per-connection credentials only — no global env fallback (cross-tenant).
-    client = ShopifyClient(
-        shop_domain=connection.shop_domain,
-        access_token=connection.access_token,
-    )
-    if not client.configured:
-        raise HTTPException(
-            400, "Shopify is niet verbonden — koppel eerst via de Verbind-knop"
-        )
     if full:
         connection.cursor = None
-    summary = sync_shopify(db, connection, client)
-    db.commit()
-    # Mirror newly-reserved SKUs to Shopify after the response (best-effort), so
-    # going live immediately drops the storefront available by the open orders.
-    for sku_id in summary.reserved_sku_ids:
-        background_tasks.add_task(push_inventory_to_shopify, sku_id, org_id)
+    summary = _sync_connection(db, connection, background_tasks, org_id)
     return ChannelSyncSummary(
         fetched=summary.fetched,
         created=summary.created,
         updated=summary.updated,
         unmatched=summary.unmatched,
     )
+
+
+@router.post("/shopify/mode", response_model=ChannelStatus)
+def set_shopify_mode(
+    body: ChannelModeRequest,
+    background_tasks: BackgroundTasks,
+    organization_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_platform_admin),
+):
+    """Flip a connection between observe and live — the go-live cutover.
+
+    Going live is the operator's explicit "start shipping" switch: from now on
+    new paid orders become pickable and stock is written back to Shopify. To
+    bring the orders already imported in observe-mode into the pick list, the
+    cursor is reset and a full re-sync runs — the importer promotes each observed
+    order to ``active`` (and reserves its stock) now that the connection is live.
+
+    Going back to observe only stops *future* activations; it does not retract
+    orders that are already active (that downgrade path is deliberately separate).
+    """
+    org_id = _require_org_id(organization_id)
+    _assert_org_has_channel(db, org_id)
+    mode = body.mode.strip().lower()
+    if mode not in ("observe", "live"):
+        raise HTTPException(400, "Ongeldige modus — kies 'observe' of 'live'")
+
+    connection = _get_or_create_connection(db, org_id, "shopify")
+    if mode == "live":
+        if not connection.shop_domain or not connection.access_token:
+            raise HTTPException(
+                400, "Shopify is niet verbonden — koppel eerst via de Verbind-knop"
+            )
+        connection.mode = "live"
+        # Re-see the whole history so observed orders promote to active + reserve.
+        connection.cursor = None
+        _sync_connection(db, connection, background_tasks, org_id)
+    else:
+        connection.mode = "observe"
+        db.commit()
+    return _status_for(connection)
 
 
 @router.post("/shopify/push-inventory", response_model=InventoryPushSummary)

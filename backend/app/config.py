@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     shopify_api_version: str = "2025-01"
     # NB: the per-shop access token is obtained via OAuth and stored on the
     # ChannelConnection — never as a global env var (that would cross tenants).
+    # Auto-sync: how often the background poller pulls new orders for every
+    # connection in live-mode, in seconds. Default 180 (3 min) — fresh enough for
+    # the warehouse floor without polling Shopify every minute; the manual "sync
+    # now" button covers "I need it now". Set to 0 to disable (manual sync only).
+    shopify_autosync_interval_seconds: int = 180
 
     @field_validator("database_url")
     @classmethod

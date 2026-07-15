@@ -189,6 +189,12 @@ export const api = {
       `/channels/shopify/sync?organization_id=${orgId}${full ? "&full=true" : ""}`,
       { method: "POST" },
     ),
+  channelSetMode: (orgId: number, mode: "observe" | "live") =>
+    json(`/channels/shopify/mode?organization_id=${orgId}`, "POST", { mode }),
+  channelPushInventory: (orgId: number) =>
+    request(`/channels/shopify/push-inventory?organization_id=${orgId}`, {
+      method: "POST",
+    }),
   channelReconciliation: (orgId: number) =>
     request(`/channels/shopify/reconciliation?organization_id=${orgId}`),
 

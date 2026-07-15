@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import time
@@ -20,6 +21,7 @@ from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.models import User
 from app.events import init_producer, shutdown_producer
+from app.services.autosync import autosync_loop
 from app.services.langfuse_client import get_langfuse, shutdown_langfuse
 from app.services.storage import storage, LocalStorage
 from app.routers import auth, channels, customers, inventory, locations, orders, picking, product_attributes, receiving, skus, suppliers
@@ -129,9 +131,24 @@ async def lifespan(app: FastAPI):
         os.makedirs(settings.upload_dir, exist_ok=True)
         app.mount("/api/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")
 
+    # Background auto-sync: periodically pull orders for live channel connections
+    # so they land in the pick list without a manual sync. Disabled when the
+    # interval is 0 (the default).
+    autosync_task = None
+    if settings.shopify_autosync_interval_seconds > 0:
+        autosync_task = asyncio.create_task(
+            autosync_loop(settings.shopify_autosync_interval_seconds)
+        )
+
     yield
 
     # --- shutdown ---
+    if autosync_task is not None:
+        autosync_task.cancel()
+        try:
+            await autosync_task
+        except asyncio.CancelledError:
+            pass
     shutdown_producer()
     shutdown_langfuse()
 

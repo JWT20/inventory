@@ -217,7 +217,11 @@ def import_channel_order(
     connection.last_synced_at = datetime.datetime.utcnow()
     db.flush()
 
-    # Reserve the freshly-active order's open quantity per SKU.
+    # Reserve the freshly-active order's open quantity per SKU. The lines were
+    # just rebuilt via db.add() (not appended to the cached collection), so on the
+    # promote path db_order.lines is stale — expire it to reload the fresh rows,
+    # otherwise a cutover would activate the order without reserving any stock.
+    db.expire(db_order, ["lines"])
     reserved_sku_ids: list[int] = []
     if became_active:
         for line in db_order.lines:
