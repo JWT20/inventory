@@ -6,7 +6,13 @@ shared importer.
 """
 from app.config import settings
 from app.models import ChannelConnection, Order, Organization, SKU
-from app.services.shopify import OAUTH_SCOPES, SyncSummary, sync_shopify, to_normalized
+from app.services.shopify import (
+    OAUTH_SCOPES,
+    ShopifyClient,
+    SyncSummary,
+    sync_shopify,
+    to_normalized,
+)
 from tests.conftest import auth_header
 
 
@@ -79,6 +85,95 @@ def test_oauth_scopes_include_full_order_history_access():
     scopes = OAUTH_SCOPES.split(",")
     assert "read_orders" in scopes
     assert "read_all_orders" in scopes
+
+
+def test_oauth_scopes_allow_merchant_and_veloyd_fulfillment_orders():
+    scopes = set(OAUTH_SCOPES.split(","))
+    assert {
+        "read_merchant_managed_fulfillment_orders",
+        "write_merchant_managed_fulfillment_orders",
+        "read_third_party_fulfillment_orders",
+        "write_third_party_fulfillment_orders",
+    } <= scopes
+
+
+def test_shopify_client_fulfills_each_actionable_fulfillment_order(monkeypatch):
+    client = ShopifyClient(shop_domain="x.myshopify.com", access_token="tok")
+    calls = []
+
+    def _post(query, variables):
+        calls.append((query, variables))
+        if "fulfillmentOrders" in query:
+            return {
+                "order": {
+                    "displayFulfillmentStatus": "UNFULFILLED",
+                    "fulfillmentOrders": {
+                        "nodes": [
+                            {
+                                "id": "gid://shopify/FulfillmentOrder/10",
+                                "status": "OPEN",
+                                "supportedActions": [
+                                    {"action": "CREATE_FULFILLMENT"}
+                                ],
+                            },
+                            {
+                                "id": "gid://shopify/FulfillmentOrder/11",
+                                "status": "CLOSED",
+                                "supportedActions": [],
+                            },
+                        ],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    },
+                }
+            }
+        return {
+            "fulfillmentCreate": {
+                "fulfillment": {
+                    "id": "gid://shopify/Fulfillment/20",
+                    "status": "SUCCESS",
+                },
+                "userErrors": [],
+            }
+        }
+
+    monkeypatch.setattr(client, "_post", _post)
+
+    tracking_info = {
+        "number": "V793AUDS9F4MB",
+        "url": "https://tracking.example/V793AUDS9F4MB",
+    }
+    assert client.fulfill_order(
+        "13105242374489", tracking_info=tracking_info
+    ) is True
+    assert calls[0][1]["id"] == "gid://shopify/Order/13105242374489"
+    mutation_variables = calls[1][1]
+    assert mutation_variables["fulfillment"]["lineItemsByFulfillmentOrder"] == [
+        {"fulfillmentOrderId": "gid://shopify/FulfillmentOrder/10"}
+    ]
+    assert mutation_variables["fulfillment"]["notifyCustomer"] is False
+    assert mutation_variables["fulfillment"]["trackingInfo"] == tracking_info
+
+
+def test_shopify_client_treats_already_fulfilled_as_idempotent(monkeypatch):
+    client = ShopifyClient(shop_domain="x.myshopify.com", access_token="tok")
+    calls = []
+
+    def _post(query, variables):
+        calls.append((query, variables))
+        return {
+            "order": {
+                "displayFulfillmentStatus": "FULFILLED",
+                "fulfillmentOrders": {
+                    "nodes": [],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                },
+            }
+        }
+
+    monkeypatch.setattr(client, "_post", _post)
+
+    assert client.fulfill_order("13105242374489") is False
+    assert len(calls) == 1
 
 
 def test_to_normalized_maps_barcode_to_ean():

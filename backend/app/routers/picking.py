@@ -22,6 +22,11 @@ from app.database import get_db
 from app.events import publish_event
 from app.models import Booking, Location, Order, OrderLine, SKU, SKULocation, User
 from app.services.inventory_sync import push_inventory_to_shopify
+from app.services.fulfillment_sync import (
+    ShopifyFulfillmentError,
+    fulfill_shopify_order,
+)
+from app.services.veloyd import VeloydError, VeloydLabelMismatch, verify_veloyd_label
 from app.schemas import (
     EanScanRequest,
     EanScanResponse,
@@ -63,7 +68,8 @@ def scan_ean(
     # the order's *module*, not the caller's *access* — so this guard is what
     # keeps an owner of org A out of org B's order. Same check as receiving.
     if (
-        user.role in ("owner", "member")
+        not user.is_platform_admin
+        and user.role in ("owner", "member")
         and order.organization_id != user.organization_id
     ):
         raise HTTPException(403, "Geen toegang tot deze organisatie")
@@ -193,7 +199,8 @@ def undo_scan(
     if not order:
         raise HTTPException(404, "Order niet gevonden")
     if (
-        user.role in ("owner", "member")
+        not user.is_platform_admin
+        and user.role in ("owner", "member")
         and order.organization_id != user.organization_id
     ):
         raise HTTPException(403, "Geen toegang tot deze organisatie")
@@ -244,7 +251,8 @@ def scan_location(
     if not order:
         raise HTTPException(404, "Order niet gevonden")
     if (
-        user.role in ("owner", "member")
+        not user.is_platform_admin
+        and user.role in ("owner", "member")
         and order.organization_id != user.organization_id
     ):
         raise HTTPException(403, "Geen toegang tot deze organisatie")
@@ -315,7 +323,8 @@ def scan_label(
     if not order:
         raise HTTPException(404, "Order niet gevonden")
     if (
-        user.role in ("owner", "member")
+        not user.is_platform_admin
+        and user.role in ("owner", "member")
         and order.organization_id != user.organization_id
     ):
         raise HTTPException(403, "Geen toegang tot deze organisatie")
@@ -338,8 +347,24 @@ def scan_label(
     # The label may carry a leading '#'; channel_reference is stored normalized
     # without it (see Order.channel_reference).
     label = body.label_reference.strip().lstrip("#")
+    tracking_info = None
     if label != order.channel_reference:
-        raise HTTPException(409, "Label hoort bij een andere order")
+        try:
+            veloyd_label = verify_veloyd_label(label, order.channel_reference)
+            tracking_info = veloyd_label.shopify_tracking_info
+        except VeloydLabelMismatch as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except VeloydError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+    # Shopify is the external source of truth for whether the order was shipped.
+    # Do this before the local status transition so a missing OAuth scope or API
+    # outage leaves the order safely retryable in ``completed``.
+    try:
+        fulfill_shopify_order(db, order, tracking_info=tracking_info)
+    except ShopifyFulfillmentError as exc:
+        db.rollback()
+        raise HTTPException(502, str(exc)) from exc
 
     order.status = "shipped"
     order.mark_finalized()  # idempotent: already stamped at completion
