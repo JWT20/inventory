@@ -23,6 +23,11 @@ export function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (ord
       <div className="flex justify-between items-center mb-1">
         <span className="font-semibold">{o.reference}</span>
         <div className="flex gap-1 items-center">
+          {o.status === "completed" && (
+            <Badge variant="active" className="text-xs">
+              Te verzenden
+            </Badge>
+          )}
           <Badge
             variant={o.pick_method === "barcode" ? "default" : "outline"}
             className="text-xs"

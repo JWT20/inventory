@@ -33,13 +33,26 @@ type Phase = "location" | "scan" | "label" | "done";
 export function EanScanStep({ order, onBack }: { order: Order; onBack: () => void }) {
   const lines = order.lines ?? [];
   const hasLocations = lines.some((l) => l.pick_location);
+  // Only channel orders (Shopify) carry a Veloyd shipping label to verify.
+  // Manual barcode orders have no label and finish straight after picking.
+  const needsLabel = (order.channel ?? "manual") !== "manual";
 
   const [ean, setEan] = useState("");
   const [label, setLabel] = useState("");
   const [locationCode, setLocationCode] = useState("");
   const [activeLocation, setActiveLocation] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [phase, setPhase] = useState<Phase>(hasLocations ? "location" : "scan");
+  const [phase, setPhase] = useState<Phase>(
+    // A reopened, already-completed order lands on its final step directly:
+    // the label gate for channel orders, or "done" for manual ones.
+    order.status === "completed"
+      ? needsLabel
+        ? "label"
+        : "done"
+      : hasLocations
+        ? "location"
+        : "scan",
+  );
   const [results, setResults] = useState<EanBookingResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   // booked_count per line, seeded from the order and updated live as scans land.
@@ -134,7 +147,12 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
       setBooked(nextBooked);
       setEan("");
       if (result.order_completed) {
-        setPhase("label");
+        if (needsLabel) {
+          setPhase("label");
+        } else {
+          setPhase("done");
+          toast.success("Order klaar");
+        }
         return;
       }
       // If this shelf is now fully picked, decide where to go next. Only return
@@ -369,9 +387,13 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
 
       {phase === "done" && (
         <Card className="p-4 mb-3 bg-emerald-50 border-emerald-200">
-          <p className="text-sm font-semibold text-emerald-800">Verzendklaar</p>
+          <p className="text-sm font-semibold text-emerald-800">
+            {needsLabel ? "Verzendklaar" : "Order klaar"}
+          </p>
           <p className="text-xs text-emerald-700">
-            Label gecontroleerd en order verzonden.
+            {needsLabel
+              ? "Label gecontroleerd en order verzonden."
+              : "Alles gepickt — order afgerond."}
           </p>
         </Card>
       )}

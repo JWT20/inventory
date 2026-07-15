@@ -321,6 +321,11 @@ def scan_label(
         raise HTTPException(403, "Geen toegang tot deze organisatie")
     assert_order_module(order, "barcode_picking", user)
 
+    # Lock the order before checking status: without this a concurrent undo can
+    # reopen the order between the check and the ``shipped`` write, shipping an
+    # order that is no longer fully picked.
+    db.refresh(order, with_for_update=True)
+
     if order.status == "shipped":
         raise HTTPException(409, "Order is al verzonden")
     if order.status != "completed":

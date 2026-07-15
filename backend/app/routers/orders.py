@@ -149,7 +149,10 @@ def _order_line_to_response(
         delivery_day=line.delivery_day,
         quantity=line.quantity,
         booked_count=line.booked_count,
-        has_image=len(line.sku.reference_images) > 0,
+        # Barcode products are picked by EAN, never by photo, so they never need
+        # a reference image — treat them as "has image" so they don't fall into
+        # the "Wacht op foto's" bucket or prompt a camera capture.
+        has_image=len(line.sku.reference_images) > 0 or line.sku.product_type == "barcode",
         is_bottle=line.sku.is_bottle,
         pick_location=_primary_location_code(line.sku),
         show_prices=customer_show_prices,
@@ -450,8 +453,22 @@ def list_orders(
                 "completed", "shipped", "cancelled", "closed",
             )))
         else:
+            # Open work, plus *only* completed channel orders that still need
+            # their shipping-label step ("Te verzenden"). Completed manual orders
+            # are terminal (no label) and must stay out — otherwise a burst of
+            # them would fill the sorted limit=100 window and hide active work.
+            # "shipped"/terminal states stay behind include_history.
             query = query.filter(
-                Order.status.in_(("pending_approval", "pending_images", "active"))
+                or_(
+                    Order.status.in_(
+                        ("pending_approval", "pending_images", "active")
+                    ),
+                    and_(
+                        Order.status == "completed",
+                        Order.channel != "manual",
+                        Order.channel_reference.isnot(None),
+                    ),
+                )
             )
     elif user.role == "customer":
         if not user.customer_id:

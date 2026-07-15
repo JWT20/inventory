@@ -774,6 +774,7 @@ def get_shipment(
 @router.post("/shipments/{shipment_id}/book", response_model=ShipmentResponse)
 def book_shipment(
     shipment_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(require_merchant_inbound),
 ):
@@ -808,6 +809,13 @@ def book_shipment(
     shipment.booked_by = user.id
     db.commit()
     db.refresh(shipment)
+
+    # Mirror each affected product's new available to Shopify. Dedupe: a pakbon
+    # may carry several lines for the same SKU, but one push per SKU suffices.
+    for pushed_sku_id in {line.sku_id for line in shipment.lines}:
+        background_tasks.add_task(
+            push_inventory_to_shopify, pushed_sku_id, shipment.organization_id
+        )
 
     publish_event(
         "shipment_booked",
@@ -1222,6 +1230,7 @@ def adjust_inventory(
 @router.post("/inventory/count", response_model=StockMovementResponse)
 def count_inventory(
     data: InventoryCountRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(require_inbound_booker),
 ):
@@ -1260,6 +1269,10 @@ def count_inventory(
     )
     db.commit()
     db.refresh(movement)
+
+    # Mirror the new available to Shopify — a physical count changes the same
+    # balance a manual adjust does, so it must push too (otherwise Shopify drifts).
+    background_tasks.add_task(push_inventory_to_shopify, data.sku_id, organization_id)
 
     publish_event(
         "inventory_counted",

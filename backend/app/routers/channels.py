@@ -162,9 +162,18 @@ def shopify_oauth_callback(request: Request, db: Session = Depends(get_db)):
     token_data = exchange_code_for_token(shop, code)
 
     connection = _get_or_create_connection(db, org_id, "shopify")
+    shop_changed = bool(connection.shop_domain) and connection.shop_domain != shop
     connection.shop_domain = shop
     connection.access_token = token_data.get("access_token")
     connection.scope = token_data.get("scope")
+    if shop_changed:
+        # A different shop invalidates every cached Shopify GID: the connection's
+        # location_id and each SKU's inventory_item_id belonged to the old shop,
+        # so keeping them would write stock to the wrong items.
+        connection.shopify_location_id = None
+        db.query(SKU).filter(SKU.organization_id == org_id).update(
+            {SKU.shopify_inventory_item_id: None}, synchronize_session=False
+        )
     db.commit()
 
     return RedirectResponse(f"https://{settings.domain}/?shopify=connected")

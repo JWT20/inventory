@@ -28,16 +28,29 @@ export function OrderSelectStep({
       setLoading(true);
       try {
         const all = await api.listOrders(week);
-        const active = all.filter((o: Order) => o.status === "active");
-        // Sort by booked percentage ascending — least progress first
-        active.sort((a: Order, b: Order) => {
+        // Active orders to pick, plus fully-picked barcode channel orders that
+        // still need their shipping label scanned ("Te verzenden") — so the
+        // label step survives a refresh or navigating away.
+        const worklist = all.filter(
+          (o: Order) =>
+            o.status === "active" ||
+            (o.status === "completed" &&
+              o.pick_method === "barcode" &&
+              (o.channel ?? "manual") !== "manual"),
+        );
+        worklist.sort((a: Order, b: Order) => {
+          // "Te verzenden" (completed) first — they are one step from done.
+          const shipA = a.status === "completed" ? 0 : 1;
+          const shipB = b.status === "completed" ? 0 : 1;
+          if (shipA !== shipB) return shipA - shipB;
+          // Then active orders by booked percentage ascending (least progress first).
           const totalA = a.total_boxes + a.total_bottles;
           const totalB = b.total_boxes + b.total_bottles;
           const pctA = totalA > 0 ? (a.booked_boxes + a.booked_bottles) / totalA : 0;
           const pctB = totalB > 0 ? (b.booked_boxes + b.booked_bottles) / totalB : 0;
           return pctA - pctB;
         });
-        setOrders(active);
+        setOrders(worklist);
       } catch {
         toast.error("Kan orders niet laden");
       } finally {

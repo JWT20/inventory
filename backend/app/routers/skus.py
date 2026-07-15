@@ -589,6 +589,10 @@ def update_sku(
     ean_changed = "ean" in changed_fields
     if ean_changed:
         sku.ean = normalize_ean(data.ean)
+        # The cached Shopify inventory_item_id was resolved via the old EAN, so
+        # it no longer points at the right variant. Drop it; the next write-back
+        # re-resolves from the new EAN.
+        sku.shopify_inventory_item_id = None
 
     # Whenever identity (type or EAN) changes, validate the resulting pair — not
     # just the field that was sent — so a partial update can never leave a
