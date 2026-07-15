@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import type {
   EanBookingResult,
   LabelScanResult,
+  LocationScanResult,
   Order,
   UndoScanResult,
 } from "./types";
@@ -17,26 +18,37 @@ import type {
  * per-scan undo for a wrong/damaged grab, and a final shipping-label gate that
  * verifies the Veloyd label before the order ships.
  *
+ * When the order's products have pick locations, the flow is location-driven:
+ * the courier scans a shelf, books the EANs there, then walks to the next
+ * shelf. The backend enforces that a located product is only booked from its
+ * own shelf (hufterproef). Orders without located products skip straight to
+ * scanning, unchanged.
+ *
  * Errors are blocking: a scan/label/undo failure raises a red panel the courier
  * must acknowledge, and the scan field is not refocused until they do — so a
  * fast handscanner never scrolls past a problem.
  */
-type Phase = "scan" | "label" | "done";
+type Phase = "location" | "scan" | "label" | "done";
 
 export function EanScanStep({ order, onBack }: { order: Order; onBack: () => void }) {
+  const lines = order.lines ?? [];
+  const hasLocations = lines.some((l) => l.pick_location);
+
   const [ean, setEan] = useState("");
   const [label, setLabel] = useState("");
+  const [locationCode, setLocationCode] = useState("");
+  const [activeLocation, setActiveLocation] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [phase, setPhase] = useState<Phase>("scan");
+  const [phase, setPhase] = useState<Phase>(hasLocations ? "location" : "scan");
   const [results, setResults] = useState<EanBookingResult[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const lines = order.lines ?? [];
   // booked_count per line, seeded from the order and updated live as scans land.
   const [booked, setBooked] = useState<Record<number, number>>(() =>
     Object.fromEntries(lines.map((l) => [l.id, l.booked_count])),
   );
   const inputRef = useRef<HTMLInputElement>(null);
   const labelInputRef = useRef<HTMLInputElement>(null);
+  const locationInputRef = useRef<HTMLInputElement>(null);
   // Fire the completion confetti once per fresh transition into the terminal
   // "done" phase (order picked + shipped). Guarded so it never fires on mount
   // for an already-finished order, and re-arms after an undo reopens the order.
@@ -48,11 +60,28 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
     0,
   );
 
-  // Keep the active scan field focused for the handscanner — but never while a
+  // Distinct locations that still have open lines — shown as walking hints.
+  const openLocations = Array.from(
+    new Set(
+      lines
+        .filter((l) => l.pick_location && (booked[l.id] ?? 0) < l.quantity)
+        .map((l) => l.pick_location as string),
+    ),
+  ).sort();
+
+  // Picklist sorted by location (a natural route), then product name.
+  const sortedLines = [...lines].sort((a, b) => {
+    const la = a.pick_location ?? "￿";
+    const lb = b.pick_location ?? "￿";
+    return la === lb ? a.sku_name.localeCompare(b.sku_name) : la.localeCompare(lb);
+  });
+
+  // Keep the active field focused for the handscanner — but never while a
   // blocking error is up: the courier must acknowledge it first.
   useEffect(() => {
     if (error) return;
-    if (phase === "scan") inputRef.current?.focus();
+    if (phase === "location") locationInputRef.current?.focus();
+    else if (phase === "scan") inputRef.current?.focus();
     else if (phase === "label") labelInputRef.current?.focus();
   }, [results, busy, phase, error]);
 
@@ -71,21 +100,62 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
     return lines.find((l) => l.id === lineId)?.quantity ?? 0;
   }
 
+  async function handleLocation(e: FormEvent) {
+    e.preventDefault();
+    const code = locationCode.trim();
+    if (!code || busy) return;
+    setBusy(true);
+    try {
+      const res: LocationScanResult = await api.scanLocation(order.id, code);
+      setActiveLocation(res.location_code);
+      setLocationCode("");
+      setPhase("scan");
+    } catch (err: unknown) {
+      setLocationCode("");
+      setError(err instanceof ApiError ? err.message : "Locatiefout");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleScan(e: FormEvent) {
     e.preventDefault();
     const code = ean.trim();
     if (!code || busy) return;
     setBusy(true);
     try {
-      const result: EanBookingResult = await api.scanEan(order.id, code);
-      setResults((prev) => [result, ...prev]);
-      setBooked((prev) => ({
-        ...prev,
+      const result: EanBookingResult = await api.scanEan(order.id, code, activeLocation);
+      const nextBooked = {
+        ...booked,
         [result.order_line_id]:
           lineQuantity(result.order_line_id) - result.remaining_quantity,
-      }));
+      };
+      setResults((prev) => [result, ...prev]);
+      setBooked(nextBooked);
       setEan("");
-      if (result.order_completed) setPhase("label");
+      if (result.order_completed) {
+        setPhase("label");
+        return;
+      }
+      // If this shelf is now fully picked, decide where to go next. Only return
+      // to the location phase when OTHER located shelves still have open work;
+      // if all that remains is unlocated products, stay in the scan phase (they
+      // are bookable without a location) — otherwise a mixed order would dead-end
+      // in a location phase with no shelf left to scan.
+      if (activeLocation) {
+        const here = lines.filter((l) => l.pick_location === activeLocation);
+        const hereDone = here.every((l) => (nextBooked[l.id] ?? 0) >= l.quantity);
+        if (hereDone) {
+          const openLocatedElsewhere = lines.some(
+            (l) =>
+              l.pick_location &&
+              l.pick_location !== activeLocation &&
+              (nextBooked[l.id] ?? 0) < l.quantity,
+          );
+          setActiveLocation(null);
+          setPhase(openLocatedElsewhere ? "location" : "scan");
+        }
+      }
     } catch (err: unknown) {
       setEan("");
       setError(err instanceof ApiError ? err.message : "Scanfout");
@@ -106,7 +176,10 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
           lineQuantity(undo.order_line_id) - undo.remaining_quantity,
       }));
       // Undoing the unit that completed the order reopens it for scanning.
-      if (undo.order_status === "active") setPhase("scan");
+      if (undo.order_status === "active") {
+        setPhase(hasLocations ? "location" : "scan");
+        setActiveLocation(null);
+      }
     } catch (err: unknown) {
       setError(err instanceof ApiError ? err.message : "Kon niet terugdraaien");
     } finally {
@@ -160,13 +233,14 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
 
       {lines.length > 0 && (
         <div className="space-y-2 mb-3">
-          {lines.map((l) => {
+          {sortedLines.map((l) => {
             const b = Math.min(booked[l.id] ?? 0, l.quantity);
             const done = b >= l.quantity;
+            const isActive = !!activeLocation && l.pick_location === activeLocation;
             return (
               <Card
                 key={l.id}
-                className={`p-3 ${done ? "bg-emerald-50 border-emerald-200" : ""}`}
+                className={`p-3 ${done ? "bg-emerald-50 border-emerald-200" : isActive ? "border-blue-400" : ""}`}
               >
                 <div className="flex justify-between items-center">
                   <p
@@ -180,17 +254,53 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
                     {b}/{l.quantity}
                   </span>
                 </div>
-                <p className="text-xs text-muted-foreground font-mono">{l.sku_code}</p>
+                <p className="text-xs text-muted-foreground font-mono">
+                  {l.sku_code}
+                  {l.pick_location ? ` · 📍 ${l.pick_location}` : ""}
+                </p>
               </Card>
             );
           })}
         </div>
       )}
 
+      {phase === "location" && (
+        <Card className="p-4 mb-3 bg-blue-50 border-blue-200">
+          <p className="text-sm font-semibold text-blue-900 mb-1">
+            Scan de locatie
+          </p>
+          <p className="text-xs text-blue-800 mb-3">
+            {openLocations.length > 0
+              ? `Nog te doen: ${openLocations.join(", ")}`
+              : "Scan de plank waar je staat."}
+          </p>
+          <form onSubmit={handleLocation}>
+            <input
+              ref={locationInputRef}
+              value={locationCode}
+              onChange={(e) => setLocationCode(e.target.value)}
+              autoComplete="off"
+              autoFocus
+              disabled={busy || !!error}
+              placeholder="Scan de locatiecode…"
+              className="w-full h-14 text-lg font-mono px-4 rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            <Button
+              type="submit"
+              size="lg"
+              className="w-full text-lg h-14 mt-3"
+              disabled={busy || !!error || !locationCode.trim()}
+            >
+              {busy ? "Controleren…" : "Locatie bevestigen"}
+            </Button>
+          </form>
+        </Card>
+      )}
+
       {phase === "scan" && (
         <form onSubmit={handleScan} className="mb-3">
           <label className="text-sm text-muted-foreground mb-2 block">
-            Scan de barcode (EAN)
+            {activeLocation ? `Scan de barcode (locatie ${activeLocation})` : "Scan de barcode (EAN)"}
           </label>
           <input
             ref={inputRef}
@@ -211,13 +321,25 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
           >
             {busy ? "Boeken…" : "Boek"}
           </Button>
+          {openLocations.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setActiveLocation(null);
+                setPhase("location");
+              }}
+              className="text-sm text-blue-600 underline w-full text-center block mt-3"
+            >
+              Andere locatie scannen
+            </button>
+          )}
         </form>
       )}
 
       {phase === "label" && (
         <Card className="p-4 mb-3 bg-amber-50 border-amber-200">
           <p className="text-sm font-semibold text-amber-900 mb-1">
-            Order compleet — scan verzendlabel
+            Order compleet — inpakken en scan verzendlabel
           </p>
           <p className="text-xs text-amber-800 mb-3">
             Scan het Veloyd-label om de order te verzenden.

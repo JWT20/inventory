@@ -20,13 +20,16 @@ from sqlalchemy.orm import Session
 from app.auth import assert_order_module, require_inbound_booker
 from app.database import get_db
 from app.events import publish_event
-from app.models import Booking, Order, OrderLine, SKU, User
+from app.models import Booking, Location, Order, OrderLine, SKU, SKULocation, User
 from app.services.inventory_sync import push_inventory_to_shopify
 from app.schemas import (
     EanScanRequest,
     EanScanResponse,
     LabelScanRequest,
     LabelScanResponse,
+    LocationScanRequest,
+    LocationScanResponse,
+    LocationScanSKU,
     UndoScanRequest,
     UndoScanResponse,
 )
@@ -81,6 +84,26 @@ def scan_ean(
     )
     if not sku:
         raise HTTPException(404, f"Geen product met EAN {ean} in deze organisatie")
+
+    # Location gate (hufterproef): a product that has pick locations may only be
+    # booked after its shelf was scanned, and only from a shelf it actually lives
+    # on. Products without locations (unplaced, or legacy) skip this entirely so
+    # existing barcode orders keep working.
+    sku_location_codes = {
+        link.location.code
+        for link in sku.location_links
+        if link.location and link.location.active
+    }
+    if sku_location_codes:
+        scanned = (body.location_code or "").strip()
+        if not scanned:
+            raise HTTPException(400, f"Scan eerst de locatie voor {sku.name}")
+        if scanned not in sku_location_codes:
+            raise HTTPException(
+                400,
+                f"{sku.name} ligt niet op locatie {scanned} "
+                f"(hoort op {', '.join(sorted(sku_location_codes))})",
+            )
 
     line = (
         db.query(OrderLine)
@@ -202,6 +225,76 @@ def undo_scan(
         sku_id=result.sku_id,
         remaining_quantity=result.remaining,
         order_status=result.order_status,
+    )
+
+
+@router.post("/scan-location", response_model=LocationScanResponse)
+def scan_location(
+    body: LocationScanRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_inbound_booker),
+):
+    """Verify a scanned shelf code and return this order's products that live there.
+
+    The pick flow scans a location before its EANs; this confirms the code exists
+    and that the order actually has open products on that shelf, so the courier
+    walks a real route instead of scanning blind.
+    """
+    order = db.get(Order, body.order_id)
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+    if (
+        user.role in ("owner", "member")
+        and order.organization_id != user.organization_id
+    ):
+        raise HTTPException(403, "Geen toegang tot deze organisatie")
+    if order.status != "active":
+        raise HTTPException(400, f"Order is niet actief (status: {order.status})")
+    assert_order_module(order, "barcode_picking", user)
+
+    code = body.location_code.strip()
+    location = (
+        db.query(Location)
+        .filter(Location.code == code, Location.active.is_(True))
+        .first()
+    )
+    if not location:
+        raise HTTPException(404, f"Onbekende locatie {code}")
+
+    # Order lines whose SKU is placed on this location.
+    lines = (
+        db.query(OrderLine)
+        .join(SKULocation, SKULocation.sku_id == OrderLine.sku_id)
+        .filter(
+            OrderLine.order_id == order.id,
+            SKULocation.location_id == location.id,
+        )
+        .all()
+    )
+    if not lines:
+        raise HTTPException(
+            400, f"Geen producten van deze order op locatie {code}"
+        )
+
+    open_lines = [l for l in lines if l.booked_count < l.quantity]
+    if not open_lines:
+        raise HTTPException(
+            409, f"Alles op locatie {code} is al gepickt"
+        )
+
+    return LocationScanResponse(
+        order_id=order.id,
+        location_code=code,
+        skus=[
+            LocationScanSKU(
+                sku_id=l.sku_id,
+                sku_code=l.sku.sku_code,
+                sku_name=l.sku.name,
+                ean=l.sku.ean,
+                remaining_quantity=l.quantity - l.booked_count,
+            )
+            for l in open_lines
+        ],
     )
 
 

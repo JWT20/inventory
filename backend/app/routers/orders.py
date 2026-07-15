@@ -80,6 +80,25 @@ def _as_float(value: Decimal | float | None) -> float | None:
     return float(value)
 
 
+def _primary_location_code(sku) -> str | None:
+    """Scannable code of a barcode product's primary pick location, if any.
+
+    Only *active* locations count — an inactive one would send the picker into
+    the location phase for a shelf that /scan-location then rejects with a 404.
+    Prefers the ``is_primary`` link; falls back to the first active one. NULL for
+    vision products and barcode products not on an active shelf.
+    """
+    active = [
+        lnk
+        for lnk in (getattr(sku, "location_links", None) or [])
+        if lnk.location and lnk.location.active
+    ]
+    if not active:
+        return None
+    primary = next((lnk for lnk in active if lnk.is_primary), active[0])
+    return primary.location.code
+
+
 def _order_line_to_response(
     line: OrderLine,
     sku_default_prices: dict[int, float | None],
@@ -132,6 +151,7 @@ def _order_line_to_response(
         booked_count=line.booked_count,
         has_image=len(line.sku.reference_images) > 0,
         is_bottle=line.sku.is_bottle,
+        pick_location=_primary_location_code(line.sku),
         show_prices=customer_show_prices,
         unit_price=unit_price if customer_show_prices else None,
         discount_type=discount_type if customer_show_prices else None,
