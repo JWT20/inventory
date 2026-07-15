@@ -476,3 +476,128 @@ def test_pending_product_drops_block_when_no_longer_fulfillable(db):
     r2 = import_channel_order(db, conn, order)
     db.commit()
     assert db.get(Order, r2.order_id).status == "observed"  # block dropped
+
+
+# --- blocker #3: an active order cancelled/refunded/fulfilled at the channel --
+
+def test_active_order_cancelled_at_channel_is_released(db):
+    """No bookings → cancel the order and release its reservation."""
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-cancel")
+    conn = _connection(db, org, mode="live")
+    sku = _sku(db, org, "SOK-1", "8710000000500")
+    order = _order(external_id="SHOP-CN", lines=[
+        NormalizedLine(ean="8710000000500", quantity=2),
+    ])
+    r1 = import_channel_order(db, conn, order)
+    db.commit()
+    assert db.get(Order, r1.order_id).status == "active"
+    assert db.query(InventoryBalance).filter_by(sku_id=sku.id).one().quantity_reserved == 2
+
+    # Refunded at the channel → no longer fulfillable.
+    order.financial_status = "refunded"
+    r2 = import_channel_order(db, conn, order)
+    db.commit()
+
+    o = db.get(Order, r2.order_id)
+    assert o.status == "cancelled"                 # out of the pick list
+    assert sku.id in r2.reserved_sku_ids           # pushed after release
+    assert db.query(InventoryBalance).filter_by(sku_id=sku.id).one().quantity_reserved == 0
+
+
+def test_active_order_cancelled_with_bookings_goes_needs_review(db):
+    """Picking already started → hand to a human, don't auto-cancel booked work."""
+    org = _org(db, "socks-cancel-booked")
+    conn = _connection(db, org, mode="live")
+    _sku(db, org, "SOK-1", "8710000000510")
+    order = _order(external_id="SHOP-CB", lines=[
+        NormalizedLine(ean="8710000000510", quantity=2),
+    ])
+    r1 = import_channel_order(db, conn, order)
+    db.commit()
+    o = db.get(Order, r1.order_id)
+    o.lines[0].booked_count = 1
+    db.commit()
+
+    order.financial_status = "refunded"
+    r2 = import_channel_order(db, conn, order)
+    db.commit()
+
+    o = db.get(Order, r2.order_id)
+    assert o.status == "needs_review"
+    assert o.lines[0].booked_count == 1  # booked work preserved
+
+
+def test_active_order_fulfilled_elsewhere_goes_needs_review_without_raising_available(db):
+    """Fulfilled elsewhere (shipped from home): do NOT release the reservation —
+    that would raise `available` while the goods physically left. Park for review
+    and leave on-hand/reserved (and thus available) untouched."""
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-fulfilled")
+    conn = _connection(db, org, mode="live")
+    sku = _sku(db, org, "SOK-1", "8710000000520")
+    # Seed a real on-hand so `available = on_hand - reserved` is meaningful.
+    db.add(InventoryBalance(sku_id=sku.id, organization_id=org.id,
+                            quantity_on_hand=10, quantity_reserved=0))
+    db.commit()
+
+    order = _order(external_id="SHOP-FF", lines=[
+        NormalizedLine(ean="8710000000520", quantity=2),
+    ])
+    r1 = import_channel_order(db, conn, order)
+    db.commit()
+    assert db.get(Order, r1.order_id).status == "active"
+    bal = db.query(InventoryBalance).filter_by(sku_id=sku.id).one()
+    assert (bal.quantity_on_hand, bal.quantity_reserved) == (10, 2)  # available 8
+
+    order.fulfillment_status = "fulfilled"
+    r2 = import_channel_order(db, conn, order)
+    db.commit()
+
+    o = db.get(Order, r2.order_id)
+    assert o.status == "needs_review"          # NOT cancelled+released
+    assert sku.id not in r2.reserved_sku_ids   # nothing pushed
+    bal = db.query(InventoryBalance).filter_by(sku_id=sku.id).one()
+    assert (bal.quantity_on_hand, bal.quantity_reserved) == (10, 2)  # available still 8
+
+
+def test_paid_but_cancelled_order_is_released(db):
+    """A cancelled order can stay financial_status='paid' (cancelled without a
+    refund). cancelledAt is the authoritative signal → it must leave the pick list."""
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-cancelled-paid")
+    conn = _connection(db, org, mode="live")
+    sku = _sku(db, org, "SOK-1", "8710000000530")
+    order = _order(external_id="SHOP-CX", lines=[
+        NormalizedLine(ean="8710000000530", quantity=2),
+    ])
+    r1 = import_channel_order(db, conn, order)
+    db.commit()
+    assert db.get(Order, r1.order_id).status == "active"
+
+    # Cancelled at the channel WITHOUT a refund — financial_status stays paid.
+    order.cancelled_at = "2026-07-14T10:00:00Z"
+    r2 = import_channel_order(db, conn, order)
+    db.commit()
+
+    o = db.get(Order, r2.order_id)
+    assert o.status == "cancelled"
+    assert db.query(InventoryBalance).filter_by(sku_id=sku.id).one().quantity_reserved == 0
+
+
+def test_born_cancelled_paid_order_stays_observed(db):
+    """A paid+cancelled order seen for the first time in live mode must not become
+    active (cancelledAt overrides the paid financial status)."""
+    org = _org(db, "socks-born-cancelled")
+    conn = _connection(db, org, mode="live")
+    _sku(db, org, "SOK-1", "8710000000540")
+    order = _order(external_id="SHOP-BC", lines=[
+        NormalizedLine(ean="8710000000540", quantity=1),
+    ])
+    order.cancelled_at = "2026-07-14T10:00:00Z"
+    r = import_channel_order(db, conn, order)
+    db.commit()
+    assert db.get(Order, r.order_id).status == "observed"

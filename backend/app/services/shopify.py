@@ -106,6 +106,7 @@ query($first: Int!, $after: String, $query: String) {
         name
         createdAt
         updatedAt
+        cancelledAt
         displayFinancialStatus
         displayFulfillmentStatus
         shippingAddress { name }
@@ -182,6 +183,7 @@ def to_normalized(node: dict) -> NormalizedChannelOrder:
         customer_name=ship.get("name"),
         financial_status=(node.get("displayFinancialStatus") or "pending").lower(),
         fulfillment_status=(node.get("displayFulfillmentStatus") or "unfulfilled").lower(),
+        cancelled_at=node.get("cancelledAt"),
         lines=lines,
     )
 

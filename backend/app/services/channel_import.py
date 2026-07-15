@@ -53,6 +53,10 @@ class NormalizedChannelOrder:
     # home or by the courier); the cutover will keep fulfilled orders out of the
     # pick list. Observe-mode does not act on it.
     fulfillment_status: str = "unfulfilled"
+    # Shopify's cancelledAt (ISO timestamp) or None. The authoritative cancel
+    # signal — an order can be cancelled without a refund, so financial_status
+    # alone ("paid") does not reveal it.
+    cancelled_at: str | None = None
     lines: list[NormalizedLine] = field(default_factory=list)
 
 
@@ -108,6 +112,10 @@ def import_channel_order(
     channel = connection.channel
     fulfillable = order.financial_status in _FULFILLABLE_FINANCIAL_STATUSES
     already_shipped = order.fulfillment_status in _SHIPPED_FULFILLMENT_STATUSES
+    # Shopify's authoritative cancellation signal — an order can be cancelled
+    # without a refund (financial_status stays "paid"), so we must not rely on the
+    # financial status alone to keep a cancelled order out of the pick list.
+    is_cancelled = order.cancelled_at is not None
 
     # Resolve every line to a SKU (by EAN, within the org) up front — a pure read
     # pass — so the status decision below can see whether the order is fully
@@ -136,7 +144,12 @@ def import_channel_order(
     # instead of activating with the missing product dropped — it self-heals to
     # active on a re-sync once the product is added. Non-live / unpaid / shipped /
     # cancelled orders stay inert ("observed"). Full cancellation→restock is fase 4.
-    if connection.mode == "live" and fulfillable and not already_shipped:
+    if (
+        connection.mode == "live"
+        and fulfillable
+        and not already_shipped
+        and not is_cancelled
+    ):
         target_status = "pending_product" if has_unmatched else "active"
     else:
         target_status = "observed"
@@ -197,10 +210,26 @@ def import_channel_order(
             # channel → drop the block so it stops showing "Wacht op product" (and
             # stops triggering self-heal re-syncs).
             db_order.status = "observed"
+        elif status == "active" and target_status == "observed":
+            # The order should leave the pick list. WHY decides how:
+            if already_shipped and not is_cancelled:
+                # Fulfilled elsewhere (shipped from home): the goods physically
+                # left, but we can't prove from which pool. Releasing the
+                # reservation would raise `available` and risk oversell — hand it
+                # to a human rather than guess a stock movement.
+                db_order.status = "needs_review"
+            elif has_bookings:
+                # Cancelled/refunded but picking already started — a human decides.
+                db_order.status = "needs_review"
+            else:
+                # Genuinely cancelled/refunded and nothing picked: release the
+                # reservation and cancel it.
+                released_sku_ids = _release_order_reservation(db, db_order, org_id)
+                db_order.status = "cancelled"
         elif status == "active" and has_unmatched:
-            # An already-active order gained an unknown line (edited at the
-            # channel, or imported partially before this guard existed). It must
-            # not stay pickable-but-incomplete.
+            # An already-active (still fulfillable) order gained an unknown line
+            # (edited at the channel, or imported partially before this guard
+            # existed). It must not stay pickable-but-incomplete.
             if has_bookings:
                 # Picking already started — hand to a human, don't auto-reconcile
                 # or drop the booked work.
@@ -211,7 +240,8 @@ def import_channel_order(
                 # product is added).
                 released_sku_ids = _release_order_reservation(db, db_order, org_id)
                 db_order.status = "pending_product"
-        # active + fully matched, or terminal states: left untouched (reserve once).
+        # active + fully matched + fulfillable, or terminal states: left untouched
+        # (reserve once).
         if order.ordered_at is not None:
             db_order.ordered_at = order.ordered_at
         # Backfill / refresh the order number on re-import (e.g. for orders
