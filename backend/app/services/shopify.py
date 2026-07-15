@@ -42,9 +42,7 @@ logger = logging.getLogger(__name__)
 OAUTH_SCOPES = (
     "read_orders,read_all_orders,read_products,"
     "read_locations,read_inventory,write_inventory,"
-    "read_merchant_managed_fulfillment_orders,"
     "write_merchant_managed_fulfillment_orders,"
-    "read_third_party_fulfillment_orders,"
     "write_third_party_fulfillment_orders"
 )
 _SHOP_DOMAIN_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$")

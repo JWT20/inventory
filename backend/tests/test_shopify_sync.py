@@ -90,9 +90,7 @@ def test_oauth_scopes_include_full_order_history_access():
 def test_oauth_scopes_allow_merchant_and_veloyd_fulfillment_orders():
     scopes = set(OAUTH_SCOPES.split(","))
     assert {
-        "read_merchant_managed_fulfillment_orders",
         "write_merchant_managed_fulfillment_orders",
-        "read_third_party_fulfillment_orders",
         "write_third_party_fulfillment_orders",
     } <= scopes
 

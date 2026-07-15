@@ -17,9 +17,7 @@ class ShopifyFulfillmentError(RuntimeError):
 
 
 REQUIRED_FULFILLMENT_SCOPES = {
-    "read_merchant_managed_fulfillment_orders",
     "write_merchant_managed_fulfillment_orders",
-    "read_third_party_fulfillment_orders",
     "write_third_party_fulfillment_orders",
 }
 
