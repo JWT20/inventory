@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from app.models import ChannelConnection, ChannelSyncLog, Order, OrderLine, SKU
+from app.services.stock import adjust_reservation
 
 
 @dataclass
@@ -61,6 +62,9 @@ class ImportResult:
     created: bool
     matched_lines: int
     unmatched_eans: list[str]
+    # SKUs whose stock got reserved because this order just went live (born-active
+    # or cutover). The caller pushes their new available to Shopify.
+    reserved_sku_ids: list[int] = field(default_factory=list)
 
 
 # Shopify financial statuses that mean "this order should be fulfilled". Anything
@@ -110,6 +114,11 @@ def import_channel_order(
     )
     created = existing is None
 
+    # An order that crosses into "active" this import reserves its stock, so the
+    # channel-visible available already excludes it (no oversell). Tracked here so
+    # we reserve exactly once — never on a plain re-sync of an already-active order.
+    became_active = False
+
     if created:
         db_order = Order(
             organization_id=org_id,
@@ -126,6 +135,7 @@ def import_channel_order(
         )
         db.add(db_order)
         db.flush()
+        became_active = target_status == "active"
     else:
         db_order = existing
         # Cutover: an order first imported in observe-mode must become pickable
@@ -134,6 +144,7 @@ def import_channel_order(
         # progressed (active/completed/cancelled/closed).
         if db_order.status == "observed" and target_status == "active":
             db_order.status = "active"
+            became_active = True
         if order.ordered_at is not None:
             db_order.ordered_at = order.ordered_at
         # Backfill / refresh the order number on re-import (e.g. for orders
@@ -206,9 +217,21 @@ def import_channel_order(
     connection.last_synced_at = datetime.datetime.utcnow()
     db.flush()
 
+    # Reserve the freshly-active order's open quantity per SKU.
+    reserved_sku_ids: list[int] = []
+    if became_active:
+        for line in db_order.lines:
+            open_qty = line.quantity - line.booked_count
+            if open_qty > 0:
+                adjust_reservation(
+                    db, sku_id=line.sku_id, organization_id=org_id, delta=open_qty
+                )
+                reserved_sku_ids.append(line.sku_id)
+
     return ImportResult(
         order_id=db_order.id,
         created=created,
         matched_lines=matched,
         unmatched_eans=unmatched,
+        reserved_sku_ids=reserved_sku_ids,
     )

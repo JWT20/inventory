@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models import Booking, Order, OrderLine
-from app.services.stock import apply_stock_movement
+from app.services.stock import adjust_reservation, apply_stock_movement
 
 
 @dataclass
@@ -171,6 +171,12 @@ def apply_booking(
         reference_id=last_booking.id,
         performed_by=scanned_by,
     )
+    # Release the matching reservation as the unit leaves: on_hand and reserved
+    # drop together, so the channel-visible ``available`` is unchanged. Clamped,
+    # so a pick on a never-reserved (vision) product is a no-op.
+    adjust_reservation(
+        db, sku_id=sku_id, organization_id=order.organization_id, delta=-quantity
+    )
 
     # 6. Recompute status on the fresh lines, then commit.
     recompute_order_status(order, lines)
@@ -251,6 +257,8 @@ def undo_booking(db: Session, *, booking_id: int, performed_by: int) -> UndoResu
         reference_id=None,
         performed_by=performed_by,
     )
+    # Re-reserve the unit the order still needs (inverse of the pick release).
+    adjust_reservation(db, sku_id=sku_id, organization_id=org_id, delta=1)
 
     # A completed order that is no longer fully booked reopens for picking; clear
     # the finalize stamp so the monthly report does not count a reverted order.
