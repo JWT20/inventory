@@ -60,7 +60,7 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 # awaiting merchant approval are visible read-only, so the courier can see
 # what work may be coming.
 COURIER_VIEWABLE_STATUSES = (
-    "pending_approval", "active", "completed", "cancelled", "closed",
+    "pending_approval", "active", "completed", "shipped", "cancelled", "closed",
 )
 
 # Mirrors receiving._DELIVERY_DAY_SORT so the next-pick suggestion is selected
@@ -427,7 +427,7 @@ def list_orders(
         if include_history:
             query = query.filter(Order.status.in_((
                 "pending_approval", "pending_images", "active",
-                "completed", "cancelled", "closed",
+                "completed", "shipped", "cancelled", "closed",
             )))
         else:
             query = query.filter(
@@ -683,7 +683,7 @@ def monthly_booked_boxes(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Aantal geboekte dozen per maand voor voltooide en gesloten orders.
+    """Aantal geboekte dozen per maand voor voltooide, verzonden en gesloten orders.
 
     Een doos telt mee in de maand waarin de order is afgerond (``finalized_at``).
     Het aantal is het werkelijk geboekte aantal: een order die op 10/12 wordt
@@ -703,7 +703,7 @@ def monthly_booked_boxes(
         .join(OrderLine, OrderLine.order_id == Order.id)
         .join(SKU, OrderLine.sku_id == SKU.id)
         .filter(
-            Order.status.in_(("completed", "closed")),
+            Order.status.in_(("completed", "shipped", "closed")),
             Order.finalized_at.isnot(None),
         )
         .group_by(Order.id, Order.organization_id, Order.finalized_at, SKU.is_bottle)

@@ -193,6 +193,7 @@ const STATUS_LABELS: Record<string, string> = {
   pending_images: "Wacht op beelden",
   active: "Actief",
   completed: "Voltooid",
+  shipped: "Verzonden",
   cancelled: "Geannuleerd",
   closed: "Gesloten",
 };
@@ -202,6 +203,7 @@ const STATUS_VARIANT: Record<string, "active" | "inactive"> = {
   pending_images: "inactive",
   active: "active",
   completed: "active",
+  shipped: "active",
   cancelled: "inactive",
   closed: "inactive",
 };
@@ -360,6 +362,7 @@ export function OrdersPage() {
 
   const isHistoryOrder = (order: Order) =>
     order.status === "completed" ||
+    order.status === "shipped" ||
     order.status === "cancelled" ||
     order.status === "closed" ||
     remainingUnits(order) === 0;

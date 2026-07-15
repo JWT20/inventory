@@ -191,3 +191,26 @@ def test_customer_forbidden(client, db, customer_token, sample_org):
         headers=auth_header(customer_token),
     )
     assert resp.status_code == 403
+
+
+def test_shipped_order_counts(client, db, courier_token, sample_org):
+    # A shipped (label-verified) barcode order is finalized and must count its
+    # booked boxes, same as completed/closed.
+    _seed(
+        db,
+        sample_org,
+        "SHIPPED",
+        status="shipped",
+        booked=4,
+        quantity=4,
+        finalized_at=datetime.datetime(2026, 4, 2, 9, 0),
+    )
+
+    resp = client.get(
+        "/api/orders/reports/monthly-boxes",
+        headers=auth_header(courier_token),
+    )
+    assert resp.status_code == 200
+    orgs = resp.json()["organizations"]
+    assert len(orgs) == 1
+    assert orgs[0]["total_boxes"] == 4
