@@ -457,6 +457,21 @@ class OrderLine(Base):
     )
     quantity: Mapped[int] = mapped_column(Integer)
     booked_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Stable source-line identity + fulfillment counters. These let a channel
+    # fulfillment be matched against stock already deducted by an in-app pick;
+    # only the unmatched remainder is an external/home stock movement.
+    channel_line_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    channel_current_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    channel_unfulfilled_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    channel_fulfilled_seen: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    channel_fulfilled_from_app: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    channel_fulfilled_external: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     delivery_day: Mapped[str] = mapped_column(
         String(20), default="thursday", server_default="thursday"
     )
@@ -675,7 +690,11 @@ class StockMovement(Base):
     reference_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     reference_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    performed_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    # NULL means an automated source-channel reconciliation rather than a human
+    # inventory action.
+    performed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -712,6 +731,11 @@ class ChannelConnection(Base):
     # Cached primary location id at the shop, resolved once and reused as the
     # target of inventory write-back. NULL until first resolved.
     shopify_location_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Fulfillments already present before this moment belong to the physical
+    # opening count and are baselined, not deducted again. Set once at go-live.
+    inventory_authority_started_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
     # "observe" = import + show for reconciliation, no stock/fulfilment effect;
     # "live" = born-active + stock sync. Default observe — never act by
     # surprise.

@@ -6,6 +6,7 @@ organization (the data-bak the orders land in). The OAuth callback is the one
 exception: it is public because Shopify redirects the browser to it without our
 auth token, and is instead secured by Shopify's HMAC + a signed ``state``.
 """
+import datetime
 import json
 import logging
 
@@ -291,6 +292,11 @@ def set_shopify_mode(
             raise HTTPException(
                 400, "Shopify is niet verbonden — koppel eerst via de Verbind-knop"
             )
+        if (
+            connection.mode != "live"
+            or connection.inventory_authority_started_at is None
+        ):
+            connection.inventory_authority_started_at = datetime.datetime.utcnow()
         connection.mode = "live"
         # Re-see the whole history so observed orders promote to active + reserve.
         connection.cursor = None

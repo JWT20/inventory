@@ -249,6 +249,16 @@ def undo_booking(db: Session, *, booking_id: int, performed_by: int) -> UndoResu
     line = next((l for l in lines if l.id == booking.order_line_id), None)
     if line is None:
         raise HTTPException(404, "Orderregel hoort niet bij deze boeking")
+    if line.channel_fulfilled_from_app > 0:
+        # Shopify has already confirmed at least one locally-picked unit as
+        # fulfilled. Without a booking-level source mapping we cannot know
+        # whether this particular scan is still reversible, so never risk
+        # restocking a unit that Shopify considers shipped.
+        raise HTTPException(
+            409,
+            "Shopify heeft deze orderregel al als verzonden verwerkt; "
+            "ongedaan maken is niet meer veilig",
+        )
 
     sku_id = booking.sku_id
     org_id = order.organization_id

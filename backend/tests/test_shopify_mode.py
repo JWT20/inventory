@@ -58,7 +58,10 @@ def _node(order_id, barcode, qty=2):
         "shippingAddress": {"name": "Web Klant"},
         "lineItems": {
             "edges": [
-                {"node": {"quantity": qty, "title": "Race sok",
+                {"node": {"id": f"gid://shopify/LineItem/{order_id}-1",
+                          "quantity": qty, "currentQuantity": qty,
+                          "unfulfilledQuantity": qty,
+                          "title": "Race sok",
                           "variant": {"barcode": barcode, "sku": "SOK-1"}}}
             ]
         },

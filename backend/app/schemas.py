@@ -940,7 +940,7 @@ class StockMovementResponse(BaseModel):
     reference_type: str | None
     reference_id: int | None
     note: str | None
-    performed_by: int
+    performed_by: int | None
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -64,6 +64,8 @@ function reviewReason(o: ReconRow): string {
     partially_fulfilled: "Gedeeltelijk elders verzonden; resterende regels zijn nog onbekend",
     unknown_ean: "Onbekend product tijdens picken",
     order_changed_after_pick: "Product of aantal gewijzigd nadat het picken begon",
+    fulfillment_reversed: "Shopify-verzending is teruggedraaid; controleer of voorraad terugkwam",
+    fulfillment_quantity_mismatch: "Shopify-status en resterende aantallen spreken elkaar tegen",
   };
   return o.review_reason ? (labels[o.review_reason] ?? o.review_reason) : "Reden onbekend";
 }

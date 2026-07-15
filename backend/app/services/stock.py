@@ -22,7 +22,7 @@ def apply_stock_movement(
     reference_type: str | None = None,
     reference_id: int | None = None,
     note: str | None = None,
-    performed_by: int,
+    performed_by: int | None,
 ) -> StockMovement:
     """Create a stock movement and update the inventory balance.
 
