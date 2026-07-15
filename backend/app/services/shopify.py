@@ -111,7 +111,16 @@ query($first: Int!, $after: String, $query: String) {
         displayFulfillmentStatus
         shippingAddress { name }
         lineItems(first: 100) {
-          edges { node { quantity title variant { barcode sku } } }
+          edges {
+            node {
+              id
+              quantity
+              currentQuantity
+              unfulfilledQuantity
+              title
+              variant { barcode sku }
+            }
+          }
           pageInfo { hasNextPage endCursor }
         }
       }
@@ -126,7 +135,16 @@ _LINE_ITEMS_QUERY = """
 query($id: ID!, $after: String) {
   order(id: $id) {
     lineItems(first: 100, after: $after) {
-      edges { node { quantity title variant { barcode sku } } }
+      edges {
+        node {
+          id
+          quantity
+          currentQuantity
+          unfulfilledQuantity
+          title
+          variant { barcode sku }
+        }
+      }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -164,8 +182,18 @@ def to_normalized(node: dict) -> NormalizedChannelOrder:
         lines.append(
             NormalizedLine(
                 ean=(variant.get("barcode") or None),
-                quantity=int(ln.get("quantity") or 0),
+                quantity=int(
+                    ln.get("currentQuantity")
+                    if ln.get("currentQuantity") is not None
+                    else ln.get("quantity") or 0
+                ),
                 title=ln.get("title") or "",
+                external_id=ln.get("id"),
+                unfulfilled_quantity=(
+                    int(ln["unfulfilledQuantity"])
+                    if ln.get("unfulfilledQuantity") is not None
+                    else None
+                ),
             )
         )
 
@@ -349,8 +377,8 @@ class SyncSummary:
     created: int = 0
     updated: int = 0
     unmatched: int = 0
-    # SKUs reserved because an order went live this sync — the caller pushes their
-    # new available to Shopify so the storefront stops overselling reserved stock.
+    # SKUs whose reservation or physical stock changed during import; callers
+    # mirror their new available quantity to Shopify.
     reserved_sku_ids: set[int] = field(default_factory=set)
 
 
@@ -383,6 +411,11 @@ def sync_shopify(db: Session, connection: ChannelConnection, client=None) -> Syn
         .with_for_update()
         .one()
     )
+    if connection.mode == "live" and connection.inventory_authority_started_at is None:
+        # Safe upgrade path for a connection that was already live before the
+        # fulfillment-ledger migration: its current physical count is the
+        # baseline, so only later fulfillment deltas may move stock.
+        connection.inventory_authority_started_at = datetime.datetime.utcnow()
 
     # Strictly per-connection credentials: NEVER fall back to global env
     # credentials, or any org with the (default-on) channel_orders module could

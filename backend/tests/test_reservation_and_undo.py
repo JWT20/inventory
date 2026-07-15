@@ -139,6 +139,25 @@ def test_undo_twice_is_rejected(client, db, courier_token):
     assert bal.quantity_on_hand == 5  # restocked exactly once
 
 
+def test_undo_rejected_after_shopify_matched_local_fulfillment(
+    client, db, courier_token
+):
+    org = _org(db, "undo-source-fulfilled")
+    sku = _sku(db, org, "SOK-F", "8712000000091")
+    order = _order(db, org, sku, channel="shopify")
+    _balance(db, sku, org, on_hand=5, reserved=2)
+
+    booking_id = _scan(client, courier_token, order.id, sku.ean).json()["booking_id"]
+    line = order.lines[0]
+    line.channel_fulfilled_from_app = 1
+    db.commit()
+
+    resp = _undo(client, courier_token, booking_id)
+    assert resp.status_code == 409
+    bal = _reload_balance(db, sku, org)
+    assert (bal.quantity_on_hand, bal.quantity_reserved) == (4, 1)
+
+
 def test_courier_list_includes_completed_channel_barcode(client, db, courier_token):
     # #3: a completed channel barcode order stays in the courier worklist so the
     # label step is reachable after a refresh.

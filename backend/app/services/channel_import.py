@@ -7,9 +7,10 @@ service knows nothing about any specific channel: it upserts an Order keyed on
 each line's EAN to a SKU within the order's organization, and records what
 matched / did not for the reconciliation view.
 
-Observe-mode invariants: imported orders get the inert ``observed`` status, and
-no stock ever moves here (``apply_stock_movement`` is never called). Cutover
-(live mode) only changes the target status to ``active``.
+Observe-mode invariants: imported orders get the inert ``observed`` status and
+no stock moves. In live mode, exact source-line quantities reconcile open
+reservations and external/home fulfillments against the single physical stock
+pool.
 
 Does NOT commit — the caller owns the transaction boundary, mirroring
 ``apply_booking`` / ``apply_stock_movement``.
@@ -25,7 +26,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from app.models import ChannelConnection, ChannelSyncLog, Order, OrderLine, SKU
-from app.services.stock import adjust_reservation
+from app.services.stock import adjust_reservation, apply_stock_movement
 
 
 @dataclass
@@ -34,6 +35,10 @@ class NormalizedLine:
     ean: str | None
     quantity: int
     title: str = ""
+    external_id: str | None = None
+    # Exact remaining quantity at the source. None keeps non-Shopify adapters on
+    # the conservative legacy path.
+    unfulfilled_quantity: int | None = None
 
 
 @dataclass
@@ -67,8 +72,8 @@ class ImportResult:
     created: bool
     matched_lines: int
     unmatched_eans: list[str]
-    # SKUs whose stock got reserved because this order just went live (born-active
-    # or cutover). The caller pushes their new available to Shopify.
+    # SKUs whose reservation or physical stock changed. The caller pushes their
+    # new available to Shopify.
     reserved_sku_ids: list[int] = field(default_factory=list)
 
 
@@ -76,16 +81,13 @@ class ImportResult:
 # else (pending/refunded/voided/…) must never become a born-active, pickable order.
 _FULFILLABLE_FINANCIAL_STATUSES = {"paid"}
 
-# Shopify fulfillment statuses that mean "already shipped" — such orders must
-# never become born-active/pickable, even in live mode, or the warehouse would
-# pick something that already left (shipped from home, or labelled by the
-# courier). Mirrors the observe UI's "verzonden" badge. Because the importer
-# cannot infer which stock pool shipped it, this still requires review.
+# Shopify fulfillment statuses that mean "already shipped". Exact line-level
+# quantities keep these orders out of the pick list while reconciling newly
+# fulfilled units. Adapters without exact line data remain conservative.
 _SHIPPED_FULFILLMENT_STATUSES = {"fulfilled"}
 
-# A partially fulfilled Shopify order is unsafe until line-level remaining
-# quantities are imported. Park it instead of assuming the original quantities
-# are still outstanding (which could ship the same unit twice).
+# A partially fulfilled order is safe only with exact line-level remaining
+# quantities. Otherwise park it rather than risk shipping the same unit twice.
 _PARTIALLY_SHIPPED_FULFILLMENT_STATUSES = {"partially_fulfilled"}
 
 REVIEW_UNKNOWN_EAN = "unknown_ean"
@@ -94,6 +96,8 @@ REVIEW_NON_FULFILLABLE_AFTER_PICK = "non_fulfillable_after_pick"
 REVIEW_FULFILLED_ELSEWHERE = "fulfilled_elsewhere"
 REVIEW_PARTIALLY_FULFILLED = "partially_fulfilled"
 REVIEW_ORDER_CHANGED_AFTER_PICK = "order_changed_after_pick"
+REVIEW_FULFILLMENT_REVERSED = "fulfillment_reversed"
+REVIEW_FULFILLMENT_MISMATCH = "fulfillment_quantity_mismatch"
 
 # Only these review causes may use the explicit cancel/restock decision. Other
 # causes need a different workflow and must remain safely parked.
@@ -117,38 +121,185 @@ def _open_quantities_by_sku(lines: list[OrderLine]) -> dict[int, int]:
     )
 
 
-def _total_quantities_by_sku(lines: list[OrderLine]) -> dict[int, int]:
-    return _quantities_by_sku([(line.sku_id, line.quantity) for line in lines])
+@dataclass
+class _LinePlan:
+    sku: SKU
+    source: NormalizedLine
+    existing: OrderLine | None
+    desired_quantity: int
+    fulfilled_seen: int
+    fulfilled_from_app: int
+    fulfilled_external: int
+    external_delta: int = 0
 
 
-def _release_order_reservation(
-    db: Session, lines: list[OrderLine], org_id: int
-) -> list[int]:
-    """Release the reservation an active order was holding — its open (unbooked)
-    quantity per SKU. Used when an active order is parked back to a blocked state.
-    Returns the affected SKU ids so the caller can push the freshened available.
+def _on_or_after(
+    value: datetime.datetime | None, boundary: datetime.datetime | None
+) -> bool:
+    """Compare source and DB timestamps without mixing aware/naive objects."""
+    if value is None or boundary is None:
+        return False
+    if value.tzinfo is not None:
+        value = value.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    if boundary.tzinfo is not None:
+        boundary = boundary.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return value >= boundary
+
+
+def _line_plans(
+    *,
+    matched_items: list[tuple[SKU, NormalizedLine]],
+    existing_lines: list[OrderLine],
+    connection: ChannelConnection,
+    order: NormalizedChannelOrder,
+    created: bool,
+    existing_status: str | None,
+) -> tuple[list[_LinePlan], list[OrderLine], bool, bool]:
+    """Match source lines to local lines and derive idempotent fulfillment deltas.
+
+    Returns plans, removed local lines, whether an exact fulfillment counter went
+    backwards, and whether an order edit is unsafe after picking started.
     """
-    released: list[int] = []
-    # Aggregate duplicate SKU lines and lock balances in a deterministic order.
-    # That makes concurrent imports for the same products serialize cleanly and
-    # avoids deadlocks caused by opposite line order.
-    for sku_id, open_qty in sorted(_open_quantities_by_sku(lines).items()):
-        if open_qty:
-            adjust_reservation(
-                db, sku_id=sku_id, organization_id=org_id, delta=-open_qty
+    by_external = {
+        line.channel_line_id: line
+        for line in existing_lines
+        if line.channel_line_id is not None
+    }
+    claimed: set[int] = set()
+    plans: list[_LinePlan] = []
+    reversed_fulfillment = False
+    unsafe_picked_edit = False
+
+    for sku, source in matched_items:
+        local = by_external.get(source.external_id) if source.external_id else None
+        if local is None:
+            # Upgrade legacy rows without line ids when the SKU match is
+            # unambiguous. Duplicate same-SKU legacy lines are rebuilt only when
+            # nothing was picked; otherwise the edit is parked below.
+            candidates = [
+                line
+                for line in existing_lines
+                if line.id not in claimed and line.sku_id == sku.id
+            ]
+            if len(candidates) == 1:
+                local = candidates[0]
+        if local is not None:
+            claimed.add(local.id)
+
+        booked = local.booked_count if local is not None else 0
+        exact = (
+            source.external_id is not None
+            and source.unfulfilled_quantity is not None
+        )
+        current = max(0, source.quantity)
+
+        if not exact:
+            if local is not None and booked > 0 and (
+                local.sku_id != sku.id or local.quantity != current
+            ):
+                unsafe_picked_edit = True
+            elif local is None and any(
+                line.booked_count > 0 for line in existing_lines
+            ):
+                unsafe_picked_edit = True
+            plans.append(
+                _LinePlan(
+                    sku=sku,
+                    source=source,
+                    existing=local,
+                    desired_quantity=max(booked, current),
+                    fulfilled_seen=local.channel_fulfilled_seen if local else 0,
+                    fulfilled_from_app=(
+                        local.channel_fulfilled_from_app if local else 0
+                    ),
+                    fulfilled_external=(
+                        local.channel_fulfilled_external if local else 0
+                    ),
+                )
             )
-            released.append(sku_id)
-    return released
+            continue
+
+        unfulfilled = min(current, max(0, source.unfulfilled_quantity or 0))
+        remote_fulfilled = current - unfulfilled
+        seen = local.channel_fulfilled_seen if local is not None else 0
+        from_app = local.channel_fulfilled_from_app if local is not None else 0
+        external = local.channel_fulfilled_external if local is not None else 0
+
+        # Observe mode continuously baselines remote fulfillment without moving
+        # stock. At go-live, a newly discovered historical order is also part of
+        # the physical opening count. A post-cutover order is processed even when
+        # first seen already fully fulfilled.
+        before_authority = not _on_or_after(
+            order.ordered_at, connection.inventory_authority_started_at
+        )
+        legacy_historical = (
+            local is not None
+            and local.channel_line_id is None
+            and existing_status in ("observed", "pending_product")
+            and before_authority
+        )
+        baseline = connection.mode != "live" or (
+            (created and before_authority) or legacy_historical
+        )
+        external_delta = 0
+        if baseline:
+            seen = remote_fulfilled
+        elif remote_fulfilled < seen:
+            # A fulfillment was reversed/returned. Never guess that goods came
+            # physically back; that requires the same explicit restock decision
+            # as a picked cancellation.
+            reversed_fulfillment = True
+        else:
+            delta = remote_fulfilled - seen
+            local_unmatched = max(0, booked - from_app)
+            matched_to_app = min(delta, local_unmatched)
+            external_delta = delta - matched_to_app
+            from_app += matched_to_app
+            external += external_delta
+            seen = remote_fulfilled
+
+        local_unmatched_after = max(0, booked - from_app)
+        desired = booked + max(0, unfulfilled - local_unmatched_after)
+
+        if local is not None and booked > 0:
+            if local.sku_id != sku.id:
+                unsafe_picked_edit = True
+            if (
+                local.channel_current_quantity is not None
+                and local.channel_current_quantity != current
+            ):
+                unsafe_picked_edit = True
+        elif local is None and any(line.booked_count > 0 for line in existing_lines):
+            unsafe_picked_edit = True
+
+        plans.append(
+            _LinePlan(
+                sku=sku,
+                source=source,
+                existing=local,
+                desired_quantity=max(booked, desired),
+                fulfilled_seen=seen,
+                fulfilled_from_app=from_app,
+                fulfilled_external=external,
+                external_delta=external_delta,
+            )
+        )
+
+    removed = [line for line in existing_lines if line.id not in claimed]
+    if any(line.booked_count > 0 for line in removed):
+        unsafe_picked_edit = True
+    return plans, removed, reversed_fulfillment, unsafe_picked_edit
 
 
 def import_channel_order(
     db: Session, connection: ChannelConnection, order: NormalizedChannelOrder
 ) -> ImportResult:
-    """Upsert one channel order and record its EAN-match result.
+    """Upsert one channel order and reconcile exact source fulfillment.
 
-    Idempotent on ``(organization, channel, external_id)``: re-importing the same
-    order updates it instead of duplicating. Unmatched EANs are reported, never
-    auto-created as products.
+    Exact adapters identify each order line and report its current unfulfilled
+    quantity. A newly fulfilled unit is first matched to an in-app pick (whose
+    stock already moved); only the unmatched remainder becomes an automated
+    physical stock movement. Observe mode baselines counters without moving stock.
     """
     org_id = connection.organization_id
     channel = connection.channel
@@ -157,55 +308,28 @@ def import_channel_order(
     partially_shipped = (
         order.fulfillment_status in _PARTIALLY_SHIPPED_FULFILLMENT_STATUSES
     )
-    # Shopify's authoritative cancellation signal — an order can be cancelled
-    # without a refund (financial_status stays "paid"), so we must not rely on the
-    # financial status alone to keep a cancelled order out of the pick list.
     is_cancelled = order.cancelled_at is not None
 
-    # Resolve every line to a SKU (by EAN, within the org) up front — a pure read
-    # pass — so the status decision below can see whether the order is fully
-    # matched. An order with an unknown product must never silently activate with
-    # that product dropped.
-    matched_items: list[tuple[SKU, int]] = []
+    matched_items: list[tuple[SKU, NormalizedLine]] = []
     unmatched: list[str] = []
-    for nl in order.lines:
+    for source in order.lines:
         sku = None
-        if nl.ean:
+        if source.ean:
             sku = (
                 db.query(SKU)
-                .filter(SKU.organization_id == org_id, SKU.ean == nl.ean)
+                .filter(SKU.organization_id == org_id, SKU.ean == source.ean)
                 .first()
             )
         if sku is None:
-            unmatched.append(nl.ean or "(geen EAN)")
+            unmatched.append(source.ean or "(geen EAN)")
         else:
-            matched_items.append((sku, nl.quantity))
+            matched_items.append((sku, source))
     matched = len(matched_items)
     has_unmatched = bool(unmatched)
-
-    # Live-mode makes an order pickable only when it is fulfillable (paid), not
-    # already shipped, AND every line matched a product. An order with an unknown
-    # EAN parks in "pending_product" (visible as blocked, never in the pick list)
-    # instead of activating with the missing product dropped — it self-heals to
-    # active on a re-sync once the product is added. Partial fulfilments park for
-    # review until line-level remaining quantities are imported. Non-live /
-    # unpaid / shipped / cancelled orders stay inert ("observed").
-    if (
-        connection.mode == "live"
-        and fulfillable
-        and partially_shipped
-        and not is_cancelled
-    ):
-        target_status = "needs_review"
-    elif (
-        connection.mode == "live"
-        and fulfillable
-        and not already_shipped
-        and not is_cancelled
-    ):
-        target_status = "pending_product" if has_unmatched else "active"
-    else:
-        target_status = "observed"
+    exact_lines = bool(order.lines) and all(
+        line.external_id is not None and line.unfulfilled_quantity is not None
+        for line in order.lines
+    )
 
     existing = (
         db.query(Order)
@@ -217,10 +341,6 @@ def import_channel_order(
         .first()
     )
     created = existing is None
-
-    # Use the same lock order as the picker: lines first, then the order. Status,
-    # booked counts, line replacement and reservation deltas are consequently one
-    # transaction instead of racing a scan in another request.
     existing_lines: list[OrderLine] = []
     if existing is not None:
         existing_lines = (
@@ -232,189 +352,198 @@ def import_channel_order(
         )
         db.refresh(existing, with_for_update=True)
 
-    # An order that crosses into "active" this import reserves its stock, so the
-    # channel-visible available already excludes it (no oversell). Tracked here so
-    # we reserve exactly once — never on a plain re-sync of an already-active order.
-    became_active = False
-
-    # Bookings mean the courier already started picking — never silently rebuild
-    # or reconcile such an order.
+    plans, removed_lines, fulfillment_reversed, unsafe_picked_edit = _line_plans(
+        matched_items=matched_items,
+        existing_lines=existing_lines,
+        connection=connection,
+        order=order,
+        created=created,
+        existing_status=existing.status if existing is not None else None,
+    )
     has_bookings = any(line.booked_count > 0 for line in existing_lines)
-    affected_sku_ids: list[int] = []
-    incoming_quantities = _quantities_by_sku(
-        [(sku.id, quantity) for sku, quantity in matched_items]
+    remote_unfulfilled = sum(
+        max(0, line.unfulfilled_quantity or 0) for line in order.lines
     )
-    line_changed = (not created) and (
-        _total_quantities_by_sku(existing_lines) != incoming_quantities
+    fully_fulfilled_exact = exact_lines and remote_unfulfilled == 0
+
+    # Base lifecycle for a new/inert order. Existing active/review states add
+    # safety policy below.
+    if connection.mode != "live":
+        target_status = "observed"
+    elif is_cancelled or not fulfillable:
+        target_status = "observed"
+    elif has_unmatched:
+        target_status = "pending_product"
+    elif partially_shipped and not exact_lines:
+        target_status = "needs_review"
+    elif already_shipped and exact_lines and not fully_fulfilled_exact:
+        target_status = "needs_review"
+    elif already_shipped and not exact_lines:
+        target_status = "observed"
+    elif fully_fulfilled_exact:
+        historical = created and not _on_or_after(
+            order.ordered_at, connection.inventory_authority_started_at
+        )
+        target_status = "observed" if historical else "shipped"
+    else:
+        target_status = "active"
+
+    old_status = existing.status if existing is not None else None
+    old_reason = existing.review_reason if existing is not None else None
+    final_status = target_status
+    review_reason: str | None = (
+        REVIEW_PARTIALLY_FULFILLED
+        if target_status == "needs_review" and partially_shipped
+        else REVIEW_FULFILLMENT_MISMATCH
+        if target_status == "needs_review" and already_shipped and exact_lines
+        else None
     )
+
+    if old_status in ("cancelled", "closed"):
+        final_status = old_status
+    elif fulfillment_reversed:
+        final_status = "needs_review"
+        review_reason = REVIEW_FULFILLMENT_REVERSED
+    elif has_unmatched and old_status in ("active", "completed", "needs_review"):
+        if has_bookings:
+            final_status = "needs_review"
+            review_reason = REVIEW_UNKNOWN_EAN
+        else:
+            final_status = "pending_product"
+    elif (is_cancelled or not fulfillable) and old_status in (
+        "active",
+        "completed",
+        "needs_review",
+    ):
+        if has_bookings:
+            final_status = "needs_review"
+            review_reason = (
+                REVIEW_CANCELLED_AFTER_PICK
+                if is_cancelled
+                else REVIEW_NON_FULFILLABLE_AFTER_PICK
+            )
+        else:
+            final_status = "cancelled"
+    elif unsafe_picked_edit and has_bookings:
+        final_status = "needs_review"
+        review_reason = REVIEW_ORDER_CHANGED_AFTER_PICK
+    elif old_status == "active" and already_shipped and not exact_lines:
+        final_status = "needs_review"
+        review_reason = REVIEW_FULFILLED_ELSEWHERE
+    elif old_status == "active" and partially_shipped and not exact_lines:
+        final_status = "needs_review"
+        review_reason = REVIEW_PARTIALLY_FULFILLED
+    elif old_status == "needs_review":
+        # Exact fulfillment data is the missing evidence for these two legacy
+        # parked causes, so they may self-heal. Other causes remain explicitly
+        # human-gated.
+        if old_reason not in (
+            REVIEW_PARTIALLY_FULFILLED,
+            REVIEW_FULFILLED_ELSEWHERE,
+        ):
+            final_status = "needs_review"
+            review_reason = old_reason
+    elif old_status == "completed" and not fully_fulfilled_exact:
+        final_status = "completed"
+    elif old_status == "shipped":
+        final_status = "shipped"
 
     if created:
         db_order = Order(
             organization_id=org_id,
             channel=channel,
             external_id=order.external_id,
-            # Unique internal reference; the channel's own order id lives in
-            # external_id and is shown in the reconciliation view.
             reference=f"{channel[:3].upper()}-{uuid.uuid4().hex[:8].upper()}",
             channel_reference=order.reference,
             channel_fulfillment_status=order.fulfillment_status,
-            status=target_status,
-            review_reason=(
-                REVIEW_PARTIALLY_FULFILLED
-                if target_status == "needs_review"
-                else None
-            ),
+            status=final_status,
+            review_reason=review_reason,
             ordered_at=order.ordered_at,
             created_by=None,
         )
         db.add(db_order)
         db.flush()
-        became_active = target_status == "active"
     else:
         db_order = existing
-        status = db_order.status
-        if status in ("observed", "pending_product") and target_status in (
-            "active",
-            "pending_product",
-            "needs_review",
-        ):
-            # Cutover (observed→active), product added (pending_product→active), or
-            # still waiting (→pending_product). Reserves on reaching active.
-            db_order.status = target_status
-            became_active = target_status == "active"
-            db_order.review_reason = (
-                REVIEW_PARTIALLY_FULFILLED
-                if target_status == "needs_review"
-                else None
-            )
-        elif status == "pending_product" and target_status == "observed":
-            # The blocked order later became non-fulfillable/fulfilled at the
-            # channel → drop the block so it stops showing "Wacht op product" (and
-            # stops triggering self-heal re-syncs).
-            db_order.status = "observed"
-            db_order.review_reason = None
-        elif status == "active" and target_status == "needs_review":
-            # Until the importer knows Shopify's remaining quantity per line, a
-            # partial fulfilment is unsafe to pick. Keep the held reservation and
-            # original lines intact for later line-level reconciliation.
-            db_order.status = "needs_review"
-            db_order.review_reason = REVIEW_PARTIALLY_FULFILLED
-        elif status == "active" and target_status == "observed":
-            # The order should leave the pick list. WHY decides how:
-            if already_shipped and not is_cancelled:
-                # Fulfilled elsewhere (shipped from home): the goods physically
-                # left, but we can't prove from which pool. Releasing the
-                # reservation would raise `available` and risk oversell — hand it
-                # to a human rather than guess a stock movement.
-                db_order.status = "needs_review"
-                db_order.review_reason = REVIEW_FULFILLED_ELSEWHERE
-            elif has_bookings:
-                # Cancelled/refunded but picking already started — a human decides.
-                db_order.status = "needs_review"
-                db_order.review_reason = (
-                    REVIEW_CANCELLED_AFTER_PICK
-                    if is_cancelled
-                    else REVIEW_NON_FULFILLABLE_AFTER_PICK
-                    if not fulfillable
-                    else REVIEW_ORDER_CHANGED_AFTER_PICK
-                )
-            else:
-                # Genuinely cancelled/refunded and nothing picked: release the
-                # reservation and cancel it.
-                affected_sku_ids.extend(
-                    _release_order_reservation(db, existing_lines, org_id)
-                )
-                db_order.status = "cancelled"
-                db_order.review_reason = None
-        elif status == "active" and has_unmatched:
-            # An already-active (still fulfillable) order gained an unknown line
-            # (edited at the channel, or imported partially before this guard
-            # existed). It must not stay pickable-but-incomplete.
-            if has_bookings:
-                # Picking already started — hand to a human, don't auto-reconcile
-                # or drop the booked work.
-                db_order.status = "needs_review"
-                db_order.review_reason = REVIEW_UNKNOWN_EAN
-            else:
-                # Nothing picked yet: park as blocked and release its reservation
-                # (it re-reserves if it self-heals back to active once the missing
-                # product is added).
-                affected_sku_ids.extend(
-                    _release_order_reservation(db, existing_lines, org_id)
-                )
-                db_order.status = "pending_product"
-                db_order.review_reason = None
-        elif status == "active" and target_status == "active" and line_changed:
-            if has_bookings:
-                # We cannot safely redistribute work after a physical pick.
-                db_order.status = "needs_review"
-                db_order.review_reason = REVIEW_ORDER_CHANGED_AFTER_PICK
-            else:
-                # Exact reservation delta for every product, applied in stable
-                # SKU order in the same transaction as replacing the lines.
-                old_open = _open_quantities_by_sku(existing_lines)
-                for sku_id in sorted(set(old_open) | set(incoming_quantities)):
-                    delta = (
-                        incoming_quantities.get(sku_id, 0)
-                        - old_open.get(sku_id, 0)
-                    )
-                    if delta:
-                        adjust_reservation(
-                            db,
-                            sku_id=sku_id,
-                            organization_id=org_id,
-                            delta=delta,
-                        )
-                        affected_sku_ids.append(sku_id)
-                db_order.review_reason = None
-        elif status == "needs_review":
-            # Never auto-resume a parked order. Refresh only causes that are
-            # authoritative in the latest channel snapshot.
-            if is_cancelled:
-                db_order.review_reason = REVIEW_CANCELLED_AFTER_PICK
-            elif not fulfillable:
-                db_order.review_reason = REVIEW_NON_FULFILLABLE_AFTER_PICK
-            elif already_shipped:
-                db_order.review_reason = REVIEW_FULFILLED_ELSEWHERE
-            elif partially_shipped:
-                db_order.review_reason = REVIEW_PARTIALLY_FULFILLED
-            elif has_unmatched:
-                db_order.review_reason = REVIEW_UNKNOWN_EAN
-        # active + fully matched + fulfillable, or terminal states: left untouched
-        # (reserve once).
+        db_order.status = final_status
+        db_order.review_reason = review_reason if final_status == "needs_review" else None
         if order.ordered_at is not None:
             db_order.ordered_at = order.ordered_at
-        # Backfill / refresh the order number on re-import (e.g. for orders
-        # imported before this column existed).
         if order.reference is not None:
             db_order.channel_reference = order.reference
-        # Refresh fulfillment status on every re-sync: an order shipped from home
-        # (or labelled by the courier) flips to "fulfilled" in Shopify, and the
-        # observe view must reflect that.
         db_order.channel_fulfillment_status = order.fulfillment_status
 
-    # Rebuild the matched lines on re-import from the up-front match pass. Safe
-    # because parked orders (observed/pending_product) are inert; never touch an
-    # order that already has bookings (needs_review / mid-pick).
-    rebuild_lines = created or (
-        not has_bookings and db_order.status != "needs_review"
-    )
-    if not created and rebuild_lines:
-        for line in existing_lines:
+    affected_sku_ids: list[int] = []
+    if final_status != "needs_review":
+        old_open = (
+            _open_quantities_by_sku(existing_lines)
+            if old_status in ("active", "needs_review")
+            else {}
+        )
+        target_open = (
+            _quantities_by_sku(
+                [
+                    (
+                        plan.sku.id,
+                        plan.desired_quantity
+                        - (plan.existing.booked_count if plan.existing else 0),
+                    )
+                    for plan in plans
+                ]
+            )
+            if final_status == "active"
+            else {}
+        )
+        # Reservation changes happen before external stock deductions. This is
+        # the same invariant as an in-app pick and keeps fully-reserved products
+        # deductible without temporarily violating on_hand >= reserved.
+        for sku_id in sorted(set(old_open) | set(target_open)):
+            delta = target_open.get(sku_id, 0) - old_open.get(sku_id, 0)
+            if delta:
+                adjust_reservation(
+                    db, sku_id=sku_id, organization_id=org_id, delta=delta
+                )
+                affected_sku_ids.append(sku_id)
+
+    if final_status != "needs_review" or created:
+        for plan in plans:
+            local = plan.existing
+            if local is None:
+                local = OrderLine(order_id=db_order.id, sku_id=plan.sku.id)
+                db.add(local)
+                plan.existing = local
+            local.sku_id = plan.sku.id
+            local.klant = order.customer_name or ""
+            local.customer_id = None
+            local.quantity = plan.desired_quantity
+            local.channel_line_id = plan.source.external_id
+            local.channel_current_quantity = plan.source.quantity
+            local.channel_unfulfilled_quantity = plan.source.unfulfilled_quantity
+            local.channel_fulfilled_seen = plan.fulfilled_seen
+            local.channel_fulfilled_from_app = plan.fulfilled_from_app
+            local.channel_fulfilled_external = plan.fulfilled_external
+        for line in removed_lines:
             db.delete(line)
         db.flush()
 
-    if rebuild_lines:
-        for sku, quantity in matched_items:
-            db.add(
-                OrderLine(
-                    order_id=db_order.id,
-                    sku_id=sku.id,
-                    klant=order.customer_name or "",
-                    customer_id=None,
-                    quantity=quantity,
+    if final_status != "needs_review":
+        external_by_sku = _quantities_by_sku(
+            [(plan.sku.id, plan.external_delta) for plan in plans]
+        )
+        for sku_id, quantity in sorted(external_by_sku.items()):
+            if quantity:
+                apply_stock_movement(
+                    db,
+                    sku_id=sku_id,
+                    organization_id=org_id,
+                    quantity=-quantity,
+                    movement_type="fulfillment",
+                    reference_type="channel_fulfill",
+                    reference_id=db_order.id,
+                    note="Extern/vanuit huis verzonden via Shopify",
+                    performed_by=None,
                 )
-            )
+                affected_sku_ids.append(sku_id)
 
     # One sync-log row per order (upsert), not one per import: the watermark
     # cursor re-sees the boundary order every poll, which would otherwise grow
@@ -441,29 +570,12 @@ def import_channel_order(
     connection.last_synced_at = datetime.datetime.utcnow()
     db.flush()
 
-    # Reserve the freshly-active order's open quantity per SKU. The lines were
-    # just rebuilt via db.add() (not appended to the cached collection), so on the
-    # promote path db_order.lines is stale — expire it to reload the fresh rows,
-    # otherwise a cutover would activate the order without reserving any stock.
-    db.expire(db_order, ["lines"])
-    # Released/reconciled reservations also changed channel-visible available, so
-    # push them alongside any freshly reserved products.
-    reserved_sku_ids: list[int] = list(affected_sku_ids)
-    if became_active:
-        active_open = _open_quantities_by_sku(list(db_order.lines))
-        for sku_id, open_qty in sorted(active_open.items()):
-            if open_qty:
-                adjust_reservation(
-                    db, sku_id=sku_id, organization_id=org_id, delta=open_qty
-                )
-                reserved_sku_ids.append(sku_id)
-
     return ImportResult(
         order_id=db_order.id,
         created=created,
         matched_lines=matched,
         unmatched_eans=unmatched,
-        reserved_sku_ids=sorted(set(reserved_sku_ids)),
+        reserved_sku_ids=sorted(set(affected_sku_ids)),
     )
 
 

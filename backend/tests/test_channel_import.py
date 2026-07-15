@@ -5,6 +5,7 @@ external_id), resolves lines by EAN within the org, records matched/unmatched
 for reconciliation, gives observe-mode orders the inert "observed" status, and
 never moves stock.
 """
+import datetime
 import json
 
 from app.models import (
@@ -733,3 +734,188 @@ def test_active_order_becoming_partial_keeps_reservation_and_original_lines(db):
     assert saved.review_reason == "partially_fulfilled"
     assert [line.quantity for line in saved.lines] == [2]
     assert db.query(InventoryBalance).filter_by(sku_id=sku.id).one().quantity_reserved == 2
+
+
+# --- exact source lines: external/home fulfillment without locations --------
+
+def _exact_line(ean, *, current, unfulfilled, line_id="gid://shopify/LineItem/1"):
+    return NormalizedLine(
+        ean=ean,
+        quantity=current,
+        external_id=line_id,
+        unfulfilled_quantity=unfulfilled,
+    )
+
+
+def _authority_started(conn):
+    conn.inventory_authority_started_at = datetime.datetime(2026, 7, 15, 10, 0)
+
+
+def test_born_fulfilled_after_cutover_deducts_stock_once(db):
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-born-home")
+    conn = _connection(db, org, mode="live")
+    _authority_started(conn)
+    sku = _sku(db, org, "SOK-1", "8710000000700")
+    db.add(InventoryBalance(sku_id=sku.id, organization_id=org.id,
+                            quantity_on_hand=10, quantity_reserved=0))
+    db.commit()
+    order = _order(external_id="SHOP-HOME-BORN", lines=[
+        _exact_line(sku.ean, current=2, unfulfilled=0),
+    ])
+    order.ordered_at = datetime.datetime(2026, 7, 15, 10, 1)
+    order.fulfillment_status = "fulfilled"
+
+    first = import_channel_order(db, conn, order)
+    db.commit()
+    second = import_channel_order(db, conn, order)
+    db.commit()
+
+    saved = db.get(Order, first.order_id)
+    line = saved.lines[0]
+    balance = db.query(InventoryBalance).filter_by(sku_id=sku.id).one()
+    assert saved.status == "shipped"
+    assert (balance.quantity_on_hand, balance.quantity_reserved) == (8, 0)
+    assert (line.channel_fulfilled_seen, line.channel_fulfilled_external) == (2, 2)
+    assert db.query(StockMovement).filter_by(
+        reference_type="channel_fulfill", reference_id=saved.id
+    ).count() == 1
+    assert first.reserved_sku_ids == [sku.id]
+    assert second.reserved_sku_ids == []  # idempotent: no second stock push/move
+
+
+def test_active_order_fulfilled_externally_converts_reservation_to_stock(db):
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-active-home")
+    conn = _connection(db, org, mode="live")
+    _authority_started(conn)
+    sku = _sku(db, org, "SOK-1", "8710000000710")
+    db.add(InventoryBalance(sku_id=sku.id, organization_id=org.id,
+                            quantity_on_hand=10, quantity_reserved=0))
+    db.commit()
+    order = _order(external_id="SHOP-HOME-ACTIVE", lines=[
+        _exact_line(sku.ean, current=2, unfulfilled=2),
+    ])
+    order.ordered_at = datetime.datetime(2026, 7, 15, 10, 1)
+    result = import_channel_order(db, conn, order)
+    db.commit()
+    assert db.query(InventoryBalance).filter_by(sku_id=sku.id).one().quantity_reserved == 2
+
+    order.lines[0].unfulfilled_quantity = 0
+    order.fulfillment_status = "fulfilled"
+    import_channel_order(db, conn, order)
+    db.commit()
+
+    saved = db.get(Order, result.order_id)
+    balance = db.query(InventoryBalance).filter_by(sku_id=sku.id).one()
+    assert saved.status == "shipped"
+    assert (balance.quantity_on_hand, balance.quantity_reserved) == (8, 0)
+    assert saved.lines[0].quantity == 0
+
+
+def test_partial_home_then_app_pick_reconciles_without_double_deduct(db):
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-home-then-app")
+    conn = _connection(db, org, mode="live")
+    _authority_started(conn)
+    sku = _sku(db, org, "SOK-1", "8710000000720")
+    db.add(InventoryBalance(sku_id=sku.id, organization_id=org.id,
+                            quantity_on_hand=10, quantity_reserved=0))
+    db.commit()
+    order = _order(external_id="SHOP-MIXED", lines=[
+        _exact_line(sku.ean, current=2, unfulfilled=2),
+    ])
+    order.ordered_at = datetime.datetime(2026, 7, 15, 10, 1)
+    result = import_channel_order(db, conn, order)
+    db.commit()
+
+    # One unit leaves externally/home: physical stock and reservation both -1.
+    order.lines[0].unfulfilled_quantity = 1
+    order.fulfillment_status = "partially_fulfilled"
+    import_channel_order(db, conn, order)
+    db.commit()
+    saved = db.get(Order, result.order_id)
+    balance = db.query(InventoryBalance).filter_by(sku_id=sku.id).one()
+    assert saved.status == "active"
+    assert (saved.lines[0].quantity, saved.lines[0].booked_count) == (1, 0)
+    assert (balance.quantity_on_hand, balance.quantity_reserved) == (9, 1)
+
+    # The remaining unit is picked in-app (simulate booking's atomic effects).
+    saved.lines[0].booked_count = 1
+    balance.quantity_on_hand = 8
+    balance.quantity_reserved = 0
+    db.commit()
+
+    # Shopify later records that local unit too. It matches the app pick and must
+    # not decrement physical stock a second time.
+    order.lines[0].unfulfilled_quantity = 0
+    order.fulfillment_status = "fulfilled"
+    import_channel_order(db, conn, order)
+    db.commit()
+    db.refresh(saved)
+    db.refresh(balance)
+    line = saved.lines[0]
+    assert saved.status == "shipped"
+    assert (balance.quantity_on_hand, balance.quantity_reserved) == (8, 0)
+    assert (line.channel_fulfilled_from_app, line.channel_fulfilled_external) == (1, 1)
+
+
+def test_historical_fulfilled_order_is_baselined_not_deducted(db):
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-home-baseline")
+    conn = _connection(db, org, mode="live")
+    _authority_started(conn)
+    sku = _sku(db, org, "SOK-1", "8710000000730")
+    db.add(InventoryBalance(sku_id=sku.id, organization_id=org.id,
+                            quantity_on_hand=8, quantity_reserved=0))
+    db.commit()
+    order = _order(external_id="SHOP-HISTORICAL", lines=[
+        _exact_line(sku.ean, current=2, unfulfilled=0),
+    ])
+    order.ordered_at = datetime.datetime(2026, 7, 15, 9, 59)
+    order.fulfillment_status = "fulfilled"
+
+    result = import_channel_order(db, conn, order)
+    db.commit()
+
+    saved = db.get(Order, result.order_id)
+    balance = db.query(InventoryBalance).filter_by(sku_id=sku.id).one()
+    assert saved.status == "observed"
+    assert balance.quantity_on_hand == 8
+    assert saved.lines[0].channel_fulfilled_seen == 2
+    assert saved.lines[0].channel_fulfilled_external == 0
+    assert db.query(StockMovement).filter_by(reference_id=saved.id).count() == 0
+
+
+def test_fulfillment_counter_decrease_parks_without_auto_restock(db):
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-home-reversed")
+    conn = _connection(db, org, mode="live")
+    _authority_started(conn)
+    sku = _sku(db, org, "SOK-1", "8710000000740")
+    db.add(InventoryBalance(sku_id=sku.id, organization_id=org.id,
+                            quantity_on_hand=10, quantity_reserved=0))
+    db.commit()
+    order = _order(external_id="SHOP-REVERSED", lines=[
+        _exact_line(sku.ean, current=2, unfulfilled=0),
+    ])
+    order.ordered_at = datetime.datetime(2026, 7, 15, 10, 1)
+    order.fulfillment_status = "fulfilled"
+    result = import_channel_order(db, conn, order)
+    db.commit()
+
+    order.lines[0].unfulfilled_quantity = 1
+    order.fulfillment_status = "partially_fulfilled"
+    import_channel_order(db, conn, order)
+    db.commit()
+
+    saved = db.get(Order, result.order_id)
+    balance = db.query(InventoryBalance).filter_by(sku_id=sku.id).one()
+    assert saved.status == "needs_review"
+    assert saved.review_reason == "fulfillment_reversed"
+    assert balance.quantity_on_hand == 8  # no guessed restock

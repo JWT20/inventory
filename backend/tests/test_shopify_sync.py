@@ -38,6 +38,7 @@ def _sku(db, org, code, ean):
 
 def _node(order_id, barcode, qty=2, updated="2026-06-23T10:00:00Z",
           fulfillment="UNFULFILLED"):
+    unfulfilled = 0 if fulfillment == "FULFILLED" else qty
     return {
         "id": f"gid://shopify/Order/{order_id}",
         "name": f"#{order_id}",
@@ -48,7 +49,10 @@ def _node(order_id, barcode, qty=2, updated="2026-06-23T10:00:00Z",
         "shippingAddress": {"name": "Web Klant"},
         "lineItems": {
             "edges": [
-                {"node": {"quantity": qty, "title": "Race sok",
+                {"node": {"id": f"gid://shopify/LineItem/{order_id}-1",
+                          "quantity": qty, "currentQuantity": qty,
+                          "unfulfilledQuantity": unfulfilled,
+                          "title": "Race sok",
                           "variant": {"barcode": barcode, "sku": "SOK-1"}}}
             ]
         },
@@ -90,11 +94,14 @@ def test_to_normalized_maps_barcode_to_ean():
     assert len(norm.lines) == 1
     assert norm.lines[0].ean == "8710000000001"
     assert norm.lines[0].quantity == 3
+    assert norm.lines[0].external_id == "gid://shopify/LineItem/1001-1"
+    assert norm.lines[0].unfulfilled_quantity == 3
 
 
 def test_to_normalized_maps_fulfilled_status():
     norm = to_normalized(_node("1003", "8710000000001", fulfillment="FULFILLED"))
     assert norm.fulfillment_status == "fulfilled"
+    assert norm.lines[0].unfulfilled_quantity == 0
 
 
 def test_to_normalized_missing_barcode_is_none():
