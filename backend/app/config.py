@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     # now" button covers "I need it now". Set to 0 to disable (manual sync only).
     shopify_autosync_interval_seconds: int = 180
 
+    # Veloyd shipping labels encode a track-and-trace value (for example V...)
+    # rather than the visible Shopify order reference. The server uses this key
+    # to resolve the barcode and verify its reference before shipping.
+    veloyd_api_key: str = ""
+    veloyd_api_base_url: str = "https://app.veloyd.nl/api"
+
     @field_validator("database_url")
     @classmethod
     def _check_database_url(cls, v: str) -> str:

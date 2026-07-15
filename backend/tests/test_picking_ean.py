@@ -4,9 +4,23 @@ POST /api/picking/scan-ean books one unit on a barcode order by scanned EAN.
 It is gated on the order's barcode_picking module (keyed on the order's org,
 not the courier's) and resolves the EAN within that org.
 """
+import pytest
+
 from app.auth import create_token, hash_password
 from app.models import Customer, InventoryBalance, Order, OrderLine, Organization, SKU, User
+from app.services.fulfillment_sync import ShopifyFulfillmentError
 from tests.conftest import auth_header
+
+
+@pytest.fixture(autouse=True)
+def _stub_shopify_fulfillment(monkeypatch):
+    """Keep endpoint tests offline; service/client behavior has focused tests."""
+
+    def _fulfill(_db, order, *, tracking_info=None):
+        order.channel_fulfillment_status = "fulfilled"
+        return True
+
+    monkeypatch.setattr("app.routers.picking.fulfill_shopify_order", _fulfill)
 
 
 def _make_org(db, slug, modules):
@@ -302,6 +316,74 @@ def test_label_match_ships_order(client, db, courier_token):
 
     db.refresh(order)
     assert order.status == "shipped"
+    assert order.channel_fulfillment_status == "fulfilled"
+
+
+def test_label_match_marks_shopify_before_local_ship(
+    client, db, courier_token, monkeypatch
+):
+    org = _barcode_org(db, "socks-lbl-shopify-fail")
+    order = _complete_order(db, org, "SOK-LSF", "8700000002010", "1272")
+
+    def _fail(_db, _order, *, tracking_info=None):
+        raise ShopifyFulfillmentError(
+            "Shopify kon de order niet als verzonden markeren; probeer opnieuw"
+        )
+
+    monkeypatch.setattr("app.routers.picking.fulfill_shopify_order", _fail)
+    resp = _scan_label(client, courier_token, order.id, "1272")
+
+    assert resp.status_code == 502
+    assert "Shopify kon" in resp.json()["detail"]
+    db.refresh(order)
+    assert order.status == "completed"
+    assert order.channel_fulfillment_status is None
+
+
+def test_veloyd_tracking_barcode_is_resolved_before_shopify_fulfillment(
+    client, db, courier_token, monkeypatch
+):
+    org = _barcode_org(db, "socks-lbl-veloyd")
+    order = _complete_order(db, org, "SOK-LV", "8700000002012", "1262")
+    seen = {}
+
+    class ResolvedLabel:
+        shopify_tracking_info = {
+            "number": "V793AUDS9F4MB",
+            "url": "https://tracking.example/V793AUDS9F4MB",
+            "company": "Break Away",
+        }
+
+    def _verify(scanned, expected):
+        seen["verify"] = (scanned, expected)
+        return ResolvedLabel()
+
+    def _fulfill(_db, target_order, *, tracking_info=None):
+        seen["fulfill"] = (target_order.id, tracking_info)
+        target_order.channel_fulfillment_status = "fulfilled"
+        return True
+
+    monkeypatch.setattr("app.routers.picking.verify_veloyd_label", _verify)
+    monkeypatch.setattr("app.routers.picking.fulfill_shopify_order", _fulfill)
+
+    resp = _scan_label(client, courier_token, order.id, "V793AUDS9F4MB")
+
+    assert resp.status_code == 200
+    assert seen["verify"] == ("V793AUDS9F4MB", "1262")
+    assert seen["fulfill"][1]["number"] == "V793AUDS9F4MB"
+
+
+def test_platform_admin_can_ship_cross_org_order(
+    client, db, admin_token
+):
+    org = _barcode_org(db, "socks-lbl-platform-admin")
+    order = _complete_order(db, org, "SOK-LPA", "8700000002011", "1273")
+
+    resp = _scan_label(client, admin_token, order.id, "1273")
+
+    assert resp.status_code == 200
+    db.refresh(order)
+    assert order.status == "shipped"
 
 
 def test_label_match_strips_leading_hash(client, db, courier_token):
@@ -313,9 +395,16 @@ def test_label_match_strips_leading_hash(client, db, courier_token):
     assert resp.json()["status"] == "shipped"
 
 
-def test_label_mismatch_blocks(client, db, courier_token):
+def test_label_mismatch_blocks(client, db, courier_token, monkeypatch):
     org = _barcode_org(db, "socks-lbl-bad")
     order = _complete_order(db, org, "SOK-L3", "8700000002003", "1262")
+
+    def _mismatch(_scanned, _expected):
+        from app.services.veloyd import VeloydLabelMismatch
+
+        raise VeloydLabelMismatch("Label hoort bij een andere order")
+
+    monkeypatch.setattr("app.routers.picking.verify_veloyd_label", _mismatch)
 
     resp = _scan_label(client, courier_token, order.id, "9999")
     assert resp.status_code == 409

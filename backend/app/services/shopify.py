@@ -34,12 +34,18 @@ from app.services.channel_import import (
 
 logger = logging.getLogger(__name__)
 
-# write_inventory + read_locations/read_inventory power the inventory write-back
-# (resolve location, set absolute available). Existing installs must reconnect to
-# grant the new scopes.
+# Inventory scopes power stock write-back. Fulfillment-order scopes let the
+# warehouse mark a Shopify order fulfilled only after its Veloyd label matched.
+# We need both merchant-managed and third-party scopes because Shopify may route
+# an order to a location managed by another app (for example Veloyd). Existing
+# installs must reconnect to grant newly-added scopes.
 OAUTH_SCOPES = (
     "read_orders,read_all_orders,read_products,"
-    "read_locations,read_inventory,write_inventory"
+    "read_locations,read_inventory,write_inventory,"
+    "read_merchant_managed_fulfillment_orders,"
+    "write_merchant_managed_fulfillment_orders,"
+    "read_third_party_fulfillment_orders,"
+    "write_third_party_fulfillment_orders"
 )
 _SHOP_DOMAIN_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$")
 
@@ -244,6 +250,31 @@ mutation($input: InventorySetQuantitiesInput!) {
 }
 """
 
+_ORDER_FULFILLMENT_ORDERS_QUERY = """
+query($id: ID!, $after: String) {
+  order(id: $id) {
+    displayFulfillmentStatus
+    fulfillmentOrders(first: 100, after: $after) {
+      nodes {
+        id
+        status
+        supportedActions { action }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}
+"""
+
+_FULFILLMENT_CREATE_MUTATION = """
+mutation($fulfillment: FulfillmentInput!, $message: String) {
+  fulfillmentCreate(fulfillment: $fulfillment, message: $message) {
+    fulfillment { id status }
+    userErrors { field message }
+  }
+}
+"""
+
 
 class ShopifyClient:
     """Minimal Shopify GraphQL Admin API client."""
@@ -369,6 +400,94 @@ class ShopifyClient:
         errors = (data.get("inventorySetQuantities") or {}).get("userErrors") or []
         if errors:
             raise RuntimeError(f"Shopify inventory set error: {errors}")
+
+    # --- Fulfillment write-back ----------------------------------------------
+
+    def fulfill_order(
+        self,
+        external_order_id: str,
+        *,
+        notify_customer: bool = False,
+        tracking_info: dict[str, str] | None = None,
+    ) -> bool:
+        """Fulfill every remaining fulfillment order for one Shopify order.
+
+        Returns ``True`` when at least one fulfillment was created and ``False``
+        when Shopify already considered the order fully fulfilled. Each
+        fulfillment order is submitted separately because Shopify only permits
+        fulfillment orders assigned to the same location in one mutation.
+
+        Omitting line items intentionally fulfills every remaining item in each
+        fulfillment order. The caller only invokes this after the local order is
+        completely picked and its physical Veloyd label has matched.
+        """
+        order_gid = (
+            external_order_id
+            if external_order_id.startswith("gid://shopify/Order/")
+            else f"gid://shopify/Order/{external_order_id}"
+        )
+        after = None
+        fulfillment_status = None
+        actionable_ids: list[str] = []
+
+        while True:
+            data = self._post(
+                _ORDER_FULFILLMENT_ORDERS_QUERY,
+                {"id": order_gid, "after": after},
+            )
+            order = data.get("order")
+            if not order:
+                raise RuntimeError("Shopify order niet gevonden")
+
+            fulfillment_status = order.get("displayFulfillmentStatus")
+            connection = order.get("fulfillmentOrders") or {}
+            for fulfillment_order in connection.get("nodes") or []:
+                actions = {
+                    item.get("action")
+                    for item in fulfillment_order.get("supportedActions") or []
+                }
+                if "CREATE_FULFILLMENT" in actions:
+                    actionable_ids.append(fulfillment_order["id"])
+
+            page = connection.get("pageInfo") or {}
+            if not page.get("hasNextPage"):
+                break
+            after = page.get("endCursor")
+
+        if fulfillment_status == "FULFILLED":
+            return False
+        if not actionable_ids:
+            raise RuntimeError(
+                "Shopify order heeft geen fulfillment die deze koppeling mag afronden"
+            )
+
+        for fulfillment_order_id in actionable_ids:
+            fulfillment_input = {
+                "lineItemsByFulfillmentOrder": [
+                    {"fulfillmentOrderId": fulfillment_order_id}
+                ],
+                # Veloyd already handles shipment communication; avoid a
+                # duplicate customer notification from Shopify.
+                "notifyCustomer": notify_customer,
+            }
+            if tracking_info:
+                fulfillment_input["trackingInfo"] = tracking_info
+
+            data = self._post(
+                _FULFILLMENT_CREATE_MUTATION,
+                {
+                    "fulfillment": fulfillment_input,
+                    "message": "Veloyd-label gecontroleerd in Scan & Boek",
+                },
+            )
+            payload = data.get("fulfillmentCreate") or {}
+            errors = payload.get("userErrors") or []
+            if errors:
+                raise RuntimeError(f"Shopify fulfillment error: {errors}")
+            if not payload.get("fulfillment"):
+                raise RuntimeError("Shopify fulfillment gaf geen resultaat terug")
+
+        return True
 
 
 @dataclass

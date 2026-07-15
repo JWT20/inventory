@@ -111,6 +111,10 @@ VITE_SENTRY_DSN=${VITE_SENTRY_DSN:-}
 
 # Domain
 DOMAIN=${DOMAIN}
+
+# Veloyd label verification
+VELOYD_API_KEY=${VELOYD_API_KEY:-}
+VELOYD_API_BASE_URL=${VELOYD_API_BASE_URL:-https://app.veloyd.nl/api}
 ENVEOF
 
 install -d -m 0755 "$APP_DIR"
