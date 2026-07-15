@@ -569,8 +569,8 @@ class ChannelStatus(BaseModel):
 
 
 class ChannelReviewResolveRequest(BaseModel):
-    """Resolve a needs_review channel order: cancel it or resume picking."""
-    action: str  # "cancel" | "resume"
+    """Resolve a cancelled channel order after picking already started."""
+    action: Literal["cancel_restock", "cancel_without_restock"]
 
 
 class ChannelReviewResolveResponse(BaseModel):
@@ -588,6 +588,7 @@ class ChannelOrderRow(BaseModel):
     # The fulfillment state at the source channel ("fulfilled"/"unfulfilled"/…);
     # fulfilled orders will be kept out of the pick list at cutover.
     channel_fulfillment_status: str | None = None
+    review_reason: str | None = None
     ordered_at: datetime | None = None
     status: str | None = None
     matched_lines: int

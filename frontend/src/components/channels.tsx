@@ -31,6 +31,7 @@ interface ReconRow {
   reference: string | null;
   channel_reference: string | null;
   channel_fulfillment_status: string | null;
+  review_reason: string | null;
   ordered_at: string | null;
   status: string | null;
   matched_lines: number;
@@ -55,12 +56,23 @@ const ORDER_STATUS_LABELS: Record<string, string> = {
   closed: "Gesloten",
 };
 
-// Best-effort reason an active order landed in needs_review, derived from the
-// state we already have (no stored reason). Order of checks = most specific first.
 function reviewReason(o: ReconRow): string {
-  if (o.channel_fulfillment_status === "fulfilled") return "Elders verzonden";
-  if (o.unmatched_eans.length > 0) return "Onbekend product tijdens picken";
-  return "Geannuleerd/gewijzigd tijdens picken";
+  const labels: Record<string, string> = {
+    cancelled_after_pick: "Geannuleerd in Shopify nadat het picken begon",
+    non_fulfillable_after_pick: "Niet meer te verzenden in Shopify nadat het picken begon",
+    fulfilled_elsewhere: "Elders verzonden",
+    partially_fulfilled: "Gedeeltelijk elders verzonden; resterende regels zijn nog onbekend",
+    unknown_ean: "Onbekend product tijdens picken",
+    order_changed_after_pick: "Product of aantal gewijzigd nadat het picken begon",
+  };
+  return o.review_reason ? (labels[o.review_reason] ?? o.review_reason) : "Reden onbekend";
+}
+
+function canResolveCancellation(o: ReconRow): boolean {
+  return (
+    o.review_reason === "cancelled_after_pick" ||
+    o.review_reason === "non_fulfillable_after_pick"
+  );
 }
 
 interface Reconciliation {
@@ -185,11 +197,26 @@ export function ChannelsPage() {
     }
   }
 
-  async function resolveOrder(orderId: number, action: "cancel" | "resume") {
+  async function resolveOrder(
+    orderId: number,
+    action: "cancel_restock" | "cancel_without_restock",
+  ) {
+    const restock = action === "cancel_restock";
+    if (
+      !window.confirm(
+        restock
+          ? "Order annuleren en alle al gepickte producten terugboeken in de voorraad?"
+          : "Order annuleren zonder de al gepickte producten terug te boeken? Kies dit alleen als die producten niet terug in de voorraad liggen.",
+      )
+    ) {
+      return;
+    }
     setResolving(true);
     try {
       await api.channelResolveOrder(orderId, action);
-      toast.success(action === "cancel" ? "Order geannuleerd" : "Order hervat");
+      toast.success(
+        restock ? "Order geannuleerd en producten teruggeboekt" : "Order geannuleerd",
+      );
       await load();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Actie mislukt");
@@ -368,25 +395,31 @@ export function ChannelsPage() {
                           <p className="text-xs text-red-600">
                             Reden: {reviewReason(o)}
                           </p>
-                          {o.order_id != null && (
+                          {o.order_id != null && canResolveCancellation(o) ? (
                             <div className="flex gap-2 mt-1">
                               <Button
                                 variant="outline"
                                 className="h-7 px-2 text-xs"
                                 disabled={resolving}
-                                onClick={() => resolveOrder(o.order_id!, "resume")}
+                                onClick={() => resolveOrder(o.order_id!, "cancel_restock")}
                               >
-                                Hervatten
+                                Annuleren + terugboeken
                               </Button>
                               <Button
                                 variant="outline"
                                 className="h-7 px-2 text-xs"
                                 disabled={resolving}
-                                onClick={() => resolveOrder(o.order_id!, "cancel")}
+                                onClick={() =>
+                                  resolveOrder(o.order_id!, "cancel_without_restock")
+                                }
                               >
-                                Annuleren
+                                Annuleren zonder terugboeken
                               </Button>
                             </div>
+                          ) : (
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Veilig geblokkeerd; deze situatie kan hier niet worden hervat.
+                            </p>
                           )}
                         </div>
                       )}

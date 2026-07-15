@@ -17,7 +17,15 @@ from sqlalchemy.orm import Session
 from app.auth import require_platform_admin
 from app.config import settings
 from app.database import get_db
-from app.models import ChannelConnection, Order, Organization, SKU, User
+from app.models import (
+    Booking,
+    ChannelConnection,
+    Order,
+    OrderLine,
+    Organization,
+    SKU,
+    User,
+)
 from app.schemas import (
     ChannelConnectUrl,
     ChannelModeRequest,
@@ -29,8 +37,9 @@ from app.schemas import (
     ChannelSyncSummary,
     InventoryPushSummary,
 )
+from app.services.channel_import import CANCELLATION_REVIEW_REASONS
 from app.services.inventory_sync import push_available, push_inventory_to_shopify
-from app.services.stock import adjust_reservation
+from app.services.stock import adjust_reservation, apply_stock_movement
 from app.services.shopify import (
     ShopifyClient,
     build_authorize_url,
@@ -352,41 +361,93 @@ def resolve_review_order(
     db: Session = Depends(get_db),
     user: User = Depends(require_platform_admin),
 ):
-    """Resolve a channel order parked in ``needs_review`` (an active order that
-    changed at the channel while being picked). ``cancel`` releases its remaining
-    reservation and cancels it; ``resume`` puts it back on the pick list.
+    """Cancel a source-cancelled order after picking already started.
 
-    needs_review orders never had their reservation released, so ``resume`` only
-    flips the status (the reservation is still intact) while ``cancel`` frees it.
+    The operator explicitly chooses whether physically picked units return to
+    stock. Generic resume is deliberately unavailable: the source-side cause is
+    still present and the next sync would simply park the order again.
     """
     order = db.get(Order, order_id)
     if order is None or order.channel == "manual":
         raise HTTPException(404, "Kanaalorder niet gevonden")
+
+    # Lock bookings first (same order as undo_booking), then lines and the order.
+    # This serializes against both undo and a concurrent picker before changing
+    # stock, reservations and lifecycle in one commit.
+    bookings = (
+        db.query(Booking)
+        .filter(Booking.order_id == order_id)
+        .with_for_update()
+        .all()
+    )
+    lines = (
+        db.query(OrderLine)
+        .filter(OrderLine.order_id == order_id)
+        .with_for_update()
+        .populate_existing()
+        .all()
+    )
+    db.refresh(order, with_for_update=True)
     if order.status != "needs_review":
         raise HTTPException(400, "Order staat niet op handmatige controle")
+    if order.review_reason not in CANCELLATION_REVIEW_REASONS:
+        raise HTTPException(
+            400,
+            "Deze controle kan niet met een annuleringsactie worden afgehandeld",
+        )
+    if order.organization_id is None:
+        raise HTTPException(409, "Kanaalorder heeft geen organisatie")
 
-    if body.action == "cancel":
-        freed: list[int] = []
-        for line in order.lines:
-            open_qty = line.quantity - line.booked_count
-            if open_qty > 0:
-                adjust_reservation(
-                    db, sku_id=line.sku_id,
-                    organization_id=order.organization_id, delta=-open_qty,
-                )
-                freed.append(line.sku_id)
-        order.status = "cancelled"
-        db.commit()
-        for sku_id in set(freed):
-            background_tasks.add_task(
-                push_inventory_to_shopify, sku_id, order.organization_id
+    open_by_sku: dict[int, int] = {}
+    booked_by_sku: dict[int, int] = {}
+    for line in lines:
+        open_by_sku[line.sku_id] = open_by_sku.get(line.sku_id, 0) + max(
+            0, line.quantity - line.booked_count
+        )
+        booked_by_sku[line.sku_id] = booked_by_sku.get(line.sku_id, 0) + max(
+            0, line.booked_count
+        )
+
+    affected: set[int] = set()
+    # Stable product order prevents two multi-product cancellations from locking
+    # inventory balances in opposite order.
+    for sku_id, open_qty in sorted(open_by_sku.items()):
+        if open_qty:
+            adjust_reservation(
+                db,
+                sku_id=sku_id,
+                organization_id=order.organization_id,
+                delta=-open_qty,
             )
-    elif body.action == "resume":
-        # Reservation is still held from when it was active — just re-open it.
-        order.status = "active"
-        db.commit()
-    else:
-        raise HTTPException(400, "Onbekende actie — kies 'cancel' of 'resume'")
+            affected.add(sku_id)
+
+    if body.action == "cancel_restock":
+        for sku_id, booked_qty in sorted(booked_by_sku.items()):
+            if booked_qty:
+                apply_stock_movement(
+                    db,
+                    sku_id=sku_id,
+                    organization_id=order.organization_id,
+                    quantity=booked_qty,
+                    movement_type="pick",
+                    reference_type="channel_cancel",
+                    reference_id=order.id,
+                    note="Teruggeboekt na annulering van kanaalorder",
+                    performed_by=user.id,
+                )
+                affected.add(sku_id)
+        for line in lines:
+            line.booked_count = 0
+        for booking in bookings:
+            db.delete(booking)
+
+    order.status = "cancelled"
+    order.review_reason = None
+    db.commit()
+    for sku_id in sorted(affected):
+        background_tasks.add_task(
+            push_inventory_to_shopify, sku_id, order.organization_id
+        )
 
     return ChannelReviewResolveResponse(status=order.status)
 
@@ -435,6 +496,7 @@ def shopify_reconciliation(
                 channel_fulfillment_status=(
                     order.channel_fulfillment_status if order else None
                 ),
+                review_reason=order.review_reason if order else None,
                 ordered_at=order.ordered_at if order else None,
                 status=order.status if order else None,
                 matched_lines=log.matched_lines,

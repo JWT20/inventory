@@ -453,6 +453,7 @@ def test_active_order_with_bookings_gaining_unknown_goes_needs_review(db):
 
     o = db.get(Order, r2.order_id)
     assert o.status == "needs_review"
+    assert o.review_reason == "unknown_ean"
     assert len(o.lines) == 1              # booked line preserved, not rebuilt
     assert o.lines[0].booked_count == 1
 
@@ -526,6 +527,7 @@ def test_active_order_cancelled_with_bookings_goes_needs_review(db):
 
     o = db.get(Order, r2.order_id)
     assert o.status == "needs_review"
+    assert o.review_reason == "non_fulfillable_after_pick"
     assert o.lines[0].booked_count == 1  # booked work preserved
 
 
@@ -558,6 +560,7 @@ def test_active_order_fulfilled_elsewhere_goes_needs_review_without_raising_avai
 
     o = db.get(Order, r2.order_id)
     assert o.status == "needs_review"          # NOT cancelled+released
+    assert o.review_reason == "fulfilled_elsewhere"
     assert sku.id not in r2.reserved_sku_ids   # nothing pushed
     bal = db.query(InventoryBalance).filter_by(sku_id=sku.id).one()
     assert (bal.quantity_on_hand, bal.quantity_reserved) == (10, 2)  # available still 8
@@ -601,3 +604,132 @@ def test_born_cancelled_paid_order_stays_observed(db):
     r = import_channel_order(db, conn, order)
     db.commit()
     assert db.get(Order, r.order_id).status == "observed"
+
+
+# --- pre-merge safety: exact reservation reconciliation ---------------------
+
+def test_active_quantity_edit_updates_exact_reservation(db):
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-quantity-edit")
+    conn = _connection(db, org, mode="live")
+    sku = _sku(db, org, "SOK-1", "8710000000600")
+    order = _order(external_id="SHOP-QTY", lines=[
+        NormalizedLine(ean="8710000000600", quantity=2),
+    ])
+    first = import_channel_order(db, conn, order)
+    db.commit()
+    assert db.query(InventoryBalance).filter_by(sku_id=sku.id).one().quantity_reserved == 2
+
+    order.lines[0].quantity = 3
+    second = import_channel_order(db, conn, order)
+    db.commit()
+
+    saved = db.get(Order, first.order_id)
+    assert saved.status == "active"
+    assert [(line.sku_id, line.quantity) for line in saved.lines] == [(sku.id, 3)]
+    assert db.query(InventoryBalance).filter_by(sku_id=sku.id).one().quantity_reserved == 3
+    assert second.reserved_sku_ids == [sku.id]
+
+
+def test_active_product_replacement_moves_reservation_per_product(db):
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-product-edit")
+    conn = _connection(db, org, mode="live")
+    old_sku = _sku(db, org, "OLD", "8710000000610")
+    new_sku = _sku(db, org, "NEW", "8710000000611")
+    order = _order(external_id="SHOP-SWAP", lines=[
+        NormalizedLine(ean=old_sku.ean, quantity=2),
+    ])
+    result = import_channel_order(db, conn, order)
+    db.commit()
+
+    order.lines = [NormalizedLine(ean=new_sku.ean, quantity=2)]
+    changed = import_channel_order(db, conn, order)
+    db.commit()
+
+    balances = {
+        row.sku_id: row.quantity_reserved
+        for row in db.query(InventoryBalance).filter(
+            InventoryBalance.sku_id.in_([old_sku.id, new_sku.id])
+        )
+    }
+    assert balances == {old_sku.id: 0, new_sku.id: 2}
+    assert sorted(changed.reserved_sku_ids) == sorted([old_sku.id, new_sku.id])
+    assert [(line.sku_id, line.quantity) for line in db.get(Order, result.order_id).lines] == [
+        (new_sku.id, 2)
+    ]
+
+
+def test_active_quantity_edit_after_pick_is_parked_and_preserves_lines(db):
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-picked-edit")
+    conn = _connection(db, org, mode="live")
+    sku = _sku(db, org, "SOK-1", "8710000000620")
+    order = _order(external_id="SHOP-PICKED-EDIT", lines=[
+        NormalizedLine(ean=sku.ean, quantity=2),
+    ])
+    result = import_channel_order(db, conn, order)
+    db.commit()
+    saved = db.get(Order, result.order_id)
+    saved.lines[0].booked_count = 1
+    db.commit()
+
+    order.lines[0].quantity = 3
+    import_channel_order(db, conn, order)
+    db.commit()
+
+    db.refresh(saved)
+    assert saved.status == "needs_review"
+    assert saved.review_reason == "order_changed_after_pick"
+    assert [(line.quantity, line.booked_count) for line in saved.lines] == [(2, 1)]
+    assert db.query(InventoryBalance).filter_by(sku_id=sku.id).one().quantity_reserved == 2
+
+
+# --- pre-merge safety: partial fulfilment gate ------------------------------
+
+def test_born_partially_fulfilled_order_is_parked_without_reserving(db):
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-born-partial")
+    conn = _connection(db, org, mode="live")
+    sku = _sku(db, org, "SOK-1", "8710000000630")
+    order = _order(external_id="SHOP-PARTIAL", lines=[
+        NormalizedLine(ean=sku.ean, quantity=2),
+    ])
+    order.fulfillment_status = "partially_fulfilled"
+
+    result = import_channel_order(db, conn, order)
+    db.commit()
+
+    saved = db.get(Order, result.order_id)
+    assert saved.status == "needs_review"
+    assert saved.review_reason == "partially_fulfilled"
+    balance = db.query(InventoryBalance).filter_by(sku_id=sku.id).first()
+    assert balance is None or balance.quantity_reserved == 0
+
+
+def test_active_order_becoming_partial_keeps_reservation_and_original_lines(db):
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-active-partial")
+    conn = _connection(db, org, mode="live")
+    sku = _sku(db, org, "SOK-1", "8710000000640")
+    order = _order(external_id="SHOP-ACTIVE-PARTIAL", lines=[
+        NormalizedLine(ean=sku.ean, quantity=2),
+    ])
+    result = import_channel_order(db, conn, order)
+    db.commit()
+
+    order.fulfillment_status = "partially_fulfilled"
+    order.lines[0].quantity = 1  # unsafe remote remainder; must not overwrite yet
+    import_channel_order(db, conn, order)
+    db.commit()
+
+    saved = db.get(Order, result.order_id)
+    assert saved.status == "needs_review"
+    assert saved.review_reason == "partially_fulfilled"
+    assert [line.quantity for line in saved.lines] == [2]
+    assert db.query(InventoryBalance).filter_by(sku_id=sku.id).one().quantity_reserved == 2
