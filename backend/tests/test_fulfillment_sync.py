@@ -6,6 +6,7 @@ from app.services.fulfillment_sync import (
     ShopifyFulfillmentError,
     fulfill_shopify_order,
 )
+from tests.conftest import store_test_channel_token
 
 
 def _order_and_connection(db, *, scopes=REQUIRED_FULFILLMENT_SCOPES):
@@ -26,12 +27,13 @@ def _order_and_connection(db, *, scopes=REQUIRED_FULFILLMENT_SCOPES):
         organization_id=org.id,
         channel="shopify",
         shop_domain="x.myshopify.com",
-        access_token="tok",
         scope=",".join(sorted(scopes)),
         mode="live",
         status="active",
     )
     db.add_all([order, connection])
+    db.flush()
+    store_test_channel_token(db, connection)
     db.commit()
     db.refresh(order)
     return order
