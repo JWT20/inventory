@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, type FormEvent } from "react";
+import { Camera } from "lucide-react";
 import { toast } from "@/App";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -6,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { OrderCard } from "./OrderCard";
+import { CameraBarcodeScanner } from "./CameraBarcodeScanner";
 import { getISOWeek, shiftWeek } from "./week";
 import type { LabelOrderOpenResult, Order } from "./types";
 
@@ -25,6 +27,7 @@ export function OrderSelectStep({
   const [label, setLabel] = useState("");
   const [labelBusy, setLabelBusy] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const labelInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -68,9 +71,8 @@ export function OrderSelectStep({
     if (!labelBusy && !labelError) labelInputRef.current?.focus();
   }, [labelBusy, labelError]);
 
-  async function handleLabelScan(e: FormEvent) {
-    e.preventDefault();
-    const code = label.trim();
+  async function openOrderWithLabel(rawCode: string) {
+    const code = rawCode.trim();
     if (!code || labelBusy) return;
     setLabelBusy(true);
     try {
@@ -86,53 +88,84 @@ export function OrderSelectStep({
     }
   }
 
+  function handleLabelScan(e: FormEvent) {
+    e.preventDefault();
+    void openOrderWithLabel(label);
+  }
+
   return (
     <>
       {(user?.is_platform_admin ||
         ["courier", "owner", "member"].includes(user?.role ?? "")) && (
-        <Card className="p-4 mb-4 bg-blue-50 border-blue-200">
-          <p className="text-sm font-semibold text-blue-900 mb-1">
-            Open order met Veloyd-label
-          </p>
-          <p className="text-xs text-blue-800 mb-3">
-            Scan een los verzendlabel. Scan hetzelfde label na het picken opnieuw.
-          </p>
-          {labelError ? (
-            <div className="rounded-lg border border-red-300 bg-red-50 p-3">
-              <p className="text-sm font-semibold text-red-800">Label niet geopend</p>
-              <p className="text-sm text-red-700 mb-3">{labelError}</p>
-              <Button
-                type="button"
-                variant="destructive"
-                className="w-full"
-                onClick={() => setLabelError(null)}
-              >
-                Verder
-              </Button>
-            </div>
-          ) : (
-            <form onSubmit={handleLabelScan}>
-              <input
-                ref={labelInputRef}
-                value={label}
-                onChange={(e) => setLabel(e.target.value)}
-                autoComplete="off"
-                autoFocus
-                disabled={labelBusy}
-                placeholder="Scan het Veloyd-label…"
-                className="w-full h-14 text-lg font-mono px-4 rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-              <Button
-                type="submit"
-                size="lg"
-                className="w-full text-lg h-14 mt-3"
-                disabled={labelBusy || !label.trim()}
-              >
-                {labelBusy ? "Order zoeken…" : "Order openen"}
-              </Button>
-            </form>
-          )}
-        </Card>
+        <>
+          <Card className="p-4 mb-4 bg-blue-50 border-blue-200">
+            <p className="text-sm font-semibold text-blue-900 mb-1">
+              Open order met Veloyd-label
+            </p>
+            <p className="text-xs text-blue-800 mb-3">
+              Scan een los verzendlabel. Scan hetzelfde label na het picken opnieuw.
+            </p>
+            {labelError ? (
+              <div className="rounded-lg border border-red-300 bg-red-50 p-3">
+                <p className="text-sm font-semibold text-red-800">Label niet geopend</p>
+                <p className="text-sm text-red-700 mb-3">{labelError}</p>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="w-full"
+                  onClick={() => setLabelError(null)}
+                >
+                  Verder
+                </Button>
+              </div>
+            ) : (
+              <form onSubmit={handleLabelScan}>
+                <input
+                  ref={labelInputRef}
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  autoComplete="off"
+                  autoFocus
+                  disabled={labelBusy}
+                  placeholder="Scan het Veloyd-label…"
+                  className="w-full h-14 text-lg font-mono px-4 rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+                  <Button
+                    type="submit"
+                    size="lg"
+                    className="h-14 text-base"
+                    disabled={labelBusy || !label.trim()}
+                  >
+                    {labelBusy ? "Order zoeken…" : "Order openen"}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="lg"
+                    variant="outline"
+                    className="h-14 text-base"
+                    disabled={labelBusy}
+                    onClick={() => setCameraOpen(true)}
+                  >
+                    <Camera className="h-5 w-5 mr-2" />
+                    Scan met camera
+                  </Button>
+                </div>
+              </form>
+            )}
+          </Card>
+
+          <CameraBarcodeScanner
+            open={cameraOpen}
+            mode="label"
+            title="Veloyd-label scannen"
+            onClose={() => setCameraOpen(false)}
+            onScan={(code) => {
+              setCameraOpen(false);
+              void openOrderWithLabel(code);
+            }}
+          />
+        </>
       )}
 
       {/* Week navigation */}
