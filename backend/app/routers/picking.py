@@ -13,10 +13,11 @@ Gated on the order's ``barcode_picking`` module. Scoped to the selected order
 (the courier picks one order at a time), unlike the week-wide vision scope.
 """
 import logging
+import re
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.auth import assert_order_module, require_inbound_booker
 from app.database import get_db
@@ -57,11 +58,16 @@ router = APIRouter(
 
 def _can_access_order(user: User, order: Order) -> bool:
     """Mirror the order-scoped warehouse access used by the scan endpoints."""
-    return not (
-        not user.is_platform_admin
-        and user.role in ("owner", "member")
-        and order.organization_id != user.organization_id
-    )
+    if user.is_platform_admin or user.role == "courier":
+        return True
+    if user.role in ("owner", "member"):
+        return order.organization_id == user.organization_id
+    return False
+
+
+def _normalize_tracking_code(value: str) -> str:
+    """Stable key for scanner and Veloyd variants of one physical barcode."""
+    return re.sub(r"[^a-z0-9]", "", value.casefold())
 
 
 def _is_barcode_order(order: Order) -> bool:
@@ -95,12 +101,13 @@ def open_order_by_label(
     persist the unique tracking code for every subsequent lookup and final scan.
     """
     scanned_code = body.label_reference.strip()
-    if not scanned_code:
+    normalized_scanned = _normalize_tracking_code(scanned_code)
+    if not normalized_scanned:
         raise HTTPException(400, "Geen Veloyd-label gescand")
 
     known = (
         db.query(Order)
-        .filter(Order.veloyd_tracking_code == scanned_code)
+        .filter(Order.veloyd_tracking_code == normalized_scanned)
         .first()
     )
     if known:
@@ -117,7 +124,9 @@ def open_order_by_label(
     except VeloydError as exc:
         raise HTTPException(502, str(exc)) from exc
 
-    tracking_code = veloyd_label.tracking_number.strip()
+    tracking_code = _normalize_tracking_code(veloyd_label.tracking_number)
+    if not tracking_code:
+        raise HTTPException(502, "Veloyd gaf een ongeldige trackingcode terug")
     # Veloyd may return a canonical tracking value that differs in casing or
     # formatting from the scanner input. Check that value before matching anew.
     known = (
@@ -129,10 +138,17 @@ def open_order_by_label(
         _assert_openable_label_order(known, user)
         return LabelOrderOpenResponse(order_id=known.id, tracking_code=tracking_code)
 
-    query = db.query(Order).filter(
-        Order.channel_reference == veloyd_label.reference,
-        Order.status.in_(("active", "completed")),
-        Order.channel != "manual",
+    query = (
+        db.query(Order)
+        .options(
+            joinedload(Order.organization),
+            joinedload(Order.lines).joinedload(OrderLine.sku),
+        )
+        .filter(
+            Order.channel_reference == veloyd_label.reference,
+            Order.status.in_(("active", "completed")),
+            Order.channel != "manual",
+        )
     )
     if (
         not user.is_platform_admin
@@ -160,12 +176,25 @@ def open_order_by_label(
         )
 
     order = candidates[0]
-    _assert_openable_label_order(order, user)
     order.veloyd_tracking_code = tracking_code
     try:
+        # Flush first so the unique index is checked before we report success.
+        # A concurrent scan of the same label may win this race.
+        db.flush()
         db.commit()
     except IntegrityError as exc:
         db.rollback()
+        linked = (
+            db.query(Order)
+            .filter(Order.veloyd_tracking_code == tracking_code)
+            .first()
+        )
+        if linked and linked.id == order.id:
+            _assert_openable_label_order(linked, user)
+            return LabelOrderOpenResponse(
+                order_id=linked.id,
+                tracking_code=tracking_code,
+            )
         raise HTTPException(
             409, "Dit Veloyd-label is al aan een andere order gekoppeld"
         ) from exc
@@ -485,7 +514,11 @@ def scan_label(
     # The label may carry a leading '#'; channel_reference is stored normalized
     # without it (see Order.channel_reference).
     label = body.label_reference.strip().lstrip("#")
-    if order.veloyd_tracking_code and label != order.veloyd_tracking_code:
+    normalized_label = _normalize_tracking_code(label)
+    if (
+        order.veloyd_tracking_code
+        and normalized_label != order.veloyd_tracking_code
+    ):
         # The first scan selected and linked one physical label. Requiring that
         # exact same barcode here prevents another label for an equal order number
         # from being placed on the packed order.
@@ -503,7 +536,31 @@ def scan_label(
         # Backfill legacy orders that reached the final scan without first being
         # opened through the new loose-label flow.
         if not order.veloyd_tracking_code:
-            order.veloyd_tracking_code = veloyd_label.tracking_number
+            tracking_code = _normalize_tracking_code(veloyd_label.tracking_number)
+            if not tracking_code:
+                raise HTTPException(502, "Veloyd gaf een ongeldige trackingcode terug")
+            conflict = (
+                db.query(Order.id)
+                .filter(
+                    Order.veloyd_tracking_code == tracking_code,
+                    Order.id != order.id,
+                )
+                .first()
+            )
+            if conflict:
+                raise HTTPException(
+                    409, "Dit Veloyd-label is al aan een andere order gekoppeld"
+                )
+            order.veloyd_tracking_code = tracking_code
+            try:
+                # Force the unique check before Shopify is called. PostgreSQL
+                # waits for a concurrent writer here, making this race-safe too.
+                db.flush()
+            except IntegrityError as exc:
+                db.rollback()
+                raise HTTPException(
+                    409, "Dit Veloyd-label is al aan een andere order gekoppeld"
+                ) from exc
 
     # Shopify is the external source of truth for whether the order was shipped.
     # Do this before the local status transition so a missing OAuth scope or API

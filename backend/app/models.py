@@ -408,9 +408,9 @@ class Order(Base):
     # shipping label (Veloyd) carries as its reference, so the later label-scan
     # pick step matches on this. NULL for manual orders.
     channel_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    # Unique track-and-trace barcode printed on the physical Veloyd label. It is
-    # learned when the courier first scans the loose label to open the order, then
-    # reused for an exact lookup and checked again at the final shipping gate.
+    # Normalized unique track-and-trace barcode printed on the physical Veloyd
+    # label. It is learned when the courier first scans the loose label to open the
+    # order, then reused for lookup and checked again at the final shipping gate.
     veloyd_tracking_code: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # The fulfillment state at the source channel (Shopify displayFulfillmentStatus,
     # e.g. "fulfilled" / "unfulfilled"). Refreshed on every sync. Surfaced in
