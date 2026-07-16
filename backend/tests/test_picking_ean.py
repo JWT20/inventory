@@ -9,6 +9,7 @@ import pytest
 from app.auth import create_token, hash_password
 from app.models import Customer, InventoryBalance, Order, OrderLine, Organization, SKU, User
 from app.services.fulfillment_sync import ShopifyFulfillmentError
+from app.services.veloyd import VeloydLabel
 from tests.conftest import auth_header
 
 
@@ -83,6 +84,14 @@ def _make_owner_token(db, org, username):
     db.commit()
     db.refresh(owner)
     return create_token(owner.id)
+
+
+def _open_by_label(client, token, label):
+    return client.post(
+        "/api/picking/open-by-label",
+        json={"label_reference": label},
+        headers=auth_header(token),
+    )
 
 
 def test_scan_books_one_unit(client, db, courier_token):
@@ -285,6 +294,100 @@ def test_undo_blocked_after_shipped(client, db, courier_token):
     assert resp.status_code == 409
 
 
+# --- Open order by loose Veloyd label -------------------------------------
+
+
+def test_loose_label_opens_order_and_persists_tracking_code(
+    client, db, courier_token, monkeypatch
+):
+    org = _barcode_org(db, "socks-open-label")
+    sku = _make_barcode_sku(db, org, "SOK-OL", "8700000001901")
+    order, _ = _make_active_order(db, org, sku)
+    order.channel_reference = "1262"
+    db.commit()
+
+    monkeypatch.setattr(
+        "app.routers.picking.VeloydClient.parcel_by_tracking_number",
+        lambda _self, scanned: VeloydLabel(
+            reference="1262", tracking_number="V793AUDS9F4MB"
+        ),
+    )
+
+    resp = _open_by_label(client, courier_token, "V793AUDS9F4MB")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "order_id": order.id,
+        "tracking_code": "V793AUDS9F4MB",
+    }
+    db.refresh(order)
+    assert order.veloyd_tracking_code == "V793AUDS9F4MB"
+
+
+def test_known_loose_label_opens_locally_without_veloyd(
+    client, db, courier_token, monkeypatch
+):
+    org = _barcode_org(db, "socks-open-known")
+    sku = _make_barcode_sku(db, org, "SOK-OK", "8700000001902")
+    order, _ = _make_active_order(db, org, sku)
+    order.channel_reference = "1263"
+    order.veloyd_tracking_code = "VKNOWN"
+    db.commit()
+
+    def _unexpected(*_args, **_kwargs):
+        raise AssertionError("known tracking code must not call Veloyd")
+
+    monkeypatch.setattr(
+        "app.routers.picking.VeloydClient.parcel_by_tracking_number", _unexpected
+    )
+
+    resp = _open_by_label(client, courier_token, "VKNOWN")
+    assert resp.status_code == 200
+    assert resp.json()["order_id"] == order.id
+
+
+def test_loose_label_blocks_ambiguous_channel_order_number(
+    client, db, courier_token, monkeypatch
+):
+    org_a = _barcode_org(db, "socks-open-duplicate-a")
+    org_b = _barcode_org(db, "socks-open-duplicate-b")
+    sku_a = _make_barcode_sku(db, org_a, "SOK-ODA", "8700000001903")
+    sku_b = _make_barcode_sku(db, org_b, "SOK-ODB", "8700000001904")
+    order_a, _ = _make_active_order(db, org_a, sku_a)
+    order_b, _ = _make_active_order(db, org_b, sku_b)
+    order_a.channel_reference = "1264"
+    order_b.channel_reference = "1264"
+    db.commit()
+
+    monkeypatch.setattr(
+        "app.routers.picking.VeloydClient.parcel_by_tracking_number",
+        lambda _self, scanned: VeloydLabel(
+            reference="1264", tracking_number="VAMBIGUOUS"
+        ),
+    )
+
+    resp = _open_by_label(client, courier_token, "VAMBIGUOUS")
+    assert resp.status_code == 409
+    assert "Meerdere open orders" in resp.json()["detail"]
+    db.refresh(order_a)
+    db.refresh(order_b)
+    assert order_a.veloyd_tracking_code is None
+    assert order_b.veloyd_tracking_code is None
+
+
+def test_known_label_does_not_open_inactive_order(client, db, courier_token):
+    org = _barcode_org(db, "socks-open-inactive")
+    sku = _make_barcode_sku(db, org, "SOK-OI", "8700000001905")
+    order, _ = _make_active_order(db, org, sku)
+    order.channel_reference = "1265"
+    order.veloyd_tracking_code = "VINACTIVE"
+    order.status = "shipped"
+    db.commit()
+
+    resp = _open_by_label(client, courier_token, "VINACTIVE")
+    assert resp.status_code == 409
+
+
 # --- Label verification gate (PR1) ----------------------------------------
 
 
@@ -348,6 +451,7 @@ def test_veloyd_tracking_barcode_is_resolved_before_shopify_fulfillment(
     seen = {}
 
     class ResolvedLabel:
+        tracking_number = "V793AUDS9F4MB"
         shopify_tracking_info = {
             "number": "V793AUDS9F4MB",
             "url": "https://tracking.example/V793AUDS9F4MB",
@@ -371,6 +475,22 @@ def test_veloyd_tracking_barcode_is_resolved_before_shopify_fulfillment(
     assert resp.status_code == 200
     assert seen["verify"] == ("V793AUDS9F4MB", "1262")
     assert seen["fulfill"][1]["number"] == "V793AUDS9F4MB"
+
+
+def test_final_scan_requires_same_physical_label(
+    client, db, courier_token, monkeypatch
+):
+    org = _barcode_org(db, "socks-lbl-same-physical")
+    order = _complete_order(db, org, "SOK-LSP", "8700000002013", "1266")
+    order.veloyd_tracking_code = "VRIGHT"
+    db.commit()
+
+    resp = _scan_label(client, courier_token, order.id, "VWRONG")
+
+    assert resp.status_code == 409
+    assert "hetzelfde Veloyd-label" in resp.json()["detail"]
+    db.refresh(order)
+    assert order.status == "completed"
 
 
 def test_platform_admin_can_ship_cross_org_order(

@@ -1,13 +1,13 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, type FormEvent } from "react";
 import { toast } from "@/App";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { OrderCard } from "./OrderCard";
 import { getISOWeek, shiftWeek } from "./week";
-import type { Order } from "./types";
+import type { LabelOrderOpenResult, Order } from "./types";
 
 export function OrderSelectStep({
   onSelect,
@@ -22,6 +22,10 @@ export function OrderSelectStep({
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [week, setWeek] = useState(() => getISOWeek(new Date()));
+  const [label, setLabel] = useState("");
+  const [labelBusy, setLabelBusy] = useState(false);
+  const [labelError, setLabelError] = useState<string | null>(null);
+  const labelInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     async function load() {
@@ -60,8 +64,76 @@ export function OrderSelectStep({
     load();
   }, [week]);
 
+  useEffect(() => {
+    if (!labelBusy && !labelError) labelInputRef.current?.focus();
+  }, [labelBusy, labelError]);
+
+  async function handleLabelScan(e: FormEvent) {
+    e.preventDefault();
+    const code = label.trim();
+    if (!code || labelBusy) return;
+    setLabelBusy(true);
+    try {
+      const resolved: LabelOrderOpenResult = await api.openOrderByLabel(code);
+      const order: Order = await api.getOrder(resolved.order_id);
+      setLabel("");
+      onSelect(order);
+    } catch (err: unknown) {
+      setLabel("");
+      setLabelError(err instanceof ApiError ? err.message : "Kon order niet openen");
+    } finally {
+      setLabelBusy(false);
+    }
+  }
+
   return (
     <>
+      {(user?.role === "courier" || user?.is_platform_admin) && (
+        <Card className="p-4 mb-4 bg-blue-50 border-blue-200">
+          <p className="text-sm font-semibold text-blue-900 mb-1">
+            Open order met Veloyd-label
+          </p>
+          <p className="text-xs text-blue-800 mb-3">
+            Scan een los verzendlabel. Scan hetzelfde label na het picken opnieuw.
+          </p>
+          {labelError ? (
+            <div className="rounded-lg border border-red-300 bg-red-50 p-3">
+              <p className="text-sm font-semibold text-red-800">Label niet geopend</p>
+              <p className="text-sm text-red-700 mb-3">{labelError}</p>
+              <Button
+                type="button"
+                variant="destructive"
+                className="w-full"
+                onClick={() => setLabelError(null)}
+              >
+                Verder
+              </Button>
+            </div>
+          ) : (
+            <form onSubmit={handleLabelScan}>
+              <input
+                ref={labelInputRef}
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                autoComplete="off"
+                autoFocus
+                disabled={labelBusy}
+                placeholder="Scan het Veloyd-label…"
+                className="w-full h-14 text-lg font-mono px-4 rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <Button
+                type="submit"
+                size="lg"
+                className="w-full text-lg h-14 mt-3"
+                disabled={labelBusy || !label.trim()}
+              >
+                {labelBusy ? "Order zoeken…" : "Order openen"}
+              </Button>
+            </form>
+          )}
+        </Card>
+      )}
+
       {/* Week navigation */}
       <div className="flex items-center justify-center gap-2 mb-4">
         <Button variant="outline" size="sm" onClick={() => setWeek((w) => shiftWeek(w, -1))}>
@@ -82,7 +154,7 @@ export function OrderSelectStep({
       </div>
 
       <p className="text-sm text-muted-foreground mb-3">
-        Kies een actieve order om te scannen
+        Of kies een actieve order handmatig
       </p>
 
       {loading ? (

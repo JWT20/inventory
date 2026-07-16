@@ -58,6 +58,11 @@ export interface LabelScanResult {
   reference: string;
 }
 
+export interface LabelOrderOpenResult {
+  order_id: number;
+  tracking_code: string;
+}
+
 export interface LocationScanSKU {
   sku_id: number;
   sku_code: string;
