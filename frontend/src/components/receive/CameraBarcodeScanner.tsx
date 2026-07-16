@@ -24,12 +24,6 @@ interface CameraBarcodeScannerProps {
 
 type ScannerStatus = "starting" | "scanning" | "found" | "error";
 
-function stopVideo(video: HTMLVideoElement | null) {
-  const stream = video?.srcObject as MediaStream | null;
-  stream?.getTracks().forEach((track) => track.stop());
-  if (video) video.srcObject = null;
-}
-
 function successFeedback() {
   navigator.vibrate?.(80);
   try {
@@ -72,7 +66,6 @@ export function CameraBarcodeScanner({
   onClose,
 }: CameraBarcodeScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const controlsRef = useRef<ScannerControls | null>(null);
   const onScanRef = useRef(onScan);
   const [status, setStatus] = useState<ScannerStatus>("starting");
   const [error, setError] = useState<string | null>(null);
@@ -88,6 +81,34 @@ export function CameraBarcodeScanner({
     let cancelled = false;
     let scanLocked = false;
     let successTimer: number | undefined;
+    let stream: MediaStream | null = null;
+    let controls: ScannerControls | null = null;
+
+    function stopSession() {
+      const video = videoRef.current;
+      const displayedStream = video?.srcObject ?? null;
+      const sessionControls = controls;
+      controls = null;
+
+      try {
+        sessionControls?.stop();
+      } finally {
+        // The stream belongs to this effect run, so it is always safe to stop.
+        stream?.getTracks().forEach((track) => track.stop());
+
+        if (!video) return;
+        if (displayedStream && displayedStream !== stream) {
+          // ZXing's stop() clears the shared video element. Restore a newer
+          // run's stream when this older run finishes late.
+          if (video.srcObject !== displayedStream) {
+            video.srcObject = displayedStream;
+            void video.play()?.catch(() => undefined);
+          }
+        } else if (video.srcObject === stream) {
+          video.srcObject = null;
+        }
+      }
+    }
 
     setStatus("starting");
     setError(null);
@@ -112,15 +133,22 @@ export function CameraBarcodeScanner({
             ? [BarcodeFormat.EAN_13]
             : [BarcodeFormat.CODE_128, BarcodeFormat.QR_CODE];
 
-        const controls = await reader.decodeFromConstraints(
-          {
-            audio: false,
-            video: {
-              facingMode: { ideal: "environment" },
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-            },
+        const constraints: MediaStreamConstraints = {
+          audio: false,
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
           },
+        };
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        if (cancelled || !videoRef.current) {
+          stopSession();
+          return;
+        }
+
+        const sessionControls = await reader.decodeFromStream(
+          stream,
           videoRef.current,
           (result, _scanError, callbackControls) => {
             if (!result || scanLocked || cancelled) return;
@@ -128,26 +156,23 @@ export function CameraBarcodeScanner({
             if (!code) return;
 
             scanLocked = true;
-            callbackControls.stop();
-            controlsRef.current = null;
-            stopVideo(videoRef.current);
+            controls = callbackControls;
+            stopSession();
             setStatus("found");
             successFeedback();
             successTimer = window.setTimeout(() => onScanRef.current(code), 120);
           },
         );
+        controls = sessionControls;
 
         if (cancelled || scanLocked) {
-          controls.stop();
+          stopSession();
           return;
         }
-        controlsRef.current = controls;
         setStatus("scanning");
       } catch (scanError) {
+        stopSession();
         if (cancelled) return;
-        controlsRef.current?.stop();
-        controlsRef.current = null;
-        stopVideo(videoRef.current);
         setError(cameraErrorMessage(scanError));
         setStatus("error");
       }
@@ -158,9 +183,7 @@ export function CameraBarcodeScanner({
     return () => {
       cancelled = true;
       if (successTimer) window.clearTimeout(successTimer);
-      controlsRef.current?.stop();
-      controlsRef.current = null;
-      stopVideo(videoRef.current);
+      stopSession();
     };
   }, [open, mode, retry]);
 

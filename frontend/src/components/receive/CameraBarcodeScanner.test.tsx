@@ -18,14 +18,13 @@ vi.mock("@zxing/browser", () => {
       zxing.readers.push(this);
     }
 
-    async decodeFromConstraints(
-      constraints: MediaStreamConstraints,
+    async decodeFromStream(
+      stream: MediaStream,
       video: HTMLVideoElement,
       callback: typeof zxing.callback,
     ) {
       zxing.callback = callback;
-      zxing.decode(constraints, video);
-      return zxing.controls;
+      return zxing.decode(stream, video, callback);
     }
   }
 
@@ -39,14 +38,44 @@ vi.mock("@zxing/browser", () => {
   };
 });
 
+function createMediaStream() {
+  const track = { stop: vi.fn() };
+  const stream = {
+    getTracks: () => [track],
+  } as unknown as MediaStream;
+  return { stream, track };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+let getUserMedia: ReturnType<typeof vi.fn>;
+
 beforeEach(() => {
+  const { stream } = createMediaStream();
   zxing.callback = undefined;
   zxing.controls.stop.mockReset();
   zxing.decode.mockReset();
+  zxing.decode.mockImplementation(
+    (activeStream: MediaStream, video: HTMLVideoElement) => {
+      video.srcObject = activeStream;
+      zxing.controls.stop.mockImplementation(() => {
+        activeStream.getTracks().forEach((track) => track.stop());
+        video.srcObject = null;
+      });
+      return Promise.resolve(zxing.controls);
+    },
+  );
   zxing.readers.length = 0;
+  getUserMedia = vi.fn().mockResolvedValue(stream);
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
-    value: { getUserMedia: vi.fn() },
+    value: { getUserMedia },
   });
   Object.defineProperty(navigator, "vibrate", {
     configurable: true,
@@ -69,10 +98,10 @@ describe("CameraBarcodeScanner", () => {
     );
 
     await waitFor(() => expect(zxing.decode).toHaveBeenCalledOnce());
-    expect(zxing.decode.mock.calls[0][0]).toMatchObject({
+    expect(getUserMedia).toHaveBeenCalledWith(expect.objectContaining({
       audio: false,
-      video: { facingMode: { ideal: "environment" } },
-    });
+      video: expect.objectContaining({ facingMode: { ideal: "environment" } }),
+    }));
     expect(zxing.readers[0].possibleFormats).toEqual(["EAN_13"]);
   });
 
@@ -104,9 +133,9 @@ describe("CameraBarcodeScanner", () => {
   });
 
   it("shows an actionable message when camera permission is denied", async () => {
-    zxing.decode.mockImplementationOnce(() => {
-      throw new DOMException("denied", "NotAllowedError");
-    });
+    getUserMedia.mockRejectedValueOnce(
+      new DOMException("denied", "NotAllowedError"),
+    );
 
     render(
       <CameraBarcodeScanner
@@ -146,5 +175,67 @@ describe("CameraBarcodeScanner", () => {
     );
 
     expect(zxing.controls.stop).toHaveBeenCalledOnce();
+  });
+
+  it("does not let an older start detach the newest camera stream", async () => {
+    const firstMedia = createMediaStream();
+    const secondMedia = createMediaStream();
+    const firstResult = deferred<{ stop: () => void }>();
+    let firstVideo: HTMLVideoElement | null = null;
+    let secondVideo: HTMLVideoElement | null = null;
+    const firstControls = {
+      stop: vi.fn(() => {
+        firstMedia.track.stop();
+        if (firstVideo) firstVideo.srcObject = null;
+      }),
+    };
+    const secondControls = {
+      stop: vi.fn(() => {
+        secondMedia.track.stop();
+        if (secondVideo) secondVideo.srcObject = null;
+      }),
+    };
+
+    getUserMedia
+      .mockResolvedValueOnce(firstMedia.stream)
+      .mockResolvedValueOnce(secondMedia.stream);
+    zxing.decode
+      .mockImplementationOnce((stream: MediaStream, video: HTMLVideoElement) => {
+        firstVideo = video;
+        video.srcObject = stream;
+        return firstResult.promise;
+      })
+      .mockImplementationOnce((stream: MediaStream, video: HTMLVideoElement) => {
+        secondVideo = video;
+        video.srcObject = stream;
+        return Promise.resolve(secondControls);
+      });
+
+    const props = {
+      mode: "label" as const,
+      title: "Label scannen",
+      onScan: vi.fn(),
+      onClose: vi.fn(),
+    };
+    const { rerender } = render(<CameraBarcodeScanner open {...props} />);
+
+    await waitFor(() => expect(zxing.decode).toHaveBeenCalledOnce());
+    rerender(<CameraBarcodeScanner open={false} {...props} />);
+    rerender(<CameraBarcodeScanner open {...props} />);
+
+    await waitFor(() => expect(zxing.decode).toHaveBeenCalledTimes(2));
+    const video = screen.getByLabelText(
+      "Live camerabeeld voor barcodescan",
+    ) as HTMLVideoElement;
+    expect(video.srcObject).toBe(secondMedia.stream);
+
+    await act(async () => {
+      firstResult.resolve(firstControls);
+      await firstResult.promise;
+    });
+
+    await waitFor(() => expect(firstControls.stop).toHaveBeenCalledOnce());
+    expect(video.srcObject).toBe(secondMedia.stream);
+    expect(secondMedia.track.stop).not.toHaveBeenCalled();
   });
 });
