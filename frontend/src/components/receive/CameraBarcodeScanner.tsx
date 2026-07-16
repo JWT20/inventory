@@ -191,7 +191,7 @@ export function CameraBarcodeScanner({
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent
         aria-describedby={undefined}
-        className="h-[85svh] max-h-[85svh] bg-black border-0 p-0 overflow-hidden text-white"
+        className="h-[85svh] max-h-[85svh] sm:h-[70vh] sm:max-h-[42rem] bg-black border-0 p-0 overflow-hidden text-white"
       >
         <DialogHeader className="p-4 pr-12 mb-0 bg-black">
           <DialogTitle className="text-white">{title}</DialogTitle>

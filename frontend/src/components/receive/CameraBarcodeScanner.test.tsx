@@ -98,6 +98,9 @@ describe("CameraBarcodeScanner", () => {
     );
 
     await waitFor(() => expect(zxing.decode).toHaveBeenCalledOnce());
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.className).toContain("sm:h-[70vh]");
+    expect(dialog.className).not.toContain("sm:h-auto");
     expect(getUserMedia).toHaveBeenCalledWith(expect.objectContaining({
       audio: false,
       video: expect.objectContaining({ facingMode: { ideal: "environment" } }),
