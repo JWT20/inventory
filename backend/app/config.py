@@ -64,13 +64,16 @@ class Settings(BaseSettings):
     # Provide as env secrets on the server; never commit real values.
     shopify_shop_domain: str = ""   # e.g. racesokken.myshopify.com
     # OAuth app credentials (Dev Dashboard → Settings → Credentials). The access
-    # token is obtained via the OAuth install flow and stored per connection;
-    # shopify_access_token is only an optional manual fallback.
+    # token is obtained via the OAuth install flow and encrypted per connection.
     shopify_api_key: str = ""       # Client ID
     shopify_api_secret: str = ""    # Client secret — OAuth token exchange + HMAC
     shopify_api_version: str = "2025-01"
-    # NB: the per-shop access token is obtained via OAuth and stored on the
-    # ChannelConnection — never as a global env var (that would cross tenants).
+    # Per-shop OAuth access tokens are encrypted in ChannelConnection. This
+    # base64url-encoded 32-byte key stays outside the database so a database-only
+    # leak never exposes usable Shopify credentials.
+    channel_credential_encryption_key: str = ""
+    # NB: access tokens remain per connection — never use a global token env var
+    # (that would cross tenants).
     # Auto-sync: how often the background poller pulls new orders for every
     # connection in live-mode, in seconds. Default 180 (3 min) — fresh enough for
     # the warehouse floor without polling Shopify every minute; the manual "sync

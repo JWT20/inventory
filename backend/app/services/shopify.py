@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import ChannelConnection
+from app.services.channel_credentials import get_access_token
 from app.services.channel_import import (
     NormalizedChannelOrder,
     NormalizedLine,
@@ -539,7 +540,7 @@ def sync_shopify(db: Session, connection: ChannelConnection, client=None) -> Syn
     # pull the configured shop into its own tenant.
     client = client or ShopifyClient(
         shop_domain=connection.shop_domain,
-        access_token=connection.access_token,
+        access_token=get_access_token(connection),
     )
     if not client.configured:
         raise RuntimeError("Shopify niet geconfigureerd")

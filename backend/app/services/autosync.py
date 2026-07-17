@@ -17,6 +17,7 @@ import logging
 from app.config import settings
 from app.database import SessionLocal
 from app.models import ChannelConnection
+from app.services.channel_credentials import get_access_token
 from app.services.inventory_sync import push_inventory_to_shopify
 from app.services.shopify import ShopifyClient, sync_shopify
 
@@ -37,7 +38,7 @@ def _sync_live_connections_once() -> None:
             try:
                 client = ShopifyClient(
                     shop_domain=conn.shop_domain,
-                    access_token=conn.access_token,
+                    access_token=get_access_token(conn),
                 )
                 if not client.configured:
                     continue

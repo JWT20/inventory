@@ -12,7 +12,7 @@ from app.models import (
     Organization,
     SKU,
 )
-from tests.conftest import auth_header
+from tests.conftest import auth_header, store_test_channel_token
 
 
 def _org(db, slug, modules=("inventory", "orders", "channel_orders")):
@@ -30,9 +30,11 @@ def _conn(db, org, mode="observe", creds=True):
         channel="shopify",
         mode=mode,
         shop_domain="x.myshopify.com" if creds else None,
-        access_token="tok" if creds else None,
     )
     db.add(conn)
+    db.flush()
+    if creds:
+        store_test_channel_token(db, conn)
     db.commit()
     db.refresh(conn)
     return conn

@@ -734,10 +734,11 @@ class ChannelConnection(Base):
     )
     channel: Mapped[str] = mapped_column(String(20))
     # Filled by the OAuth install flow. shop_domain is the *.myshopify.com host;
-    # access_token is the Admin API token for this shop. NOTE: stored as-is for
-    # now — encryption-at-rest is a follow-up.
+    # the Admin API token is authenticated-encrypted with a server-side key that
+    # never lives in this database. key_id versions the ciphertext format/key.
     shop_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    access_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    access_token_key_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     scope: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Cached primary location id at the shop, resolved once and reused as the
     # target of inventory write-back. NULL until first resolved.

@@ -1,27 +1,35 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, type FormEvent } from "react";
+import { Camera } from "lucide-react";
 import { toast } from "@/App";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { OrderCard } from "./OrderCard";
+import { CameraBarcodeScanner } from "./CameraBarcodeScanner";
 import { getISOWeek, shiftWeek } from "./week";
-import type { Order } from "./types";
+import type { LabelOrderOpenResult, Order } from "./types";
 
 export function OrderSelectStep({
   onSelect,
-  onIdentify,
   onThisWeek,
 }: {
   onSelect: (order: Order) => void;
-  onIdentify: () => void;
   onThisWeek: (week: string) => void;
 }) {
   const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [week, setWeek] = useState(() => getISOWeek(new Date()));
+  const [label, setLabel] = useState("");
+  const [labelEntryOpen, setLabelEntryOpen] = useState(false);
+  const [labelBusy, setLabelBusy] = useState(false);
+  const [labelError, setLabelError] = useState<string | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const labelInputRef = useRef<HTMLInputElement>(null);
+  const canUseCourierActions =
+    user?.role === "courier" || user?.is_platform_admin;
 
   useEffect(() => {
     async function load() {
@@ -59,6 +67,45 @@ export function OrderSelectStep({
     }
     load();
   }, [week]);
+
+  useEffect(() => {
+    if (labelEntryOpen && !labelBusy && !labelError && !cameraOpen) {
+      labelInputRef.current?.focus();
+    }
+  }, [labelEntryOpen, labelBusy, labelError, cameraOpen]);
+
+  async function openOrderWithLabel(rawCode: string) {
+    const code = rawCode.trim();
+    if (!code || labelBusy) return;
+    setLabelBusy(true);
+    try {
+      const resolved: LabelOrderOpenResult = await api.openOrderByLabel(code);
+      const order: Order = await api.getOrder(resolved.order_id);
+      setLabel("");
+      onSelect(order);
+    } catch (err: unknown) {
+      setLabel("");
+      setLabelError(err instanceof ApiError ? err.message : "Kon order niet openen");
+    } finally {
+      setLabelBusy(false);
+    }
+  }
+
+  function handleLabelScan(e: FormEvent) {
+    e.preventDefault();
+    void openOrderWithLabel(label);
+  }
+
+  function openLabelEntry() {
+    setLabelEntryOpen(true);
+  }
+
+  function closeLabelEntry() {
+    setLabelEntryOpen(false);
+    setCameraOpen(false);
+    setLabel("");
+    setLabelError(null);
+  }
 
   return (
     <>
@@ -110,23 +157,107 @@ export function OrderSelectStep({
         </div>
       )}
 
-      {(user?.role === "courier" || user?.is_platform_admin) && (
-        <div className="grid grid-cols-2 gap-2 mt-4">
-          <Button
-            variant="secondary"
-            className="w-full"
-            onClick={() => onThisWeek(week)}
-          >
-            Deze week
-          </Button>
-          <Button
-            variant="secondary"
-            className="w-full"
-            onClick={onIdentify}
-          >
-            Scan zonder order
-          </Button>
-        </div>
+      {canUseCourierActions && (
+        <>
+          <div className="grid grid-cols-2 gap-2 mt-4">
+            <Button
+              variant="secondary"
+              className="w-full"
+              onClick={() => onThisWeek(week)}
+            >
+              Deze week
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              className="w-full"
+              aria-expanded={labelEntryOpen}
+              disabled={labelBusy || !!labelError}
+              onClick={openLabelEntry}
+            >
+              {labelBusy ? "Order zoeken…" : "EAN scannen"}
+            </Button>
+          </div>
+
+          {labelEntryOpen && (
+            <Card className="p-4 mt-3">
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <p className="text-sm font-semibold">
+                  Scan het Veloyd-label van een order
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="shrink-0 -mt-2 -mr-2"
+                  disabled={labelBusy}
+                  onClick={closeLabelEntry}
+                >
+                  Sluiten
+                </Button>
+              </div>
+
+              {labelError ? (
+                <div
+                  role="alert"
+                  className="rounded-lg border border-red-300 bg-red-50 p-3"
+                >
+                  <p className="text-sm font-semibold text-red-800">Label niet geopend</p>
+                  <p className="text-sm text-red-700 mb-3">{labelError}</p>
+                  <Button
+                    type="button"
+                    size="lg"
+                    variant="destructive"
+                    className="w-full"
+                    onClick={() => setLabelError(null)}
+                  >
+                    Verder
+                  </Button>
+                </div>
+              ) : (
+                <form onSubmit={handleLabelScan} className="relative">
+                  <input
+                    ref={labelInputRef}
+                    value={label}
+                    onChange={(e) => setLabel(e.target.value)}
+                    autoComplete="off"
+                    disabled={labelBusy}
+                    placeholder={labelBusy ? "Order zoeken…" : "Scan Veloyd-label…"}
+                    className="h-12 w-full rounded-lg border bg-background px-4 pr-32 font-mono text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  <button
+                    type="submit"
+                    className="sr-only"
+                    disabled={labelBusy || !label.trim()}
+                  >
+                    Order openen
+                  </button>
+                  <Button
+                    type="button"
+                    aria-label="Scan Veloyd-label met camera"
+                    className="absolute right-1 top-1 h-10 gap-2 px-3 shadow-sm"
+                    disabled={labelBusy}
+                    onClick={() => setCameraOpen(true)}
+                  >
+                    <Camera className="h-5 w-5" aria-hidden="true" />
+                    Camera
+                  </Button>
+                </form>
+              )}
+            </Card>
+          )}
+
+          <CameraBarcodeScanner
+            open={cameraOpen}
+            mode="label"
+            title="Veloyd-label scannen"
+            onClose={() => setCameraOpen(false)}
+            onScan={(code) => {
+              setCameraOpen(false);
+              void openOrderWithLabel(code);
+            }}
+          />
+        </>
       )}
     </>
   );

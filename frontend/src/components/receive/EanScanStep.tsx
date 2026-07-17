@@ -1,9 +1,14 @@
 import { useState, useRef, useEffect, type FormEvent } from "react";
+import { Camera } from "lucide-react";
 import { toast } from "@/App";
 import { api, ApiError } from "@/lib/api";
 import { fireCompletion } from "@/lib/celebrate";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  CameraBarcodeScanner,
+  type CameraBarcodeMode,
+} from "./CameraBarcodeScanner";
 import type {
   EanBookingResult,
   LabelScanResult,
@@ -53,6 +58,7 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
         ? "location"
         : "scan",
   );
+  const [cameraMode, setCameraMode] = useState<CameraBarcodeMode | null>(null);
   const [results, setResults] = useState<EanBookingResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   // booked_count per line, seeded from the order and updated live as scans land.
@@ -109,13 +115,16 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
     }
   }, [phase]);
 
+  useEffect(() => {
+    setCameraMode(null);
+  }, [phase]);
+
   function lineQuantity(lineId: number): number {
     return lines.find((l) => l.id === lineId)?.quantity ?? 0;
   }
 
-  async function handleLocation(e: FormEvent) {
-    e.preventDefault();
-    const code = locationCode.trim();
+  async function processLocation(rawCode: string) {
+    const code = rawCode.trim();
     if (!code || busy) return;
     setBusy(true);
     try {
@@ -131,9 +140,13 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
     }
   }
 
-  async function handleScan(e: FormEvent) {
+  function handleLocation(e: FormEvent) {
     e.preventDefault();
-    const code = ean.trim();
+    void processLocation(locationCode);
+  }
+
+  async function processEan(rawCode: string) {
+    const code = rawCode.trim();
     if (!code || busy) return;
     setBusy(true);
     try {
@@ -182,6 +195,11 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
     }
   }
 
+  function handleScan(e: FormEvent) {
+    e.preventDefault();
+    void processEan(ean);
+  }
+
   async function handleUndo(result: EanBookingResult) {
     if (busy) return;
     setBusy(true);
@@ -205,9 +223,8 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
     }
   }
 
-  async function handleLabel(e: FormEvent) {
-    e.preventDefault();
-    const code = label.trim();
+  async function processLabel(rawCode: string) {
+    const code = rawCode.trim();
     if (!code || busy) return;
     setBusy(true);
     try {
@@ -223,6 +240,19 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
     } finally {
       setBusy(false);
     }
+  }
+
+  function handleLabel(e: FormEvent) {
+    e.preventDefault();
+    void processLabel(label);
+  }
+
+  function handleCameraScan(code: string) {
+    const scannedMode = cameraMode;
+    setCameraMode(null);
+    if (scannedMode === "location") void processLocation(code);
+    else if (scannedMode === "ean") void processEan(code);
+    else if (scannedMode === "label") void processLabel(code);
   }
 
   return (
@@ -303,14 +333,27 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
               placeholder="Scan de locatiecode…"
               className="w-full h-14 text-lg font-mono px-4 rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
             />
-            <Button
-              type="submit"
-              size="lg"
-              className="w-full text-lg h-14 mt-3"
-              disabled={busy || !!error || !locationCode.trim()}
-            >
-              {busy ? "Controleren…" : "Locatie bevestigen"}
-            </Button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+              <Button
+                type="submit"
+                size="lg"
+                className="h-14 text-base"
+                disabled={busy || !!error || !locationCode.trim()}
+              >
+                {busy ? "Controleren…" : "Locatie bevestigen"}
+              </Button>
+              <Button
+                type="button"
+                size="lg"
+                variant="outline"
+                className="h-14 text-base"
+                disabled={busy || !!error}
+                onClick={() => setCameraMode("location")}
+              >
+                <Camera className="h-5 w-5 mr-2" />
+                Scan met camera
+              </Button>
+            </div>
           </form>
         </Card>
       )}
@@ -331,14 +374,27 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
             placeholder="Scan of typ de EAN…"
             className="w-full h-14 text-lg font-mono px-4 rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
           />
-          <Button
-            type="submit"
-            size="lg"
-            className="w-full text-lg h-14 mt-3"
-            disabled={busy || !!error || !ean.trim()}
-          >
-            {busy ? "Boeken…" : "Boek"}
-          </Button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+            <Button
+              type="submit"
+              size="lg"
+              className="h-14 text-base"
+              disabled={busy || !!error || !ean.trim()}
+            >
+              {busy ? "Boeken…" : "Boek"}
+            </Button>
+            <Button
+              type="button"
+              size="lg"
+              variant="outline"
+              className="h-14 text-base"
+              disabled={busy || !!error}
+              onClick={() => setCameraMode("ean")}
+            >
+              <Camera className="h-5 w-5 mr-2" />
+              Scan met camera
+            </Button>
+          </div>
           {openLocations.length > 0 && (
             <button
               type="button"
@@ -373,14 +429,27 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
               placeholder="Scan het verzendlabel…"
               className="w-full h-14 text-lg font-mono px-4 rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
             />
-            <Button
-              type="submit"
-              size="lg"
-              className="w-full text-lg h-14 mt-3"
-              disabled={busy || !!error || !label.trim()}
-            >
-              {busy ? "Controleren…" : "Verzenden"}
-            </Button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+              <Button
+                type="submit"
+                size="lg"
+                className="h-14 text-base"
+                disabled={busy || !!error || !label.trim()}
+              >
+                {busy ? "Controleren…" : "Verzenden"}
+              </Button>
+              <Button
+                type="button"
+                size="lg"
+                variant="outline"
+                className="h-14 text-base"
+                disabled={busy || !!error}
+                onClick={() => setCameraMode("label")}
+              >
+                <Camera className="h-5 w-5 mr-2" />
+                Scan met camera
+              </Button>
+            </div>
           </form>
         </Card>
       )}
@@ -416,6 +485,22 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
             </Card>
           ))}
         </div>
+      )}
+
+      {cameraMode && (
+        <CameraBarcodeScanner
+          open
+          mode={cameraMode}
+          title={
+            cameraMode === "location"
+              ? "Locatiecode scannen"
+              : cameraMode === "ean"
+                ? "Product-EAN scannen"
+                : "Veloyd-label scannen"
+          }
+          onClose={() => setCameraMode(null)}
+          onScan={handleCameraScan}
+        />
       )}
 
       <button

@@ -39,6 +39,12 @@ from app.schemas import (
     InventoryPushSummary,
 )
 from app.services.channel_import import CANCELLATION_REVIEW_REASONS
+from app.services.channel_credentials import (
+    CredentialEncryptionError,
+    get_access_token,
+    has_access_token,
+    store_access_token,
+)
 from app.services.inventory_sync import push_available, push_inventory_to_shopify
 from app.services.stock import adjust_reservation, apply_stock_movement
 from app.services.shopify import (
@@ -116,7 +122,7 @@ def _status_for(conn: ChannelConnection | None) -> ChannelStatus:
     if conn is None:
         return ChannelStatus(connected=False)
     return ChannelStatus(
-        connected=bool(conn.access_token),
+        connected=has_access_token(conn),
         shop_domain=conn.shop_domain,
         mode=conn.mode,
         last_synced_at=conn.last_synced_at,
@@ -134,9 +140,18 @@ def _sync_connection(
 
     Per-connection credentials only — no global env fallback (cross-tenant).
     """
+    try:
+        access_token = get_access_token(connection)
+    except CredentialEncryptionError as exc:
+        logger.exception(
+            "Shopify credential decryptie faalde voor connection %s", connection.id
+        )
+        raise HTTPException(
+            503, "Shopify-credential kan niet veilig worden ontsleuteld"
+        ) from exc
     client = ShopifyClient(
         shop_domain=connection.shop_domain,
-        access_token=connection.access_token,
+        access_token=access_token,
     )
     if not client.configured:
         raise HTTPException(
@@ -206,7 +221,20 @@ def shopify_oauth_callback(request: Request, db: Session = Depends(get_db)):
     connection = _get_or_create_connection(db, org_id, "shopify")
     shop_changed = bool(connection.shop_domain) and connection.shop_domain != shop
     connection.shop_domain = shop
-    connection.access_token = token_data.get("access_token")
+    token = token_data.get("access_token")
+    if not token:
+        db.rollback()
+        raise HTTPException(502, "Shopify gaf geen access token terug")
+    try:
+        store_access_token(connection, token)
+    except CredentialEncryptionError as exc:
+        db.rollback()
+        logger.exception(
+            "Shopify credential encryptie faalde voor connection %s", connection.id
+        )
+        raise HTTPException(
+            503, "Shopify-token kan niet veilig worden opgeslagen"
+        ) from exc
     connection.scope = token_data.get("scope")
     if shop_changed:
         # A different shop invalidates every cached Shopify GID: the connection's
@@ -288,7 +316,7 @@ def set_shopify_mode(
 
     connection = _get_or_create_connection(db, org_id, "shopify")
     if mode == "live":
-        if not connection.shop_domain or not connection.access_token:
+        if not connection.shop_domain or not has_access_token(connection):
             raise HTTPException(
                 400, "Shopify is niet verbonden — koppel eerst via de Verbind-knop"
             )
@@ -326,7 +354,7 @@ def push_inventory(
     org_id = _require_org_id(organization_id)
     _assert_org_has_channel(db, org_id)
     connection = _get_or_create_connection(db, org_id, "shopify")
-    if not connection.shop_domain or not connection.access_token:
+    if not connection.shop_domain or not has_access_token(connection):
         raise HTTPException(
             400, "Shopify is niet verbonden — koppel eerst via de Verbind-knop"
         )

@@ -11,6 +11,7 @@ from app.config import settings
 from app.models import ChannelConnection, Organization
 from app.routers.channels import _state_signer
 from app.services import shopify as shopify_mod
+from app.services.channel_credentials import get_access_token
 from tests.conftest import auth_header
 
 
@@ -106,9 +107,32 @@ def test_callback_stores_token(client, db, monkeypatch):
     conn = db.query(ChannelConnection).filter_by(
         organization_id=org.id, channel="shopify"
     ).one()
-    assert conn.access_token == "shpat_test"
+    assert conn.access_token_encrypted
+    assert conn.access_token_key_id == "v1"
+    assert get_access_token(conn) == "shpat_test"
     assert conn.shop_domain == "racesokken.myshopify.com"
     assert conn.scope == "read_orders,read_products"
+
+
+def test_callback_fails_closed_without_encryption_key(client, db, monkeypatch):
+    monkeypatch.setattr(settings, "shopify_api_secret", "testsecret")
+    monkeypatch.setattr(settings, "channel_credential_encryption_key", "")
+    monkeypatch.setattr(
+        channels_mod,
+        "exchange_code_for_token",
+        lambda shop, code: {"access_token": "shpat_must_not_be_stored", "scope": "read_orders"},
+    )
+    org = _org(db, "socks-no-credential-key")
+    state = _state_signer.dumps({"org_id": org.id, "shop": "racesokken.myshopify.com"})
+    params = {"shop": "racesokken.myshopify.com", "code": "abc", "state": state}
+    params["hmac"] = _hmac(params, "testsecret")
+
+    resp = client.get(
+        "/api/channels/shopify/oauth/callback", params=params, follow_redirects=False
+    )
+
+    assert resp.status_code == 503
+    assert db.query(ChannelConnection).filter_by(organization_id=org.id).count() == 0
 
 
 def test_callback_rejects_bad_hmac(client, db, monkeypatch):

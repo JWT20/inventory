@@ -13,7 +13,7 @@ from app.services.shopify import (
     sync_shopify,
     to_normalized,
 )
-from tests.conftest import auth_header
+from tests.conftest import auth_header, store_test_channel_token
 
 
 def _org(db, slug, modules=("inventory", "orders", "channel_orders")):
@@ -287,10 +287,10 @@ def test_full_resync_resets_cursor(client, db, monkeypatch, admin_token, sample_
 
     conn = ChannelConnection(
         organization_id=sample_org.id, channel="shopify", mode="observe",
-        shop_domain="x.myshopify.com", access_token="shpat_x",
+        shop_domain="x.myshopify.com",
         cursor="2026-06-20T00:00:00Z",
     )
-    db.add(conn)
+    store_test_channel_token(db, conn, "shpat_x")
     db.commit()
 
     seen = {}
