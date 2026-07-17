@@ -113,10 +113,45 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("camera scan integration", () => {
+  it.each(["shopify", "manual"])(
+    "shows the compact Veloyd scanner for a %s barcode order",
+    async (channel) => {
+      mocks.listOrders.mockResolvedValue([order({ channel })]);
+
+      render(
+        <OrderSelectStep
+          onSelect={vi.fn()}
+          onIdentify={vi.fn()}
+          onThisWeek={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByPlaceholderText("Scan Veloyd-label…")).toBeTruthy();
+      expect(screen.getByText("Of kies een order hieronder.")).toBeTruthy();
+    },
+  );
+
+  it("hides the Veloyd scanner when the week only contains vision orders", async () => {
+    mocks.listOrders.mockResolvedValue([order({ pick_method: "vision" })]);
+
+    render(
+      <OrderSelectStep
+        onSelect={vi.fn()}
+        onIdentify={vi.fn()}
+        onThisWeek={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("ORD-1");
+    expect(screen.queryByPlaceholderText("Scan Veloyd-label…")).toBeNull();
+    expect(screen.getByText("Kies een order hieronder.")).toBeTruthy();
+  });
+
   it("opens an order through the same Veloyd handler", async () => {
     const user = userEvent.setup();
     const selected = vi.fn();
     const foundOrder = order();
+    mocks.listOrders.mockResolvedValue([foundOrder]);
     mocks.openOrderByLabel.mockResolvedValue({ order_id: 1, tracking_code: "vlabel1" });
     mocks.getOrder.mockResolvedValue(foundOrder);
 
@@ -128,7 +163,9 @@ describe("camera scan integration", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Scan met camera" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Scan Veloyd-label met camera" }),
+    );
     await user.click(screen.getByRole("button", { name: "camera-result-label" }));
 
     await waitFor(() =>
