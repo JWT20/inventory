@@ -98,7 +98,6 @@ export function OrderSelectStep({
 
   function openLabelEntry() {
     setLabelEntryOpen(true);
-    if (labelEntryOpen && !labelError) labelInputRef.current?.focus();
   }
 
   function closeLabelEntry() {
@@ -224,7 +223,7 @@ export function OrderSelectStep({
                     autoComplete="off"
                     disabled={labelBusy}
                     placeholder={labelBusy ? "Order zoeken…" : "Scan Veloyd-label…"}
-                    className="h-12 w-full rounded-lg border bg-background px-4 pr-14 font-mono text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="h-12 w-full rounded-lg border bg-background px-4 pr-32 font-mono text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   <button
                     type="submit"
@@ -235,14 +234,13 @@ export function OrderSelectStep({
                   </button>
                   <Button
                     type="button"
-                    size="icon"
-                    variant="ghost"
                     aria-label="Scan Veloyd-label met camera"
-                    className="absolute right-1 top-1 h-10 w-10"
+                    className="absolute right-1 top-1 h-10 gap-2 px-3 shadow-sm"
                     disabled={labelBusy}
                     onClick={() => setCameraOpen(true)}
                   >
                     <Camera className="h-5 w-5" aria-hidden="true" />
+                    Camera
                   </Button>
                 </form>
               )}
