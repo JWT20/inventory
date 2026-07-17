@@ -26,6 +26,11 @@ export function OrderSelectStep({
   const [labelBusy, setLabelBusy] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
   const labelInputRef = useRef<HTMLInputElement>(null);
+  const canScanLabels =
+    user?.is_platform_admin ||
+    ["courier", "owner", "member"].includes(user?.role ?? "");
+  const hasScannableOrders = orders.some((o) => o.pick_method === "barcode");
+  const showLabelScanner = !loading && canScanLabels && hasScannableOrders;
 
   useEffect(() => {
     async function load() {
@@ -88,23 +93,22 @@ export function OrderSelectStep({
 
   return (
     <>
-      {(user?.is_platform_admin ||
-        ["courier", "owner", "member"].includes(user?.role ?? "")) && (
-        <Card className="p-4 mb-4 bg-blue-50 border-blue-200">
-          <p className="text-sm font-semibold text-blue-900 mb-1">
-            Open order met Veloyd-label
-          </p>
-          <p className="text-xs text-blue-800 mb-3">
-            Scan een los verzendlabel. Scan hetzelfde label na het picken opnieuw.
-          </p>
+      {showLabelScanner && (
+        <div className="mb-4">
           {labelError ? (
-            <div className="rounded-lg border border-red-300 bg-red-50 p-3">
-              <p className="text-sm font-semibold text-red-800">Label niet geopend</p>
-              <p className="text-sm text-red-700 mb-3">{labelError}</p>
+            <div
+              role="alert"
+              className="flex items-center gap-3 rounded-lg border border-red-300 bg-red-50 p-3"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-red-800">Label niet geopend</p>
+                <p className="text-sm text-red-700">{labelError}</p>
+              </div>
               <Button
                 type="button"
+                size="sm"
                 variant="destructive"
-                className="w-full"
+                className="shrink-0"
                 onClick={() => setLabelError(null)}
               >
                 Verder
@@ -119,20 +123,19 @@ export function OrderSelectStep({
                 autoComplete="off"
                 autoFocus
                 disabled={labelBusy}
-                placeholder="Scan het Veloyd-label…"
-                className="w-full h-14 text-lg font-mono px-4 rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                placeholder={labelBusy ? "Order zoeken…" : "Scan Veloyd-label…"}
+                className="h-12 w-full rounded-lg border bg-background px-4 font-mono text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
               />
-              <Button
+              <button
                 type="submit"
-                size="lg"
-                className="w-full text-lg h-14 mt-3"
+                className="sr-only"
                 disabled={labelBusy || !label.trim()}
               >
-                {labelBusy ? "Order zoeken…" : "Order openen"}
-              </Button>
+                Order openen
+              </button>
             </form>
           )}
-        </Card>
+        </div>
       )}
 
       {/* Week navigation */}
@@ -155,7 +158,7 @@ export function OrderSelectStep({
       </div>
 
       <p className="text-sm text-muted-foreground mb-3">
-        Of kies een actieve order handmatig
+        {showLabelScanner ? "Of kies een order hieronder." : "Kies een order hieronder."}
       </p>
 
       {loading ? (
