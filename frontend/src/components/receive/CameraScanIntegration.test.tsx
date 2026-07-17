@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "@/lib/api";
 import { EanScanStep } from "./EanScanStep";
 import { OrderSelectStep } from "./OrderSelectStep";
 import type { Order } from "./types";
@@ -17,7 +18,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({
   api: mocks,
-  ApiError: class ApiError extends Error {},
+  ApiError: class ApiError extends Error {
+    constructor(_status: number, _detail: unknown, message: string) {
+      super(message);
+    }
+  },
 }));
 
 vi.mock("@/lib/auth", () => ({
@@ -34,12 +39,14 @@ vi.mock("@/lib/celebrate", () => ({ fireCompletion: vi.fn() }));
 
 vi.mock("./CameraBarcodeScanner", () => ({
   CameraBarcodeScanner: ({
+    open,
     mode,
     onScan,
   }: {
+    open: boolean;
     mode: "ean" | "label" | "location";
     onScan: (code: string) => void;
-  }) => (
+  }) => open ? (
     <button
       type="button"
       onClick={() =>
@@ -54,7 +61,7 @@ vi.mock("./CameraBarcodeScanner", () => ({
     >
       camera-result-{mode}
     </button>
-  ),
+  ) : null,
 }));
 
 const baseLine = {
@@ -113,65 +120,84 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("camera scan integration", () => {
-  it.each(["shopify", "manual"])(
-    "shows the compact Veloyd scanner for a %s barcode order",
-    async (channel) => {
-      mocks.listOrders.mockResolvedValue([order({ channel })]);
+  it("keeps EAN scanning available without orders and removes the top scan bar", async () => {
+    render(
+      <OrderSelectStep
+        onSelect={vi.fn()}
+        onThisWeek={vi.fn()}
+      />,
+    );
 
-      render(
-        <OrderSelectStep
-          onSelect={vi.fn()}
-          onIdentify={vi.fn()}
-          onThisWeek={vi.fn()}
-        />,
-      );
+    await screen.findByText(/Geen actieve orders in/);
+    expect(screen.getByRole("button", { name: "EAN scannen" })).toBeTruthy();
+    expect(screen.queryByPlaceholderText("Scan Veloyd-label…")).toBeNull();
+    expect(screen.queryByText("Scan zonder order")).toBeNull();
+  });
 
-      expect(await screen.findByPlaceholderText("Scan Veloyd-label…")).toBeTruthy();
-      expect(screen.getByText("Of kies een order hieronder.")).toBeTruthy();
-    },
-  );
-
-  it("hides the Veloyd scanner when the week only contains vision orders", async () => {
+  it("keeps EAN scanning available for a vision-only week", async () => {
     mocks.listOrders.mockResolvedValue([order({ pick_method: "vision" })]);
 
     render(
       <OrderSelectStep
         onSelect={vi.fn()}
-        onIdentify={vi.fn()}
         onThisWeek={vi.fn()}
       />,
     );
 
     await screen.findByText("ORD-1");
-    expect(screen.queryByPlaceholderText("Scan Veloyd-label…")).toBeNull();
+    expect(screen.getByRole("button", { name: "EAN scannen" })).toBeTruthy();
     expect(screen.getByText("Kies een order hieronder.")).toBeTruthy();
   });
 
-  it("opens an order through the same Veloyd handler", async () => {
+  it("opens an order from the permanent EAN button through the Veloyd handler", async () => {
     const user = userEvent.setup();
     const selected = vi.fn();
     const foundOrder = order();
-    mocks.listOrders.mockResolvedValue([foundOrder]);
     mocks.openOrderByLabel.mockResolvedValue({ order_id: 1, tracking_code: "vlabel1" });
     mocks.getOrder.mockResolvedValue(foundOrder);
 
     render(
       <OrderSelectStep
         onSelect={selected}
-        onIdentify={vi.fn()}
         onThisWeek={vi.fn()}
       />,
     );
 
-    await user.click(
-      await screen.findByRole("button", { name: "Scan Veloyd-label met camera" }),
-    );
+    await user.click(screen.getByRole("button", { name: "EAN scannen" }));
     await user.click(screen.getByRole("button", { name: "camera-result-label" }));
 
     await waitFor(() =>
       expect(mocks.openOrderByLabel).toHaveBeenCalledWith("V-LABEL-1"),
     );
     expect(selected).toHaveBeenCalledWith(foundOrder);
+  });
+
+  it("requires Verder after a Veloyd error before EAN scanning is available again", async () => {
+    const user = userEvent.setup();
+    mocks.openOrderByLabel.mockRejectedValue(
+      new ApiError(
+        404,
+        "Geen order gevonden voor dit Veloyd-label",
+        "Geen order gevonden voor dit Veloyd-label",
+      ),
+    );
+
+    render(
+      <OrderSelectStep
+        onSelect={vi.fn()}
+        onThisWeek={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "EAN scannen" }));
+    await user.click(screen.getByRole("button", { name: "camera-result-label" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Geen order gevonden voor dit Veloyd-label");
+    expect(screen.queryByRole("button", { name: "EAN scannen" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Verder" }));
+    expect(screen.getByRole("button", { name: "EAN scannen" })).toBeTruthy();
   });
 
   it("sends a camera location through scanLocation", async () => {

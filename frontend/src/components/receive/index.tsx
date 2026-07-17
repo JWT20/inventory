@@ -5,18 +5,15 @@ import { ScanStep } from "./ScanStep";
 import { EanScanStep } from "./EanScanStep";
 import { ConfirmStep } from "./ConfirmStep";
 import { ResultStep } from "./ResultStep";
-import { IdentifyScanStep } from "./IdentifyScanStep";
-import { IdentifyResultStep } from "./IdentifyResultStep";
 import { getISOWeek } from "./week";
 import type {
   BookingResult,
   ConfirmationData,
-  IdentifyResult,
   Order,
   ScanMode,
 } from "./types";
 
-type Step = "select-order" | "this-week" | "scan" | "result" | "confirm" | "identify-scan" | "identify-result";
+type Step = "select-order" | "this-week" | "scan" | "result" | "confirm";
 
 export function ReceivePage() {
   const [step, setStep] = useState<Step>("select-order");
@@ -24,7 +21,6 @@ export function ReceivePage() {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [overviewWeek, setOverviewWeek] = useState(() => getISOWeek(new Date()));
   const [lastBooking, setLastBooking] = useState<BookingResult | null>(null);
-  const [lastIdentify, setLastIdentify] = useState<IdentifyResult | null>(null);
   const [pendingConfirmation, setPendingConfirmation] = useState<ConfirmationData | null>(null);
 
   function handleOrderSelected(order: Order) {
@@ -40,11 +36,6 @@ export function ReceivePage() {
   function handleBooked(booking: ConfirmationData) {
     setPendingConfirmation(booking);
     setStep("confirm");
-  }
-
-  function handleIdentified(result: IdentifyResult) {
-    setLastIdentify(result);
-    setStep("identify-result");
   }
 
   function handleConfirmed(booking: BookingResult) {
@@ -63,7 +54,6 @@ export function ReceivePage() {
     setStep("select-order");
     setSelectedOrder(null);
     setLastBooking(null);
-    setLastIdentify(null);
     setPendingConfirmation(null);
   }
 
@@ -74,7 +64,6 @@ export function ReceivePage() {
       {step === "select-order" && (
         <OrderSelectStep
           onSelect={handleOrderSelected}
-          onIdentify={() => setStep("identify-scan")}
           onThisWeek={handleThisWeek}
         />
       )}
@@ -112,23 +101,6 @@ export function ReceivePage() {
           order={selectedOrder}
           scanMode={scanMode}
           onNext={scanNext}
-          onDone={reset}
-        />
-      )}
-
-      {step === "identify-scan" && (
-        <IdentifyScanStep
-          scanMode={scanMode}
-          onScanModeChange={setScanMode}
-          onIdentified={handleIdentified}
-          onBack={reset}
-        />
-      )}
-
-      {step === "identify-result" && (
-        <IdentifyResultStep
-          result={lastIdentify}
-          onNext={() => { setLastIdentify(null); setStep("identify-scan"); }}
           onDone={reset}
         />
       )}

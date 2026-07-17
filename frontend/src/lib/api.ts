@@ -292,8 +292,6 @@ export const api = {
     request(`/skus/${skuId}/images/${imageId}`, { method: "DELETE" }),
 
   // Receiving
-  identifyBox: (blob: Blob, scanMode: "box" | "bottle" = "box") =>
-    uploadWithFields("/receiving/identify", blob, { scan_mode: scanMode }, "scan.jpg"),
   createNewProduct: (
     blob: Blob,
     skuCode: string,

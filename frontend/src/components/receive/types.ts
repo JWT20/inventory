@@ -155,18 +155,6 @@ export interface ConfirmationData {
   ordered_by_customer?: number | null;
 }
 
-export interface IdentifyResult {
-  sku_id: number;
-  sku_code: string;
-  sku_name: string;
-  confidence: number;
-  needs_confirmation: boolean;
-  confirmation_reason: string | null;
-  alternatives?: AlternativeMatch[];
-  scan_image_url?: string;
-  reference_image_urls?: string[];
-}
-
 export interface WeeklyPickPhoto {
   order_line_id: number;
   order_line_ids: number[];
