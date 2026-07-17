@@ -5,12 +5,17 @@ Provides an async session wrapper so FastAPI-Users' async dependencies
 work transparently with the sync SQLite test engine.
 """
 
+import base64
 import os
 
 # Set required env vars before importing app code
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
 os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
+os.environ.setdefault(
+    "CHANNEL_CREDENTIAL_ENCRYPTION_KEY",
+    base64.urlsafe_b64encode(b"test-channel-credential-key-32b!").decode("ascii"),
+)
 
 import pytest
 from sqlalchemy import create_engine
@@ -34,6 +39,7 @@ from app.auth import create_token, hash_password, _failed_attempts, _revoked_tok
 from app.database import Base, get_db, get_async_session  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import SKU, Organization, User  # noqa: E402
+from app.services.channel_credentials import store_access_token  # noqa: E402
 
 SQLALCHEMY_DATABASE_URL = "sqlite://"
 
@@ -43,6 +49,14 @@ engine = create_engine(
     poolclass=StaticPool,
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def store_test_channel_token(db, connection, token="tok"):
+    """Persist a connection far enough to bind and encrypt its test token."""
+    db.add(connection)
+    db.flush()
+    store_access_token(connection, token)
+    return connection
 
 
 # ---------------------------------------------------------------------------
