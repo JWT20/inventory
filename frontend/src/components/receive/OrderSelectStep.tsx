@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type FormEvent } from "react";
+import { useState, useEffect } from "react";
 import { Camera } from "lucide-react";
 import { toast } from "@/App";
 import { api, ApiError } from "@/lib/api";
@@ -13,27 +13,20 @@ import type { LabelOrderOpenResult, Order } from "./types";
 
 export function OrderSelectStep({
   onSelect,
-  onIdentify,
   onThisWeek,
 }: {
   onSelect: (order: Order) => void;
-  onIdentify: () => void;
   onThisWeek: (week: string) => void;
 }) {
   const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [week, setWeek] = useState(() => getISOWeek(new Date()));
-  const [label, setLabel] = useState("");
   const [labelBusy, setLabelBusy] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
-  const labelInputRef = useRef<HTMLInputElement>(null);
-  const canScanLabels =
-    user?.is_platform_admin ||
-    ["courier", "owner", "member"].includes(user?.role ?? "");
-  const hasScannableOrders = orders.some((o) => o.pick_method === "barcode");
-  const showLabelScanner = !loading && canScanLabels && hasScannableOrders;
+  const canUseCourierActions =
+    user?.role === "courier" || user?.is_platform_admin;
 
   useEffect(() => {
     async function load() {
@@ -72,10 +65,6 @@ export function OrderSelectStep({
     load();
   }, [week]);
 
-  useEffect(() => {
-    if (!labelBusy && !labelError) labelInputRef.current?.focus();
-  }, [labelBusy, labelError]);
-
   async function openOrderWithLabel(rawCode: string) {
     const code = rawCode.trim();
     if (!code || labelBusy) return;
@@ -83,92 +72,16 @@ export function OrderSelectStep({
     try {
       const resolved: LabelOrderOpenResult = await api.openOrderByLabel(code);
       const order: Order = await api.getOrder(resolved.order_id);
-      setLabel("");
       onSelect(order);
     } catch (err: unknown) {
-      setLabel("");
       setLabelError(err instanceof ApiError ? err.message : "Kon order niet openen");
     } finally {
       setLabelBusy(false);
     }
   }
 
-  function handleLabelScan(e: FormEvent) {
-    e.preventDefault();
-    void openOrderWithLabel(label);
-  }
-
   return (
     <>
-      {showLabelScanner && (
-        <>
-          <div className="mb-4">
-            {labelError ? (
-              <div
-                role="alert"
-                className="flex items-center gap-3 rounded-lg border border-red-300 bg-red-50 p-3"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-red-800">Label niet geopend</p>
-                  <p className="text-sm text-red-700">{labelError}</p>
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="destructive"
-                  className="shrink-0"
-                  onClick={() => setLabelError(null)}
-                >
-                  Verder
-                </Button>
-              </div>
-            ) : (
-              <form onSubmit={handleLabelScan} className="relative">
-                <input
-                  ref={labelInputRef}
-                  value={label}
-                  onChange={(e) => setLabel(e.target.value)}
-                  autoComplete="off"
-                  autoFocus
-                  disabled={labelBusy}
-                  placeholder={labelBusy ? "Order zoeken…" : "Scan Veloyd-label…"}
-                  className="h-12 w-full rounded-lg border bg-background px-4 pr-14 font-mono text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                />
-                <button
-                  type="submit"
-                  className="sr-only"
-                  disabled={labelBusy || !label.trim()}
-                >
-                  Order openen
-                </button>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  aria-label="Scan Veloyd-label met camera"
-                  className="absolute right-1 top-1 h-10 w-10"
-                  disabled={labelBusy}
-                  onClick={() => setCameraOpen(true)}
-                >
-                  <Camera className="h-5 w-5" aria-hidden="true" />
-                </Button>
-              </form>
-            )}
-          </div>
-
-          <CameraBarcodeScanner
-            open={cameraOpen}
-            mode="label"
-            title="Veloyd-label scannen"
-            onClose={() => setCameraOpen(false)}
-            onScan={(code) => {
-              setCameraOpen(false);
-              void openOrderWithLabel(code);
-            }}
-          />
-        </>
-      )}
-
       {/* Week navigation */}
       <div className="flex items-center justify-center gap-2 mb-4">
         <Button variant="outline" size="sm" onClick={() => setWeek((w) => shiftWeek(w, -1))}>
@@ -189,7 +102,7 @@ export function OrderSelectStep({
       </div>
 
       <p className="text-sm text-muted-foreground mb-3">
-        {showLabelScanner ? "Of kies een order hieronder." : "Kies een order hieronder."}
+        Kies een order hieronder.
       </p>
 
       {loading ? (
@@ -217,23 +130,55 @@ export function OrderSelectStep({
         </div>
       )}
 
-      {(user?.role === "courier" || user?.is_platform_admin) && (
-        <div className="grid grid-cols-2 gap-2 mt-4">
-          <Button
-            variant="secondary"
-            className="w-full"
-            onClick={() => onThisWeek(week)}
-          >
-            Deze week
-          </Button>
-          <Button
-            variant="secondary"
-            className="w-full"
-            onClick={onIdentify}
-          >
-            Scan zonder order
-          </Button>
-        </div>
+      {canUseCourierActions && (
+        <>
+          {labelError ? (
+            <Card role="alert" className="p-4 mt-4 bg-red-50 border-red-300">
+              <p className="text-sm font-semibold text-red-800">Label niet geopend</p>
+              <p className="text-sm text-red-700 mb-3">{labelError}</p>
+              <Button
+                type="button"
+                size="lg"
+                variant="destructive"
+                className="w-full"
+                onClick={() => setLabelError(null)}
+              >
+                Verder
+              </Button>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 mt-4">
+              <Button
+                variant="secondary"
+                className="w-full"
+                onClick={() => onThisWeek(week)}
+              >
+                Deze week
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full"
+                disabled={labelBusy}
+                onClick={() => setCameraOpen(true)}
+              >
+                <Camera className="h-4 w-4 mr-2" aria-hidden="true" />
+                {labelBusy ? "Order zoeken…" : "EAN scannen"}
+              </Button>
+            </div>
+          )}
+
+          <CameraBarcodeScanner
+            open={cameraOpen}
+            mode="label"
+            title="Veloyd-label scannen"
+            onClose={() => setCameraOpen(false)}
+            onScan={(code) => {
+              setCameraOpen(false);
+              void openOrderWithLabel(code);
+            }}
+          />
+        </>
       )}
     </>
   );
