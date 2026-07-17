@@ -374,6 +374,13 @@ class Order(Base):
             postgresql_where=text("external_id IS NOT NULL"),
             sqlite_where=text("external_id IS NOT NULL"),
         ),
+        Index(
+            "uq_orders_veloyd_tracking_code",
+            "veloyd_tracking_code",
+            unique=True,
+            postgresql_where=text("veloyd_tracking_code IS NOT NULL"),
+            sqlite_where=text("veloyd_tracking_code IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -401,6 +408,10 @@ class Order(Base):
     # shipping label (Veloyd) carries as its reference, so the later label-scan
     # pick step matches on this. NULL for manual orders.
     channel_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Normalized unique track-and-trace barcode printed on the physical Veloyd
+    # label. It is learned when the courier first scans the loose label to open the
+    # order, then reused for lookup and checked again at the final shipping gate.
+    veloyd_tracking_code: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # The fulfillment state at the source channel (Shopify displayFulfillmentStatus,
     # e.g. "fulfilled" / "unfulfilled"). Refreshed on every sync. Surfaced in
     # observe so already-shipped orders are visible; the cutover keeps fulfilled
@@ -723,10 +734,11 @@ class ChannelConnection(Base):
     )
     channel: Mapped[str] = mapped_column(String(20))
     # Filled by the OAuth install flow. shop_domain is the *.myshopify.com host;
-    # access_token is the Admin API token for this shop. NOTE: stored as-is for
-    # now — encryption-at-rest is a follow-up.
+    # the Admin API token is authenticated-encrypted with a server-side key that
+    # never lives in this database. key_id versions the ciphertext format/key.
     shop_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    access_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    access_token_key_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     scope: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Cached primary location id at the shop, resolved once and reused as the
     # target of inventory write-back. NULL until first resolved.

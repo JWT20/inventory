@@ -42,6 +42,22 @@ require_envfile_safe() {
   fi
 }
 
+require_channel_credential_key() {
+  local value="$1"
+  # A 32-byte value encodes to 43 base64url characters, optionally followed
+  # by one padding character. This is the format accepted by the backend.
+  if [[ ! "$value" =~ ^[A-Za-z0-9_-]{43}=?$ ]]; then
+    echo \
+      "CHANNEL_CREDENTIAL_ENCRYPTION_KEY must be a base64url-encoded 32-byte key." \
+      >&2
+    exit 1
+  fi
+}
+
+generate_channel_credential_key() {
+  openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\r\n'
+}
+
 if [[ -f "$ENV_FILE" && "${FORCE:-0}" != "1" ]]; then
   echo "${ENV_FILE} already exists. Set FORCE=1 to replace it." >&2
   exit 1
@@ -54,10 +70,13 @@ POSTGRES_USER="${POSTGRES_USER:-wijnpick}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(openssl rand -hex 32)}"
 POSTGRES_DB="${POSTGRES_DB:-wijnpick}"
 SECRET_KEY="${SECRET_KEY:-$(openssl rand -hex 32)}"
+CHANNEL_CREDENTIAL_ENCRYPTION_KEY="${CHANNEL_CREDENTIAL_ENCRYPTION_KEY:-$(generate_channel_credential_key)}"
 DOMAIN="${DOMAIN:-dockscan.nl}"
 
 require_url_safe POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
 require_envfile_safe SECRET_KEY     "$SECRET_KEY"
+require_envfile_safe CHANNEL_CREDENTIAL_ENCRYPTION_KEY "$CHANNEL_CREDENTIAL_ENCRYPTION_KEY"
+require_channel_credential_key "$CHANNEL_CREDENTIAL_ENCRYPTION_KEY"
 require_envfile_safe ADMIN_PASSWORD "$ADMIN_PASSWORD"
 require_envfile_safe GEMINI_API_KEY "$GEMINI_API_KEY"
 require_envfile_safe DOMAIN         "$DOMAIN"
@@ -111,6 +130,9 @@ VITE_SENTRY_DSN=${VITE_SENTRY_DSN:-}
 
 # Domain
 DOMAIN=${DOMAIN}
+
+# Shopify credential encryption
+CHANNEL_CREDENTIAL_ENCRYPTION_KEY=${CHANNEL_CREDENTIAL_ENCRYPTION_KEY}
 
 # Veloyd label verification
 VELOYD_API_KEY=${VELOYD_API_KEY:-}

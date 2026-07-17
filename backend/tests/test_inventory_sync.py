@@ -5,7 +5,7 @@ Shopify client, plus the admin bulk-push (start-alignment) endpoint.
 """
 from app.models import ChannelConnection, InventoryBalance, Organization, SKU
 from app.services.inventory_sync import push_available
-from tests.conftest import auth_header
+from tests.conftest import auth_header, store_test_channel_token
 
 
 class FakeClient:
@@ -57,9 +57,8 @@ def _live_conn(db, org):
         mode="live",
         status="active",
         shop_domain="x.myshopify.com",
-        access_token="tok",
     )
-    db.add(conn)
+    store_test_channel_token(db, conn)
     db.commit()
     db.refresh(conn)
     return conn
@@ -112,8 +111,8 @@ def test_push_noop_for_product_without_ean(db):
 def test_push_noop_without_live_connection(db):
     org = _org(db, "sync-observe")
     conn = ChannelConnection(organization_id=org.id, channel="shopify", mode="observe",
-                             status="active", shop_domain="x.myshopify.com", access_token="t")
-    db.add(conn)
+                             status="active", shop_domain="x.myshopify.com")
+    store_test_channel_token(db, conn, "t")
     sku = _sku(db, org, "S2", "8710000000002")
     _balance(db, sku, org, on_hand=5)
     db.commit()
@@ -200,8 +199,9 @@ def test_bulk_push_requires_admin(client, db, courier_token):
 
 def test_bulk_push_requires_live_connection(client, db, admin_token):
     org = _org(db, "bulk-observe")
-    db.add(ChannelConnection(organization_id=org.id, channel="shopify", mode="observe",
-                             status="active", shop_domain="x.myshopify.com", access_token="t"))
+    conn = ChannelConnection(organization_id=org.id, channel="shopify", mode="observe",
+                             status="active", shop_domain="x.myshopify.com")
+    store_test_channel_token(db, conn, "t")
     db.commit()
 
     resp = client.post(

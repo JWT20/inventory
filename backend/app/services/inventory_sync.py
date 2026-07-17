@@ -21,6 +21,7 @@ import logging
 
 from app.database import SessionLocal
 from app.models import ChannelConnection, InventoryBalance, SKU
+from app.services.channel_credentials import get_access_token
 from app.services.shopify import ShopifyClient
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,10 @@ def push_available(db, sku_id: int, organization_id: int, *, client_factory=Shop
     if not conn:
         return False
 
-    client = client_factory(shop_domain=conn.shop_domain, access_token=conn.access_token)
+    client = client_factory(
+        shop_domain=conn.shop_domain,
+        access_token=get_access_token(conn),
+    )
     if not client.configured:
         return False
 

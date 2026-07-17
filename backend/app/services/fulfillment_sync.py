@@ -9,6 +9,11 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.models import ChannelConnection, Order
+from app.services.channel_credentials import (
+    CredentialEncryptionError,
+    get_access_token,
+    has_access_token,
+)
 from app.services.shopify import ShopifyClient
 
 
@@ -50,7 +55,7 @@ def fulfill_shopify_order(
         )
         .first()
     )
-    if not connection or not connection.shop_domain or not connection.access_token:
+    if not connection or not connection.shop_domain or not has_access_token(connection):
         raise ShopifyFulfillmentError("Shopify is niet actief gekoppeld")
 
     granted_scopes = {
@@ -62,9 +67,15 @@ def fulfill_shopify_order(
             "Shopify-koppeling mist verzendrechten; verbind Shopify opnieuw"
         )
 
+    try:
+        access_token = get_access_token(connection)
+    except CredentialEncryptionError as exc:
+        raise ShopifyFulfillmentError(
+            "Shopify-credential kan niet veilig worden ontsleuteld"
+        ) from exc
     client = client_factory(
         shop_domain=connection.shop_domain,
-        access_token=connection.access_token,
+        access_token=access_token,
     )
     try:
         created = client.fulfill_order(

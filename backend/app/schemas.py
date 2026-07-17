@@ -646,6 +646,16 @@ class LabelScanRequest(BaseModel):
     label_reference: str = Field(..., min_length=1)
 
 
+class LabelOrderOpenRequest(BaseModel):
+    label_reference: str = Field(..., min_length=1)
+
+
+class LabelOrderOpenResponse(BaseModel):
+    """Order resolved from the barcode on a loose Veloyd shipping label."""
+    order_id: int
+    tracking_code: str
+
+
 class LabelScanResponse(BaseModel):
     """Result of the shipping-label verification gate on a barcode order."""
     order_id: int

@@ -292,8 +292,6 @@ export const api = {
     request(`/skus/${skuId}/images/${imageId}`, { method: "DELETE" }),
 
   // Receiving
-  identifyBox: (blob: Blob, scanMode: "box" | "bottle" = "box") =>
-    uploadWithFields("/receiving/identify", blob, { scan_mode: scanMode }, "scan.jpg"),
   createNewProduct: (
     blob: Blob,
     skuCode: string,
@@ -397,6 +395,12 @@ export const api = {
       }`,
     ),
   // Picking - barcode/EAN (1 scan = 1 unit booked on the selected order).
+  // Resolve the loose Veloyd label, persist its tracking code and return the
+  // EAN order the courier should open.
+  openOrderByLabel: (labelReference: string) =>
+    json("/picking/open-by-label", "POST", {
+      label_reference: labelReference,
+    }),
   // locationCode is the shelf the courier last scanned; the backend enforces
   // that a located product may only be booked from its own shelf.
   scanEan: (orderId: number, ean: string, locationCode?: string | null) =>
