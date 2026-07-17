@@ -149,7 +149,7 @@ describe("camera scan integration", () => {
     expect(screen.getByText("Kies een order hieronder.")).toBeTruthy();
   });
 
-  it("opens an order from the permanent EAN button through the Veloyd handler", async () => {
+  it("opens an order with a hardware scanner from the EAN label panel", async () => {
     const user = userEvent.setup();
     const selected = vi.fn();
     const foundOrder = order();
@@ -164,6 +164,37 @@ describe("camera scan integration", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "EAN scannen" }));
+    expect(screen.getByText("Scan het Veloyd-label van een order")).toBeTruthy();
+
+    const input = screen.getByPlaceholderText("Scan Veloyd-label…");
+    expect(document.activeElement).toBe(input);
+    await user.type(input, "V-LABEL-1{Enter}");
+
+    await waitFor(() =>
+      expect(mocks.openOrderByLabel).toHaveBeenCalledWith("V-LABEL-1"),
+    );
+    expect(selected).toHaveBeenCalledWith(foundOrder);
+  });
+
+  it("opens an order with the camera from the EAN label panel", async () => {
+    const user = userEvent.setup();
+    const selected = vi.fn();
+    const foundOrder = order();
+    mocks.openOrderByLabel.mockResolvedValue({ order_id: 1, tracking_code: "vlabel1" });
+    mocks.getOrder.mockResolvedValue(foundOrder);
+
+    render(
+      <OrderSelectStep
+        onSelect={selected}
+        onThisWeek={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "EAN scannen" }));
+    expect(screen.getByText("Scan het Veloyd-label van een order")).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: "Scan Veloyd-label met camera" }),
+    );
     await user.click(screen.getByRole("button", { name: "camera-result-label" }));
 
     await waitFor(() =>
@@ -190,14 +221,25 @@ describe("camera scan integration", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "EAN scannen" }));
+    await user.click(
+      screen.getByRole("button", { name: "Scan Veloyd-label met camera" }),
+    );
     await user.click(screen.getByRole("button", { name: "camera-result-label" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Geen order gevonden voor dit Veloyd-label");
-    expect(screen.queryByRole("button", { name: "EAN scannen" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Deze week" })).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "EAN scannen" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
 
     await user.click(screen.getByRole("button", { name: "Verder" }));
-    expect(screen.getByRole("button", { name: "EAN scannen" })).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "EAN scannen" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(document.activeElement).toBe(
+      screen.getByPlaceholderText("Scan Veloyd-label…"),
+    );
   });
 
   it("sends a camera location through scanLocation", async () => {

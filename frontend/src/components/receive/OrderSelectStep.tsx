@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, type FormEvent } from "react";
 import { Camera } from "lucide-react";
 import { toast } from "@/App";
 import { api, ApiError } from "@/lib/api";
@@ -22,9 +22,12 @@ export function OrderSelectStep({
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [week, setWeek] = useState(() => getISOWeek(new Date()));
+  const [label, setLabel] = useState("");
+  const [labelEntryOpen, setLabelEntryOpen] = useState(false);
   const [labelBusy, setLabelBusy] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const labelInputRef = useRef<HTMLInputElement>(null);
   const canUseCourierActions =
     user?.role === "courier" || user?.is_platform_admin;
 
@@ -65,6 +68,12 @@ export function OrderSelectStep({
     load();
   }, [week]);
 
+  useEffect(() => {
+    if (labelEntryOpen && !labelBusy && !labelError && !cameraOpen) {
+      labelInputRef.current?.focus();
+    }
+  }, [labelEntryOpen, labelBusy, labelError, cameraOpen]);
+
   async function openOrderWithLabel(rawCode: string) {
     const code = rawCode.trim();
     if (!code || labelBusy) return;
@@ -72,12 +81,31 @@ export function OrderSelectStep({
     try {
       const resolved: LabelOrderOpenResult = await api.openOrderByLabel(code);
       const order: Order = await api.getOrder(resolved.order_id);
+      setLabel("");
       onSelect(order);
     } catch (err: unknown) {
+      setLabel("");
       setLabelError(err instanceof ApiError ? err.message : "Kon order niet openen");
     } finally {
       setLabelBusy(false);
     }
+  }
+
+  function handleLabelScan(e: FormEvent) {
+    e.preventDefault();
+    void openOrderWithLabel(label);
+  }
+
+  function openLabelEntry() {
+    setLabelEntryOpen(true);
+    if (labelEntryOpen && !labelError) labelInputRef.current?.focus();
+  }
+
+  function closeLabelEntry() {
+    setLabelEntryOpen(false);
+    setCameraOpen(false);
+    setLabel("");
+    setLabelError(null);
   }
 
   return (
@@ -132,40 +160,93 @@ export function OrderSelectStep({
 
       {canUseCourierActions && (
         <>
-          {labelError ? (
-            <Card role="alert" className="p-4 mt-4 bg-red-50 border-red-300">
-              <p className="text-sm font-semibold text-red-800">Label niet geopend</p>
-              <p className="text-sm text-red-700 mb-3">{labelError}</p>
-              <Button
-                type="button"
-                size="lg"
-                variant="destructive"
-                className="w-full"
-                onClick={() => setLabelError(null)}
-              >
-                Verder
-              </Button>
+          <div className="grid grid-cols-2 gap-2 mt-4">
+            <Button
+              variant="secondary"
+              className="w-full"
+              onClick={() => onThisWeek(week)}
+            >
+              Deze week
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              className="w-full"
+              aria-expanded={labelEntryOpen}
+              disabled={labelBusy || !!labelError}
+              onClick={openLabelEntry}
+            >
+              {labelBusy ? "Order zoeken…" : "EAN scannen"}
+            </Button>
+          </div>
+
+          {labelEntryOpen && (
+            <Card className="p-4 mt-3">
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <p className="text-sm font-semibold">
+                  Scan het Veloyd-label van een order
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="shrink-0 -mt-2 -mr-2"
+                  disabled={labelBusy}
+                  onClick={closeLabelEntry}
+                >
+                  Sluiten
+                </Button>
+              </div>
+
+              {labelError ? (
+                <div
+                  role="alert"
+                  className="rounded-lg border border-red-300 bg-red-50 p-3"
+                >
+                  <p className="text-sm font-semibold text-red-800">Label niet geopend</p>
+                  <p className="text-sm text-red-700 mb-3">{labelError}</p>
+                  <Button
+                    type="button"
+                    size="lg"
+                    variant="destructive"
+                    className="w-full"
+                    onClick={() => setLabelError(null)}
+                  >
+                    Verder
+                  </Button>
+                </div>
+              ) : (
+                <form onSubmit={handleLabelScan} className="relative">
+                  <input
+                    ref={labelInputRef}
+                    value={label}
+                    onChange={(e) => setLabel(e.target.value)}
+                    autoComplete="off"
+                    disabled={labelBusy}
+                    placeholder={labelBusy ? "Order zoeken…" : "Scan Veloyd-label…"}
+                    className="h-12 w-full rounded-lg border bg-background px-4 pr-14 font-mono text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  <button
+                    type="submit"
+                    className="sr-only"
+                    disabled={labelBusy || !label.trim()}
+                  >
+                    Order openen
+                  </button>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    aria-label="Scan Veloyd-label met camera"
+                    className="absolute right-1 top-1 h-10 w-10"
+                    disabled={labelBusy}
+                    onClick={() => setCameraOpen(true)}
+                  >
+                    <Camera className="h-5 w-5" aria-hidden="true" />
+                  </Button>
+                </form>
+              )}
             </Card>
-          ) : (
-            <div className="grid grid-cols-2 gap-2 mt-4">
-              <Button
-                variant="secondary"
-                className="w-full"
-                onClick={() => onThisWeek(week)}
-              >
-                Deze week
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                className="w-full"
-                disabled={labelBusy}
-                onClick={() => setCameraOpen(true)}
-              >
-                <Camera className="h-4 w-4 mr-2" aria-hidden="true" />
-                {labelBusy ? "Order zoeken…" : "EAN scannen"}
-              </Button>
-            </div>
           )}
 
           <CameraBarcodeScanner
