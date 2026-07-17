@@ -192,6 +192,7 @@ describe("camera scan integration", () => {
 
     await user.click(screen.getByRole("button", { name: "EAN scannen" }));
     expect(screen.getByText("Scan het Veloyd-label van een order")).toBeTruthy();
+    expect(screen.getByText("Camera")).toBeTruthy();
     await user.click(
       screen.getByRole("button", { name: "Scan Veloyd-label met camera" }),
     );
