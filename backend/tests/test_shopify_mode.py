@@ -188,7 +188,7 @@ def test_back_to_observe_does_not_resync(client, db, admin_token, monkeypatch):
 # --- auto-sync poller -------------------------------------------------------
 
 def test_autosync_only_touches_live_connections(db, monkeypatch):
-    """The background poller syncs live connections and skips observe ones."""
+    """The poller dispatches live Shopify/bol connections and skips observe."""
     from app.services import autosync
     from tests.conftest import TestingSessionLocal
 
@@ -197,23 +197,44 @@ def test_autosync_only_touches_live_connections(db, monkeypatch):
     monkeypatch.setattr("app.services.autosync.SessionLocal", TestingSessionLocal)
 
     org_live = _org(db, "poll-live")
+    org_bol = _org(db, "poll-bol")
     org_obs = _org(db, "poll-observe")
     conn_live = _conn(db, org_live, mode="live")
+    conn_bol = ChannelConnection(
+        organization_id=org_bol.id,
+        channel="bol",
+        mode="live",
+        status="active",
+    )
+    db.add(conn_bol)
+    db.commit()
+    db.refresh(conn_bol)
     _conn(db, org_obs, mode="observe")
 
-    synced_ids: list[int] = []
+    shopify_ids: list[int] = []
+    bol_ids: list[int] = []
 
     class _Summary:
         reserved_sku_ids: set = set()
 
     def fake_sync(_db, connection, client=None):
-        synced_ids.append(connection.id)
+        shopify_ids.append(connection.id)
         return _Summary()
+
+    def fake_bol_sync(_db, connection, client=None):
+        bol_ids.append(connection.id)
+        return _Summary()
+
+    class FakeBolClient:
+        configured = True
 
     monkeypatch.setattr("app.services.autosync.ShopifyClient",
                         lambda **kwargs: FakeClient([]))
     monkeypatch.setattr("app.services.autosync.sync_shopify", fake_sync)
+    monkeypatch.setattr("app.services.autosync.BolClient", FakeBolClient)
+    monkeypatch.setattr("app.services.autosync.sync_bol", fake_bol_sync)
 
     autosync._sync_live_connections_once()
 
-    assert synced_ids == [conn_live.id]
+    assert shopify_ids == [conn_live.id]
+    assert bol_ids == [conn_bol.id]

@@ -86,7 +86,7 @@ def test_cancel_without_restock_keeps_picked_stock_out(
     client, db, admin_token, admin_user, monkeypatch
 ):
     monkeypatch.setattr(
-        "app.routers.channels.push_inventory_to_shopify", lambda *a, **k: None
+        "app.routers.channels.push_inventory_to_channels", lambda *a, **k: None
     )
     org = _org(db, "rv-no-restock")
     order, line, sku = _needs_review_order(db, org, scanned_by=admin_user.id)
@@ -112,7 +112,7 @@ def test_cancel_with_restock_returns_picked_stock_and_drops_bookings(
     client, db, admin_token, admin_user, monkeypatch
 ):
     monkeypatch.setattr(
-        "app.routers.channels.push_inventory_to_shopify", lambda *a, **k: None
+        "app.routers.channels.push_inventory_to_channels", lambda *a, **k: None
     )
     org = _org(db, "rv-restock")
     order, line, sku = _needs_review_order(db, org, scanned_by=admin_user.id)

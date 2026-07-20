@@ -195,12 +195,12 @@ def test_barcode_line_counts_as_has_image(client, db, courier_token):
     assert resp.json()["lines"][0]["has_image"] is True
 
 
-def test_ean_change_clears_shopify_cache(client, db):
-    # #6: changing the EAN invalidates the cached inventory_item_id (resolved via
-    # the old EAN).
+def test_ean_change_clears_channel_product_caches(client, db):
+    # Changing the EAN invalidates channel ids resolved via the old EAN.
     org = _org(db, "ean-cache")
     # New EAN must be a valid EAN-13 (update_sku validates the checkdigit).
     sku = _sku(db, org, "SOK-6", "1234567890128", item_id="gid://old/123")
+    sku.bol_offer_id = "old-bol-offer"
     owner = User(username="ec-owner", email="ec-owner@local",
                  hashed_password=hash_password("OwnerPass1!"), role="owner",
                  organization_id=org.id, is_verified=True)
@@ -214,3 +214,4 @@ def test_ean_change_clears_shopify_cache(client, db):
     db.refresh(sku)
     assert sku.ean == "4006381333931"
     assert sku.shopify_inventory_item_id is None
+    assert sku.bol_offer_id is None

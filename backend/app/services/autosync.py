@@ -17,8 +17,9 @@ import logging
 from app.config import settings
 from app.database import SessionLocal
 from app.models import ChannelConnection
+from app.services.bol import BolClient, sync_bol
 from app.services.channel_credentials import get_access_token
-from app.services.inventory_sync import push_inventory_to_shopify
+from app.services.inventory_sync import push_inventory_to_channels
 from app.services.shopify import ShopifyClient, sync_shopify
 
 logger = logging.getLogger(__name__)
@@ -36,17 +37,25 @@ def _sync_live_connections_once() -> None:
         for conn in connections:
             org_id = conn.organization_id
             try:
-                client = ShopifyClient(
-                    shop_domain=conn.shop_domain,
-                    access_token=get_access_token(conn),
-                )
-                if not client.configured:
+                if conn.channel == "shopify":
+                    client = ShopifyClient(
+                        shop_domain=conn.shop_domain,
+                        access_token=get_access_token(conn),
+                    )
+                    if not client.configured:
+                        continue
+                    summary = sync_shopify(db, conn, client)
+                elif conn.channel == "bol":
+                    client = BolClient()
+                    if not client.configured:
+                        continue
+                    summary = sync_bol(db, conn, client)
+                else:
                     continue
-                summary = sync_shopify(db, conn, client)
                 db.commit()
                 for sku_id in summary.reserved_sku_ids:
                     # Self-contained (own session) and never raises.
-                    push_inventory_to_shopify(sku_id, org_id)
+                    push_inventory_to_channels(sku_id, org_id)
             except Exception:  # one bad connection must not stop the rest
                 db.rollback()
                 logger.exception(
@@ -64,7 +73,7 @@ async def autosync_loop(interval_seconds: int) -> None:
     The blocking sync runs in a worker thread so it never stalls the event loop.
     Cancel the task (on shutdown) to stop the loop cleanly.
     """
-    logger.info("Shopify autosync started (interval=%ss)", interval_seconds)
+    logger.info("Channel autosync started (interval=%ss)", interval_seconds)
     try:
         while True:
             await asyncio.sleep(interval_seconds)
@@ -73,5 +82,5 @@ async def autosync_loop(interval_seconds: int) -> None:
             except Exception:  # never let one iteration kill the loop
                 logger.exception("autosync: iteration failed")
     except asyncio.CancelledError:
-        logger.info("Shopify autosync stopped")
+        logger.info("Channel autosync stopped")
         raise

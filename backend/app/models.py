@@ -181,6 +181,11 @@ class SKU(Base):
     shopify_inventory_item_id: Mapped[str | None] = mapped_column(
         String(64), nullable=True
     )
+    # Cached bol Offer API id for this EAN. SKU is organization-scoped, so the
+    # value is automatically bound to the same merchant as the bol connection.
+    # Cleared whenever the EAN or bol credentials change, and re-resolved after
+    # a stale-id 404.
+    bol_offer_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()

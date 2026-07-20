@@ -76,7 +76,7 @@ class ImportResult:
     matched_lines: int
     unmatched_eans: list[str]
     # SKUs whose reservation or physical stock changed. The caller pushes their
-    # new available to Shopify.
+    # new available to every live sales channel.
     reserved_sku_ids: list[int] = field(default_factory=list)
 
 

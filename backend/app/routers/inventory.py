@@ -73,7 +73,7 @@ from app.services.embedding import (
 )
 from app.services.langfuse_client import PromptUnavailableError
 from app.services.pricing import calc_effective_price
-from app.services.inventory_sync import push_inventory_to_shopify
+from app.services.inventory_sync import push_inventory_to_channels
 from app.services.stock import apply_stock_movement
 from app.services.storage import storage
 
@@ -1022,11 +1022,11 @@ def book_shipment(
 
     db.refresh(shipment)
 
-    # Mirror each affected product's new available to Shopify. Dedupe: a pakbon
+    # Mirror each affected product's new available to all live channels. Dedupe: a pakbon
     # may carry several lines for the same SKU, but one push per SKU suffices.
     for pushed_sku_id in {line.sku_id for line in shipment.lines}:
         background_tasks.add_task(
-            push_inventory_to_shopify, pushed_sku_id, shipment.organization_id
+            push_inventory_to_channels, pushed_sku_id, shipment.organization_id
         )
 
     publish_event(
@@ -1430,8 +1430,8 @@ def adjust_inventory(
     db.commit()
     db.refresh(movement)
 
-    # Mirror the new available to Shopify after the response (best-effort).
-    background_tasks.add_task(push_inventory_to_shopify, data.sku_id, organization_id)
+    # Mirror the new available to all live channels after the response.
+    background_tasks.add_task(push_inventory_to_channels, data.sku_id, organization_id)
 
     publish_event(
         "inventory_adjusted",
@@ -1491,9 +1491,9 @@ def count_inventory(
     db.commit()
     db.refresh(movement)
 
-    # Mirror the new available to Shopify — a physical count changes the same
-    # balance a manual adjust does, so it must push too (otherwise Shopify drifts).
-    background_tasks.add_task(push_inventory_to_shopify, data.sku_id, organization_id)
+    # A physical count changes the same balance as a manual adjustment, so it
+    # must be mirrored to all live channels too.
+    background_tasks.add_task(push_inventory_to_channels, data.sku_id, organization_id)
 
     publish_event(
         "inventory_counted",

@@ -98,6 +98,8 @@ export function ChannelsPage() {
   const [syncing, setSyncing] = useState(false);
   const [bolConnecting, setBolConnecting] = useState(false);
   const [bolSyncing, setBolSyncing] = useState(false);
+  const [bolChangingMode, setBolChangingMode] = useState(false);
+  const [bolPushing, setBolPushing] = useState(false);
   const [changingMode, setChangingMode] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [resolving, setResolving] = useState(false);
@@ -174,7 +176,7 @@ export function ChannelsPage() {
     setBolConnecting(true);
     try {
       await api.bolChannelConnect(orgId);
-      toast.success("bol gekoppeld in observe-modus");
+      toast.success("bol-koppeling gecontroleerd");
       await load();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Kan bol niet koppelen");
@@ -196,6 +198,45 @@ export function ChannelsPage() {
       toast.error(err instanceof Error ? err.message : "bol-sync mislukt");
     } finally {
       setBolSyncing(false);
+    }
+  }
+
+  async function setBolMode(mode: "observe" | "live") {
+    if (!orgId) return;
+    if (
+      mode === "live" &&
+      !window.confirm(
+        "bol live zetten? Openstaande bol-orders worden pickbaar en reserveren " +
+          "voorraad. De app schrijft beschikbare voorraad terug naar bol; Veloyd " +
+          "blijft verzending en track-and-trace bevestigen.",
+      )
+    ) {
+      return;
+    }
+    setBolChangingMode(true);
+    try {
+      await api.bolChannelSetMode(orgId, mode);
+      toast.success(mode === "live" ? "bol staat nu live" : "bol terug naar observe");
+      await load();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Kan bol-modus niet wijzigen");
+    } finally {
+      setBolChangingMode(false);
+    }
+  }
+
+  async function pushBolInventory() {
+    if (!orgId) return;
+    setBolPushing(true);
+    try {
+      const r = await api.bolChannelPushInventory(orgId);
+      toast.success(
+        `bol-voorraad gepusht: ${r.pushed} bijgewerkt · ${r.skipped_no_variant} zonder offer · ${r.failed} mislukt`,
+      );
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "bol-voorraadpush mislukt");
+    } finally {
+      setBolPushing(false);
     }
   }
 
@@ -268,6 +309,7 @@ export function ChannelsPage() {
 
   const status = recon?.status;
   const isLive = status?.mode === "live";
+  const bolIsLive = bolRecon?.status.mode === "live";
   const blockedCount =
     recon?.orders.filter(
       (o) => o.status === "pending_product" || o.status === "needs_review",
@@ -377,7 +419,9 @@ export function ChannelsPage() {
                   {bolRecon?.status.connected ? (
                     <>
                       <Badge variant="default">Verbonden</Badge>
-                      <Badge variant="outline">Observe</Badge>
+                      <Badge variant={bolIsLive ? "default" : "outline"}>
+                        {bolIsLive ? "Live" : "Observe"}
+                      </Badge>
                     </>
                   ) : (
                     <Badge variant="outline">Niet verbonden</Badge>
@@ -385,7 +429,9 @@ export function ChannelsPage() {
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
                   {bolRecon?.status.connected
-                    ? `Alleen lezen — openstaande orders en maximaal drie maanden verzendhistorie, niets bij bol wijzigen · laatst gesynct: ${fmtDate(bolRecon.status.last_synced_at)}`
+                    ? bolIsLive
+                      ? `Live — orders worden pickbaar en voorraad wordt teruggeschreven; Veloyd bevestigt verzending · laatst gesynct: ${fmtDate(bolRecon.status.last_synced_at)}`
+                      : `Observe — openstaande orders en maximaal drie maanden verzendhistorie, geen voorraadwijzigingen · laatst gesynct: ${fmtDate(bolRecon.status.last_synced_at)}`
                     : "Koppel het bol-account uit de beveiligde serveromgeving."}
                 </p>
               </div>
@@ -403,6 +449,32 @@ export function ChannelsPage() {
                 >
                   {bolSyncing ? "Synchroniseren…" : "Nu synchroniseren"}
                 </Button>
+                {bolRecon?.status.connected &&
+                  (bolIsLive ? (
+                    <>
+                      <Button
+                        onClick={pushBolInventory}
+                        disabled={bolPushing}
+                        title="Zet de beschikbare voorraad van elk product in het bijbehorende bol-offer."
+                      >
+                        {bolPushing ? "Bezig…" : "Voorraad gelijktrekken"}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => setBolMode("observe")}
+                        disabled={bolChangingMode}
+                      >
+                        {bolChangingMode ? "Bezig…" : "Terug naar observe"}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      onClick={() => setBolMode("live")}
+                      disabled={bolChangingMode}
+                    >
+                      {bolChangingMode ? "Live zetten…" : "Zet live"}
+                    </Button>
+                  ))}
               </div>
             </div>
           </Card>
@@ -424,7 +496,10 @@ export function ChannelsPage() {
                 Binnengehaalde bol-orders{loading ? " — laden…" : ""}
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                Eén lijst met openstaande en verzonden orders. Observe-modus wijzigt geen voorraad.
+                Eén lijst met openstaande en verzonden orders.
+                {bolIsLive
+                  ? " Openstaande orders zijn pickbaar en reserveren voorraad."
+                  : " Observe-modus wijzigt geen voorraad."}
               </p>
             </div>
             {bolOrders.length > 0 ? (
