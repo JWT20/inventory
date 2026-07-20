@@ -139,7 +139,12 @@ def _status_for(conn: ChannelConnection | None) -> ChannelStatus:
 
 
 def _bol_status_for(conn: ChannelConnection | None) -> ChannelStatus:
-    configured = BolClient().configured
+    configured = bool(
+        settings.bol_client_id
+        and settings.bol_client_secret
+        and settings.bol_token_url
+        and settings.bol_api_base_url
+    )
     return ChannelStatus(
         connected=bool(conn and conn.status == "active" and configured),
         mode=conn.mode if conn else None,

@@ -1,9 +1,18 @@
 """bol Retailer API adapter and Admin connection tests (read-only phase)."""
 import datetime
 
+import pytest
+
 import app.routers.channels as channels_mod
+import app.services.bol as bol_mod
 from app.models import ChannelConnection, Order, Organization, SKU
-from app.services.bol import BolClient, clear_token_cache, sync_bol, to_normalized
+from app.services.bol import (
+    BolAPIError,
+    BolClient,
+    clear_token_cache,
+    sync_bol,
+    to_normalized,
+)
 from tests.conftest import auth_header
 
 
@@ -85,6 +94,17 @@ def _org(db, slug):
     return org
 
 
+def _configure_bol_settings(monkeypatch):
+    monkeypatch.setattr(channels_mod.settings, "bol_client_id", "client-id")
+    monkeypatch.setattr(channels_mod.settings, "bol_client_secret", "client-secret")
+    monkeypatch.setattr(channels_mod.settings, "bol_token_url", "https://login.bol.test/token")
+    monkeypatch.setattr(
+        channels_mod.settings,
+        "bol_api_base_url",
+        "https://api.bol.test/retailer",
+    )
+
+
 def test_client_reuses_one_token_and_fetches_full_paginated_orders():
     clear_token_cache()
     http = _HTTP()
@@ -102,6 +122,76 @@ def test_client_reuses_one_token_and_fetches_full_paginated_orders():
     list_params = http.gets[0][1]["params"]
     assert list_params == {"fulfilment-method": "FBR", "status": "OPEN", "page": 1}
     assert http.gets[1][1]["headers"]["Authorization"] == "Bearer temporary-bearer"
+
+
+def test_client_does_not_allocate_a_persistent_httpx_client(monkeypatch):
+    def fail_if_constructed(*args, **kwargs):
+        pytest.fail("BolClient must not own an unclosed persistent httpx.Client")
+
+    monkeypatch.setattr(bol_mod.httpx, "Client", fail_if_constructed)
+
+    client = BolClient(
+        client_id="client-id",
+        client_secret="client-secret",
+        token_url="https://login.bol.test/token",
+        api_base_url="https://api.bol.test/retailer",
+    )
+
+    assert client.configured is True
+
+
+def test_token_request_does_not_hold_cache_lock():
+    clear_token_cache()
+
+    class LockCheckingHTTP(_HTTP):
+        def post(self, url, **kwargs):
+            acquired = bol_mod._token_lock.acquire(blocking=False)
+            assert acquired is True
+            bol_mod._token_lock.release()
+            return super().post(url, **kwargs)
+
+    client = BolClient(
+        client_id="lock-client-id",
+        client_secret="client-secret",
+        token_url="https://login.bol.test/token",
+        api_base_url="https://api.bol.test/retailer",
+        http_client=LockCheckingHTTP(),
+    )
+
+    client.validate_credentials()
+
+
+def test_open_order_pagination_has_a_safety_limit(monkeypatch):
+    client = BolClient(
+        client_id="client-id",
+        client_secret="client-secret",
+        token_url="https://login.bol.test/token",
+        api_base_url="https://api.bol.test/retailer",
+        http_client=_HTTP(),
+    )
+    monkeypatch.setattr(bol_mod, "_MAX_ORDER_PAGES", 2)
+
+    def endless_orders(path, *, params=None):
+        if path == "/orders":
+            return {"orders": [{"orderId": f"order-{params['page']}"}]}
+        return {"orderId": path.rsplit("/", 1)[-1], "orderItems": []}
+
+    monkeypatch.setattr(client, "_get", endless_orders)
+
+    with pytest.raises(BolAPIError, match="veiligheidslimiet van 2 pagina's"):
+        list(client.fetch_open_orders())
+
+
+def test_bol_status_checks_settings_without_constructing_client(monkeypatch):
+    _configure_bol_settings(monkeypatch)
+    monkeypatch.setattr(
+        channels_mod,
+        "BolClient",
+        lambda: pytest.fail("status checks must not construct BolClient"),
+    )
+    connection = ChannelConnection(channel="bol", mode="observe", status="active")
+
+    assert channels_mod._bol_status_for(connection).connected is True
 
 
 def test_to_normalized_does_not_count_cancelled_units_as_shipped():
@@ -150,6 +240,7 @@ def test_sync_bol_imports_idempotently_in_observe_mode(db):
 
 
 def test_admin_can_connect_and_sync_bol(client, db, admin_token, sample_org, monkeypatch):
+    _configure_bol_settings(monkeypatch)
     fake = _FakeBolClient([_payload()])
     monkeypatch.setattr(channels_mod, "BolClient", lambda: fake)
     db.add(
@@ -199,6 +290,7 @@ def test_bol_connection_is_platform_admin_only(client, owner_token, sample_org, 
 def test_single_env_account_cannot_bind_to_two_organizations(
     client, db, admin_token, sample_org, monkeypatch
 ):
+    _configure_bol_settings(monkeypatch)
     monkeypatch.setattr(channels_mod, "BolClient", lambda: _FakeBolClient())
     first = client.post(
         f"/api/channels/bol/connect?organization_id={sample_org.id}",

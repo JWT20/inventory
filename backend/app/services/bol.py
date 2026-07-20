@@ -28,6 +28,8 @@ from app.services.channel_import import (
 ACCEPT_V10 = "application/vnd.retailer.v10+json"
 USER_AGENT = "Wijnpick/1.0"
 _TOKEN_EXPIRY_SAFETY_SECONDS = 30
+_MAX_ORDER_PAGES = 100
+_HTTP_TIMEOUT_SECONDS = 20.0
 _token_cache: dict[str, tuple[str, float]] = {}
 _token_lock = threading.Lock()
 
@@ -79,7 +81,10 @@ class BolClient:
         )
         self.token_url = (token_url or settings.bol_token_url).rstrip("/")
         self.api_base_url = (api_base_url or settings.bol_api_base_url).rstrip("/")
-        self._http = http_client or httpx.Client(timeout=20.0)
+        # Tests may inject a client. Production uses httpx's one-shot helpers so
+        # every request owns and closes its resources instead of leaving a
+        # client/connection pool behind for every BolClient instance.
+        self._http = http_client
 
     @property
     def configured(self) -> bool:
@@ -94,44 +99,53 @@ class BolClient:
         if not self.configured:
             raise BolConfigurationError("bol API-credentials ontbreken in de serveromgeving")
 
-        now = time.monotonic()
         with _token_lock:
             cached = _token_cache.get(self.client_id)
-            if not force_refresh and cached and cached[1] > now:
+            if not force_refresh and cached and cached[1] > time.monotonic():
                 return cached[0]
 
-            try:
-                response = self._http.post(
-                    self.token_url,
-                    data={"grant_type": "client_credentials"},
-                    auth=(self.client_id, self.client_secret),
-                    headers={
-                        "Accept": "application/json",
-                        "Content-Type": "application/x-www-form-urlencoded",
-                        "User-Agent": USER_AGENT,
-                    },
-                )
-            except httpx.HTTPError as exc:
-                raise BolAPIError("bol authenticatieservice is tijdelijk niet bereikbaar") from exc
+        # Never keep the cache lock held across network I/O. Concurrent cache
+        # misses may briefly request two tokens; that is safer than serialising
+        # every worker behind a potentially slow 20-second HTTP request.
+        try:
+            request = self._http.post if self._http is not None else httpx.post
+            kwargs = {
+                "data": {"grant_type": "client_credentials"},
+                "auth": (self.client_id, self.client_secret),
+                "headers": {
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": USER_AGENT,
+                },
+            }
+            if self._http is None:
+                kwargs["timeout"] = _HTTP_TIMEOUT_SECONDS
+            response = request(self.token_url, **kwargs)
+        except httpx.HTTPError as exc:
+            raise BolAPIError("bol authenticatieservice is tijdelijk niet bereikbaar") from exc
 
-            if response.status_code in (401, 403):
-                raise BolAuthenticationError("bol Client ID of Client secret is ongeldig")
-            if response.status_code >= 400:
-                raise BolAPIError(
-                    f"bol authenticatieservice gaf HTTP {response.status_code}"
-                )
-            try:
-                payload = response.json()
-                token = str(payload["access_token"])
-                expires_in = max(1, int(payload.get("expires_in", 300)))
-            except (KeyError, TypeError, ValueError) as exc:
-                raise BolAPIError("bol gaf een ongeldig authenticatieantwoord") from exc
-            if not token:
-                raise BolAPIError("bol gaf geen access token terug")
+        if response.status_code in (401, 403):
+            raise BolAuthenticationError("bol Client ID of Client secret is ongeldig")
+        if response.status_code >= 400:
+            raise BolAPIError(
+                f"bol authenticatieservice gaf HTTP {response.status_code}"
+            )
+        try:
+            payload = response.json()
+            token = str(payload["access_token"])
+            expires_in = max(1, int(payload.get("expires_in", 300)))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise BolAPIError("bol gaf een ongeldig authenticatieantwoord") from exc
+        if not token:
+            raise BolAPIError("bol gaf geen access token terug")
 
-            usable_for = max(1, expires_in - _TOKEN_EXPIRY_SAFETY_SECONDS)
-            _token_cache[self.client_id] = (token, now + usable_for)
-            return token
+        usable_for = max(1, expires_in - _TOKEN_EXPIRY_SAFETY_SECONDS)
+        with _token_lock:
+            _token_cache[self.client_id] = (
+                token,
+                time.monotonic() + usable_for,
+            )
+        return token
 
     def validate_credentials(self) -> None:
         """Authenticate without performing any Retailer API write."""
@@ -141,14 +155,20 @@ class BolClient:
         for attempt in range(2):
             token = self._access_token(force_refresh=attempt == 1)
             try:
-                response = self._http.get(
-                    f"{self.api_base_url}{path}",
-                    params=params,
-                    headers={
+                request = self._http.get if self._http is not None else httpx.get
+                kwargs = {
+                    "params": params,
+                    "headers": {
                         "Accept": ACCEPT_V10,
                         "Authorization": f"Bearer {token}",
                         "User-Agent": USER_AGENT,
                     },
+                }
+                if self._http is None:
+                    kwargs["timeout"] = _HTTP_TIMEOUT_SECONDS
+                response = request(
+                    f"{self.api_base_url}{path}",
+                    **kwargs,
                 )
             except httpx.HTTPError as exc:
                 raise BolAPIError("bol Retailer API is tijdelijk niet bereikbaar") from exc
@@ -176,8 +196,7 @@ class BolClient:
 
     def fetch_open_orders(self):
         """Yield full open FBR order payloads, including VVB orders."""
-        page = 1
-        while True:
+        for page in range(1, _MAX_ORDER_PAGES + 1):
             payload = self._get(
                 "/orders",
                 params={"fulfilment-method": "FBR", "status": "OPEN", "page": page},
@@ -186,13 +205,15 @@ class BolClient:
             if not isinstance(orders, list):
                 raise BolAPIError("bol gaf een ongeldige orderlijst")
             if not orders:
-                break
+                return
             for summary in orders:
                 order_id = str((summary or {}).get("orderId") or "").strip()
                 if not order_id:
                     raise BolAPIError("bol-order mist een orderId")
                 yield self._get(f"/orders/{quote(order_id, safe='')}")
-            page += 1
+        raise BolAPIError(
+            f"bol-orderlijst overschrijdt de veiligheidslimiet van {_MAX_ORDER_PAGES} pagina's"
+        )
 
 
 def _as_int(value) -> int:
