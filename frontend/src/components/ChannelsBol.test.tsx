@@ -12,13 +12,18 @@ vi.mock("@/lib/api", () => ({
     bolChannelReconciliation: vi.fn(),
     bolChannelConnect: vi.fn(),
     bolChannelSync: vi.fn(),
+    bolChannelSetMode: vi.fn(),
+    bolChannelPushInventory: vi.fn(),
   },
 }));
 
 import { ChannelsPage } from "@/components/channels";
 import { api } from "@/lib/api";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 const emptyRecon = {
   status: { connected: false, shop_domain: null, mode: null, last_synced_at: null },
@@ -103,5 +108,44 @@ describe("bol Admin channel card", () => {
     expect(screen.getByText("2 gematcht")).toBeTruthy();
     expect(screen.getByText("1 ontbreken")).toBeTruthy();
     expect(screen.getAllByText(/Binnengehaalde bol-orders/)).toHaveLength(1);
+  });
+
+  it("puts bol live only after explicit confirmation", async () => {
+    vi.mocked(api.bolChannelReconciliation).mockResolvedValue({
+      ...emptyRecon,
+      status: { ...emptyRecon.status, connected: true, mode: "observe" },
+    });
+    vi.mocked(api.bolChannelSetMode).mockResolvedValue({
+      connected: true,
+      shop_domain: null,
+      mode: "live",
+      last_synced_at: null,
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<ChannelsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Zet live" }));
+
+    await waitFor(() => expect(api.bolChannelSetMode).toHaveBeenCalledWith(2, "live"));
+  });
+
+  it("can align bol inventory while live", async () => {
+    vi.mocked(api.bolChannelReconciliation).mockResolvedValue({
+      ...emptyRecon,
+      status: { ...emptyRecon.status, connected: true, mode: "live" },
+    });
+    vi.mocked(api.bolChannelPushInventory).mockResolvedValue({
+      total: 1,
+      pushed: 1,
+      skipped_no_variant: 0,
+      failed: 0,
+    });
+
+    render(<ChannelsPage />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Voorraad gelijktrekken" }),
+    );
+
+    await waitFor(() => expect(api.bolChannelPushInventory).toHaveBeenCalledWith(2));
   });
 });

@@ -458,6 +458,26 @@ def test_label_match_marks_shopify_before_local_ship(
     assert order.channel_fulfillment_status is None
 
 
+def test_bol_label_scan_leaves_external_shipment_to_veloyd(
+    client, db, courier_token, monkeypatch
+):
+    org = _barcode_org(db, "socks-lbl-bol")
+    order = _complete_order(db, org, "SOK-LBOL", "8700000002018", "BOL-1272")
+    order.channel = "bol"
+    db.commit()
+
+    def _must_not_fulfill(*_args, **_kwargs):
+        raise AssertionError("Bol shipment confirmation belongs to Veloyd")
+
+    monkeypatch.setattr("app.routers.picking.fulfill_shopify_order", _must_not_fulfill)
+    response = _scan_label(client, courier_token, order.id, "BOL-1272")
+
+    assert response.status_code == 200
+    db.refresh(order)
+    assert order.status == "shipped"
+    assert order.channel_fulfillment_status is None
+
+
 def test_veloyd_tracking_barcode_is_resolved_before_shopify_fulfillment(
     client, db, courier_token, monkeypatch
 ):

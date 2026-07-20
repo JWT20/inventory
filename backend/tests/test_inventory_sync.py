@@ -4,7 +4,10 @@ Exercises the core ``push_available`` against the test session with a fake
 Shopify client, plus the admin bulk-push (start-alignment) endpoint.
 """
 from app.models import ChannelConnection, InventoryBalance, Organization, SKU
-from app.services.inventory_sync import push_available
+import pytest
+
+from app.services.bol import BolAPIError
+from app.services.inventory_sync import push_available, push_bol_available
 from tests.conftest import auth_header, store_test_channel_token
 
 
@@ -34,6 +37,24 @@ class FakeClient:
         self.sets.append((inventory_item_id, location_id, available))
 
 
+class FakeBolClient:
+    configured = True
+    last: "FakeBolClient | None" = None
+
+    def __init__(self, offer_ids=None):
+        self.offer_ids = ["bol-offer-1"] if offer_ids is None else offer_ids
+        self.eans: list[str] = []
+        self.sets: list[tuple[str, int]] = []
+        FakeBolClient.last = self
+
+    def find_fbr_offer_ids(self, ean):
+        self.eans.append(ean)
+        return self.offer_ids
+
+    def set_offer_stock(self, offer_id, amount):
+        self.sets.append((offer_id, amount))
+
+
 def _factory(variant_known=True):
     def make(shop_domain=None, access_token=None):
         return FakeClient(shop_domain, access_token, variant_known=variant_known)
@@ -59,6 +80,19 @@ def _live_conn(db, org):
         shop_domain="x.myshopify.com",
     )
     store_test_channel_token(db, conn)
+    db.commit()
+    db.refresh(conn)
+    return conn
+
+
+def _live_bol_conn(db, org):
+    conn = ChannelConnection(
+        organization_id=org.id,
+        channel="bol",
+        mode="live",
+        status="active",
+    )
+    db.add(conn)
     db.commit()
     db.refresh(conn)
     return conn
@@ -129,6 +163,48 @@ def test_push_noop_when_variant_unknown(db):
     assert push_available(db, sku.id, org.id, client_factory=_factory(variant_known=False)) is False
     db.refresh(sku)
     assert sku.shopify_inventory_item_id is None  # nothing cached on miss
+
+
+def test_bol_push_sets_absolute_available_for_single_fbr_offer(db):
+    org = _org(db, "bol-sync-ok")
+    _live_bol_conn(db, org)
+    sku = _sku(db, org, "BOL1", "8710000040001")
+    _balance(db, sku, org, on_hand=10, reserved=3)
+
+    assert push_bol_available(db, sku.id, org.id, client_factory=FakeBolClient) is True
+    assert FakeBolClient.last.eans == ["8710000040001"]
+    assert FakeBolClient.last.sets == [("bol-offer-1", 7)]
+
+
+def test_bol_push_rejects_multiple_fbr_offers_for_one_ean(db):
+    org = _org(db, "bol-sync-ambiguous")
+    _live_bol_conn(db, org)
+    sku = _sku(db, org, "BOL2", "8710000040002")
+    _balance(db, sku, org, on_hand=5)
+
+    with pytest.raises(BolAPIError, match="meerdere FBR-offers"):
+        push_bol_available(
+            db,
+            sku.id,
+            org.id,
+            client_factory=lambda: FakeBolClient(["offer-1", "offer-2"]),
+        )
+
+
+def test_bol_push_noop_in_observe_mode(db):
+    org = _org(db, "bol-sync-observe")
+    db.add(
+        ChannelConnection(
+            organization_id=org.id,
+            channel="bol",
+            mode="observe",
+            status="active",
+        )
+    )
+    sku = _sku(db, org, "BOL3", "8710000040003")
+    db.commit()
+
+    assert push_bol_available(db, sku.id, org.id, client_factory=FakeBolClient) is False
 
 
 # --- Bulk-push endpoint (start-alignment) ---------------------------------
@@ -209,3 +285,35 @@ def test_bulk_push_requires_live_connection(client, db, admin_token):
         headers=auth_header(admin_token),
     )
     assert resp.status_code == 400
+
+
+def test_bol_bulk_push_counts_offer_matches(client, db, admin_token, monkeypatch):
+    org = _org(db, "bol-bulk-ok")
+    _live_bol_conn(db, org)
+    _sku(db, org, "BB1", "8710000050001")
+    _sku(db, org, "BB2", "8710000050002")
+    monkeypatch.setattr("app.routers.channels.settings.bol_client_id", "client-id")
+    monkeypatch.setattr("app.routers.channels.settings.bol_client_secret", "secret")
+    monkeypatch.setattr("app.routers.channels.settings.bol_token_url", "https://login.test")
+    monkeypatch.setattr("app.routers.channels.settings.bol_api_base_url", "https://api.test")
+
+    calls: list[int] = []
+
+    def fake_push(_db, sku_id, _org_id):
+        calls.append(sku_id)
+        return True
+
+    monkeypatch.setattr("app.routers.channels.push_bol_available", fake_push)
+    response = client.post(
+        f"/api/channels/bol/push-inventory?organization_id={org.id}",
+        headers=auth_header(admin_token),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "total": 2,
+        "pushed": 2,
+        "skipped_no_variant": 0,
+        "failed": 0,
+    }
+    assert len(calls) == 2

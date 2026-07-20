@@ -1,4 +1,4 @@
-"""Read-only bol Retailer API adapter for Admin order imports.
+"""bol Retailer API adapter for order import and app-led stock write-back.
 
 The first integration deliberately uses one credential pair from the runtime
 environment. Connecting binds that account to one organization. Access tokens
@@ -26,10 +26,13 @@ from app.services.channel_import import (
 
 
 ACCEPT_V10 = "application/vnd.retailer.v10+json"
+ACCEPT_OFFERS_V11 = "application/vnd.retailer.v11+json"
 USER_AGENT = "Wijnpick/1.0"
 _TOKEN_EXPIRY_SAFETY_SECONDS = 30
 _MAX_ORDER_PAGES = 100
+_MAX_OFFER_PAGES = 100
 _HTTP_TIMEOUT_SECONDS = 20.0
+_MAX_BOL_STOCK = 999
 _SHIPMENT_CURSOR_OVERLAP = datetime.timedelta(minutes=5)
 _token_cache: dict[str, tuple[str, float]] = {}
 _token_lock = threading.Lock()
@@ -164,19 +167,34 @@ class BolClient:
         """Authenticate without performing any Retailer API write."""
         self._access_token(force_refresh=True)
 
-    def _get(self, path: str, *, params: dict | None = None) -> dict:
+    def _request_api(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        json_body: dict | None = None,
+        accept: str = ACCEPT_V10,
+    ) -> dict:
         for attempt in range(2):
             token = self._access_token(force_refresh=attempt == 1)
             try:
-                request = self._http.get if self._http is not None else httpx.get
+                request = (
+                    getattr(self._http, method.lower())
+                    if self._http is not None
+                    else getattr(httpx, method.lower())
+                )
                 kwargs = {
                     "params": params,
                     "headers": {
-                        "Accept": ACCEPT_V10,
+                        "Accept": accept,
                         "Authorization": f"Bearer {token}",
                         "User-Agent": USER_AGENT,
                     },
                 }
+                if json_body is not None:
+                    kwargs["json"] = json_body
+                    kwargs["headers"]["Content-Type"] = accept
                 if self._http is None:
                     kwargs["timeout"] = _HTTP_TIMEOUT_SECONDS
                 response = request(
@@ -198,6 +216,8 @@ class BolClient:
                 raise BolAPIError("bol Retailer API is tijdelijk niet beschikbaar")
             if response.status_code >= 400:
                 raise BolAPIError(f"bol Retailer API gaf HTTP {response.status_code}")
+            if response.status_code == 204:
+                return {}
             try:
                 payload = response.json()
             except ValueError as exc:
@@ -206,6 +226,65 @@ class BolClient:
                 raise BolAPIError("bol gaf een onverwacht API-antwoord")
             return payload
         raise BolAuthenticationError("bol heeft de API-toegang geweigerd")
+
+    def _get(self, path: str, *, params: dict | None = None) -> dict:
+        return self._request_api("GET", path, params=params)
+
+    def find_fbr_offer_ids(self, ean: str) -> list[str]:
+        """Resolve an EAN to its v11 FBR offer ids.
+
+        The v11 endpoint is cursor-paginated. In the normal case an EAN maps to
+        one offer; callers deliberately reject ambiguity so one local stock pool
+        can never be copied into multiple independently sellable offers.
+        """
+        offer_ids: list[str] = []
+        cursor: str | None = None
+        for _page in range(_MAX_OFFER_PAGES):
+            params = {"eans": ean, "page-size": 100}
+            if cursor:
+                params["cursor"] = cursor
+            payload = self._request_api(
+                "GET", "/offers", params=params, accept=ACCEPT_OFFERS_V11
+            )
+            offers = payload.get("offers") or []
+            if not isinstance(offers, list):
+                raise BolAPIError("bol gaf een ongeldige offerlijst")
+            for offer in offers:
+                offer = offer or {}
+                fulfilment = offer.get("fulfilment") or {}
+                if (
+                    str(offer.get("ean") or "").strip() == ean
+                    and fulfilment.get("method") == "FBR"
+                ):
+                    offer_id = str(offer.get("offerId") or "").strip()
+                    if not offer_id:
+                        raise BolAPIError("bol-offer mist een offerId")
+                    if offer_id not in offer_ids:
+                        offer_ids.append(offer_id)
+            page = payload.get("page") or {}
+            cursor = str(page.get("nextCursor") or "").strip() or None
+            if not cursor:
+                return offer_ids
+        raise BolAPIError(
+            f"bol-offerlijst overschrijdt de veiligheidslimiet van {_MAX_OFFER_PAGES} pagina's"
+        )
+
+    def set_offer_stock(self, offer_id: str, amount: int) -> None:
+        """Set absolute FBR stock through the synchronous Offer API v11."""
+        bounded_amount = min(max(0, int(amount)), _MAX_BOL_STOCK)
+        self._request_api(
+            "PATCH",
+            f"/offers/{quote(offer_id, safe='')}",
+            json_body={
+                "stock": {
+                    "amount": bounded_amount,
+                    # The app already reserves every live channel order. Asking
+                    # bol to correct for open orders too would subtract twice.
+                    "managedByRetailer": True,
+                }
+            },
+            accept=ACCEPT_OFFERS_V11,
+        )
 
     def _fetch_order_ids(self, *, status: str):
         for page in range(1, _MAX_ORDER_PAGES + 1):
@@ -417,8 +496,8 @@ def sync_bol(
     )
     if connection.channel != "bol":
         raise BolConfigurationError("Verbinding is geen bol-kanaal")
-    if connection.mode != "observe":
-        raise BolConfigurationError("bol-koppeling moet in observe-modus staan")
+    if connection.mode not in ("observe", "live"):
+        raise BolConfigurationError("bol-koppeling heeft een ongeldige modus")
 
     client = client or BolClient()
     summary = BolSyncSummary()

@@ -203,13 +203,19 @@ export const api = {
   ) =>
     json(`/channels/shopify/orders/${orderId}/resolve`, "POST", { action }),
 
-  // Channels (bol) — single server-side account, read-only observe phase
+  // Channels (bol) — single server-side account
   bolChannelStatus: (orgId: number) =>
     request(`/channels/bol/status?organization_id=${orgId}`),
   bolChannelConnect: (orgId: number) =>
     request(`/channels/bol/connect?organization_id=${orgId}`, { method: "POST" }),
   bolChannelSync: (orgId: number) =>
     request(`/channels/bol/sync?organization_id=${orgId}`, { method: "POST" }),
+  bolChannelSetMode: (orgId: number, mode: "observe" | "live") =>
+    json(`/channels/bol/mode?organization_id=${orgId}`, "POST", { mode }),
+  bolChannelPushInventory: (orgId: number) =>
+    request(`/channels/bol/push-inventory?organization_id=${orgId}`, {
+      method: "POST",
+    }),
   bolChannelReconciliation: (orgId: number) =>
     request(`/channels/bol/reconciliation?organization_id=${orgId}`),
 

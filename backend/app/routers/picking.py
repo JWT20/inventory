@@ -23,7 +23,7 @@ from app.auth import assert_order_module, require_inbound_booker
 from app.database import get_db
 from app.events import publish_event
 from app.models import Booking, Location, Order, OrderLine, SKU, SKULocation, User
-from app.services.inventory_sync import push_inventory_to_shopify
+from app.services.inventory_sync import push_inventory_to_channels
 from app.services.fulfillment_sync import (
     ShopifyFulfillmentError,
     fulfill_shopify_order,
@@ -329,8 +329,8 @@ def scan_ean(
         resource_id=result.last_booking_id,
     )
 
-    # Mirror the new available to Shopify after the response (best-effort).
-    background_tasks.add_task(push_inventory_to_shopify, sku.id, order.organization_id)
+    # Mirror the new available to every live channel after the response.
+    background_tasks.add_task(push_inventory_to_channels, sku.id, order.organization_id)
 
     return EanScanResponse(
         order_id=order.id,
@@ -375,9 +375,9 @@ def undo_scan(
 
     result = undo_booking(db, booking_id=booking.id, performed_by=user.id)
 
-    # Mirror the restored available to Shopify after the response (best-effort).
+    # Mirror the restored available to all live channels after the response.
     background_tasks.add_task(
-        push_inventory_to_shopify, result.sku_id, order.organization_id
+        push_inventory_to_channels, result.sku_id, order.organization_id
     )
 
     publish_event(
@@ -562,14 +562,22 @@ def scan_label(
                     409, "Dit Veloyd-label is al aan een andere order gekoppeld"
                 ) from exc
 
-    # Shopify is the external source of truth for whether the order was shipped.
-    # Do this before the local status transition so a missing OAuth scope or API
-    # outage leaves the order safely retryable in ``completed``.
-    try:
-        fulfill_shopify_order(db, order, tracking_info=tracking_info)
-    except ShopifyFulfillmentError as exc:
-        db.rollback()
-        raise HTTPException(502, str(exc)) from exc
+    if order.channel == "shopify":
+        # Shopify is written by this app. Do this before the local transition so
+        # a missing scope or outage leaves the order safely retryable.
+        try:
+            fulfill_shopify_order(db, order, tracking_info=tracking_info)
+        except ShopifyFulfillmentError as exc:
+            db.rollback()
+            raise HTTPException(502, str(exc)) from exc
+    elif order.channel == "bol":
+        # Veloyd owns bol shipment confirmation + T&T. Calling bol here too
+        # would create two writers for the same shipment. The verified physical
+        # label is enough to close the local warehouse order; the next bol sync
+        # imports Veloyd's external fulfillment state.
+        pass
+    else:
+        raise HTTPException(409, "Order heeft geen ondersteund verkoopkanaal")
 
     order.status = "shipped"
     order.mark_finalized()  # idempotent: already stamped at completion

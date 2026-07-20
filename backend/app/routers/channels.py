@@ -54,7 +54,11 @@ from app.services.channel_credentials import (
     has_access_token,
     store_access_token,
 )
-from app.services.inventory_sync import push_available, push_inventory_to_shopify
+from app.services.inventory_sync import (
+    push_available,
+    push_bol_available,
+    push_inventory_to_channels,
+)
 from app.services.stock import adjust_reservation, apply_stock_movement
 from app.services.shopify import (
     ShopifyClient,
@@ -217,7 +221,7 @@ def _sync_connection(
     org_id: int,
 ) -> "SyncSummary":
     """Pull + import for one connection, commit, and schedule the reserved-SKU
-    pushes to Shopify. Shared by the manual sync and the go-live cutover.
+    pushes to every live channel. Shared by manual sync and the go-live cutover.
 
     Per-connection credentials only — no global env fallback (cross-tenant).
     """
@@ -240,10 +244,23 @@ def _sync_connection(
         )
     summary = sync_shopify(db, connection, client)
     db.commit()
-    # Mirror newly-reserved SKUs to Shopify after the response (best-effort), so
-    # going live immediately drops the storefront available by the open orders.
+    # Mirror newly-reserved SKUs to every live channel after the response.
     for sku_id in summary.reserved_sku_ids:
-        background_tasks.add_task(push_inventory_to_shopify, sku_id, org_id)
+        background_tasks.add_task(push_inventory_to_channels, sku_id, org_id)
+    return summary
+
+
+def _sync_bol_connection(
+    db: Session,
+    connection: ChannelConnection,
+    background_tasks: BackgroundTasks,
+    org_id: int,
+):
+    """Pull bol orders, commit, then mirror affected stock cross-channel."""
+    summary = sync_bol(db, connection, BolClient())
+    db.commit()
+    for sku_id in summary.reserved_sku_ids:
+        background_tasks.add_task(push_inventory_to_channels, sku_id, org_id)
     return summary
 
 
@@ -414,7 +431,6 @@ def connect_bol(
         _raise_bol_http(exc)
 
     connection = _get_or_create_connection(db, org_id, "bol")
-    connection.mode = "observe"
     connection.status = "active"
     db.commit()
     return _bol_status_for(connection)
@@ -422,19 +438,21 @@ def connect_bol(
 
 @router.post("/bol/sync", response_model=ChannelSyncSummary)
 def trigger_bol_sync(
+    background_tasks: BackgroundTasks,
     organization_id: int | None = Query(None),
     db: Session = Depends(get_db),
     user: User = Depends(require_platform_admin),
 ):
-    """Read open FBR/VVB orders and shipment history; never writes to bol."""
+    """Read FBR orders; live mode also mirrors affected available stock."""
     org_id = _require_org_id(organization_id)
     _assert_org_has_channel(db, org_id)
     connection = _get_connection(db, org_id, "bol")
     if not connection or not _bol_status_for(connection).connected:
         raise HTTPException(400, "bol is niet verbonden — koppel eerst in Admin")
     try:
-        summary = sync_bol(db, connection, BolClient())
-        db.commit()
+        summary = _sync_bol_connection(
+            db, connection, background_tasks, org_id
+        )
     except (BolConfigurationError, BolAuthenticationError, BolAPIError) as exc:
         db.rollback()
         _raise_bol_http(exc)
@@ -443,6 +461,84 @@ def trigger_bol_sync(
         created=summary.created,
         updated=summary.updated,
         unmatched=summary.unmatched,
+    )
+
+
+@router.post("/bol/mode", response_model=ChannelStatus)
+def set_bol_mode(
+    body: ChannelModeRequest,
+    background_tasks: BackgroundTasks,
+    organization_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_platform_admin),
+):
+    """Switch bol between safe observe mode and live picking/stock mode."""
+    org_id = _require_org_id(organization_id)
+    _assert_org_has_channel(db, org_id)
+    mode = body.mode.strip().lower()
+    if mode not in ("observe", "live"):
+        raise HTTPException(400, "Ongeldige modus — kies 'observe' of 'live'")
+
+    connection = _get_connection(db, org_id, "bol")
+    if not connection or not _bol_status_for(connection).connected:
+        raise HTTPException(400, "bol is niet verbonden — koppel eerst in Admin")
+
+    if mode == "live":
+        if (
+            connection.mode != "live"
+            or connection.inventory_authority_started_at is None
+        ):
+            connection.inventory_authority_started_at = datetime.datetime.utcnow()
+        connection.mode = "live"
+        # Re-read open orders so observed rows promote to active and reserve.
+        # Shipment history before this cutover remains part of opening stock.
+        connection.cursor = None
+        try:
+            _sync_bol_connection(db, connection, background_tasks, org_id)
+        except (BolConfigurationError, BolAuthenticationError, BolAPIError) as exc:
+            db.rollback()
+            _raise_bol_http(exc)
+    else:
+        connection.mode = "observe"
+        db.commit()
+    return _bol_status_for(connection)
+
+
+@router.post("/bol/push-inventory", response_model=InventoryPushSummary)
+def push_bol_inventory(
+    organization_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_platform_admin),
+):
+    """Align every local EAN product with its single matching bol FBR offer."""
+    org_id = _require_org_id(organization_id)
+    _assert_org_has_channel(db, org_id)
+    connection = _get_connection(db, org_id, "bol")
+    if not connection or not _bol_status_for(connection).connected:
+        raise HTTPException(400, "bol is niet verbonden — koppel eerst in Admin")
+    if connection.mode != "live":
+        raise HTTPException(
+            400, "Verbinding staat op observe — zet live voordat je voorraad pusht"
+        )
+
+    skus = (
+        db.query(SKU)
+        .filter(SKU.organization_id == org_id, SKU.ean.isnot(None))
+        .all()
+    )
+    pushed = skipped = failed = 0
+    for sku in skus:
+        try:
+            if push_bol_available(db, sku.id, org_id):
+                pushed += 1
+            else:
+                skipped += 1
+        except Exception:
+            failed += 1
+            logger.exception("bol bulk push failed for sku %s (org %s)", sku.id, org_id)
+    db.commit()
+    return InventoryPushSummary(
+        total=len(skus), pushed=pushed, skipped_no_variant=skipped, failed=failed
     )
 
 
@@ -637,7 +733,7 @@ def resolve_review_order(
     db.commit()
     for sku_id in sorted(affected):
         background_tasks.add_task(
-            push_inventory_to_shopify, sku_id, order.organization_id
+            push_inventory_to_channels, sku_id, order.organization_id
         )
 
     return ChannelReviewResolveResponse(status=order.status)

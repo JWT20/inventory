@@ -5,7 +5,7 @@ import pytest
 
 import app.routers.channels as channels_mod
 import app.services.bol as bol_mod
-from app.models import ChannelConnection, Order, Organization, SKU
+from app.models import ChannelConnection, InventoryBalance, Order, Organization, SKU
 from app.services.bol import (
     BolAPIError,
     BolClient,
@@ -54,6 +54,7 @@ class _HTTP:
     def __init__(self):
         self.posts = []
         self.gets = []
+        self.patches = []
 
     def post(self, url, **kwargs):
         self.posts.append((url, kwargs))
@@ -71,6 +72,10 @@ class _HTTP:
         if url.endswith("/orders/A2K8290LP8"):
             return _Response(200, _payload())
         raise AssertionError(f"unexpected URL: {url}")
+
+    def patch(self, url, **kwargs):
+        self.patches.append((url, kwargs))
+        return _Response(200, {"offerId": url.rsplit("/", 1)[-1]})
 
 
 class _FakeBolClient:
@@ -139,6 +144,57 @@ def test_client_reuses_one_token_and_fetches_full_paginated_orders():
     list_params = http.gets[0][1]["params"]
     assert list_params == {"fulfilment-method": "FBR", "status": "OPEN", "page": 1}
     assert http.gets[1][1]["headers"]["Authorization"] == "Bearer temporary-bearer"
+
+
+def test_client_resolves_fbr_offer_and_updates_stock_with_v11():
+    clear_token_cache()
+
+    class OfferHTTP(_HTTP):
+        def get(self, url, **kwargs):
+            self.gets.append((url, kwargs))
+            assert url.endswith("/offers")
+            return _Response(
+                200,
+                {
+                    "offers": [
+                        {
+                            "offerId": "offer-fbb",
+                            "ean": "8710000000001",
+                            "fulfilment": {"method": "FBB"},
+                        },
+                        {
+                            "offerId": "offer-fbr",
+                            "ean": "8710000000001",
+                            "fulfilment": {"method": "FBR"},
+                        },
+                    ],
+                    "page": {"nextCursor": None},
+                },
+            )
+
+    http = OfferHTTP()
+    client = BolClient(
+        client_id="offer-client-id",
+        client_secret="client-secret",
+        token_url="https://login.bol.test/token",
+        api_base_url="https://api.bol.test/retailer",
+        http_client=http,
+    )
+
+    assert client.find_fbr_offer_ids("8710000000001") == ["offer-fbr"]
+    client.set_offer_stock("offer-fbr", 7)
+
+    assert http.gets[0][1]["params"] == {
+        "eans": "8710000000001",
+        "page-size": 100,
+    }
+    assert http.gets[0][1]["headers"]["Accept"] == "application/vnd.retailer.v11+json"
+    assert http.patches[0][1]["json"] == {
+        "stock": {"amount": 7, "managedByRetailer": True}
+    }
+    assert http.patches[0][1]["headers"]["Content-Type"] == (
+        "application/vnd.retailer.v11+json"
+    )
 
 
 def test_client_does_not_allocate_a_persistent_httpx_client(monkeypatch):
@@ -305,6 +361,40 @@ def test_sync_bol_imports_idempotently_in_observe_mode(db):
     assert connection.last_synced_at is not None
 
 
+def test_sync_bol_live_makes_open_order_pickable_and_reserves(db):
+    org = _org(db, "bol-live-sync")
+    sku = SKU(
+        sku_code="BOL-LIVE",
+        name="Live bol-sok",
+        organization_id=org.id,
+        product_type="barcode",
+        ean="8710000000001",
+    )
+    connection = ChannelConnection(
+        organization_id=org.id,
+        channel="bol",
+        mode="live",
+        status="active",
+        inventory_authority_started_at=datetime.datetime(2026, 7, 17),
+    )
+    db.add_all([sku, connection])
+    db.commit()
+
+    payload = _payload()
+    payload["orderItems"][0]["quantityShipped"] = 0
+    payload["orderItems"][0]["quantityCancelled"] = 0
+    summary = sync_bol(db, connection, _FakeBolClient([payload]))
+    db.commit()
+
+    order = db.query(Order).filter_by(channel="bol", external_id="A2K8290LP8").one()
+    balance = db.query(InventoryBalance).filter_by(
+        organization_id=org.id, sku_id=sku.id
+    ).one()
+    assert order.status == "active"
+    assert balance.quantity_reserved == 3
+    assert summary.reserved_sku_ids == {sku.id}
+
+
 def test_sync_bol_persists_shipped_order_in_same_observe_list(db):
     org = _org(db, "bol-shipped")
     db.add(
@@ -403,6 +493,52 @@ def test_admin_can_connect_and_sync_bol(client, db, admin_token, sample_org, mon
     )
     assert recon.status_code == 200
     assert recon.json()["orders"][0]["external_id"] == "A2K8290LP8"
+
+
+def test_admin_can_promote_bol_from_observe_to_live(
+    client, db, admin_token, sample_org, monkeypatch
+):
+    _configure_bol_settings(monkeypatch)
+    sku = SKU(
+        sku_code="BOL-CUTOVER",
+        name="Bol cutover sok",
+        organization_id=sample_org.id,
+        product_type="barcode",
+        ean="8710000000001",
+    )
+    connection = ChannelConnection(
+        organization_id=sample_org.id,
+        channel="bol",
+        mode="observe",
+        status="active",
+    )
+    db.add_all([sku, connection])
+    db.commit()
+    sync_bol(db, connection, _FakeBolClient([_payload()]))
+    db.commit()
+
+    fake = _FakeBolClient([_payload()])
+    monkeypatch.setattr(channels_mod, "BolClient", lambda: fake)
+    monkeypatch.setattr(
+        channels_mod, "push_inventory_to_channels", lambda *args, **kwargs: None
+    )
+
+    response = client.post(
+        f"/api/channels/bol/mode?organization_id={sample_org.id}",
+        headers=auth_header(admin_token),
+        json={"mode": "live"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "live"
+    db.refresh(connection)
+    order = db.query(Order).filter_by(channel="bol", external_id="A2K8290LP8").one()
+    balance = db.query(InventoryBalance).filter_by(
+        organization_id=sample_org.id, sku_id=sku.id
+    ).one()
+    assert connection.inventory_authority_started_at is not None
+    assert order.status == "active"
+    assert balance.quantity_reserved == 1
 
 
 def test_bol_connection_is_platform_admin_only(client, owner_token, sample_org, monkeypatch):
