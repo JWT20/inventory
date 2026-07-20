@@ -30,6 +30,7 @@ USER_AGENT = "Wijnpick/1.0"
 _TOKEN_EXPIRY_SAFETY_SECONDS = 30
 _MAX_ORDER_PAGES = 100
 _HTTP_TIMEOUT_SECONDS = 20.0
+_SHIPMENT_CURSOR_OVERLAP = datetime.timedelta(minutes=5)
 _token_cache: dict[str, tuple[str, float]] = {}
 _token_lock = threading.Lock()
 
@@ -57,6 +58,18 @@ class BolSyncSummary:
     updated: int = 0
     unmatched: int = 0
     reserved_sku_ids: set[int] = field(default_factory=set)
+
+
+@dataclass(frozen=True)
+class BolOrderUpdate:
+    payload: dict
+    shipped_at: datetime.datetime | None = None
+
+
+@dataclass(frozen=True)
+class BolOrderBatch:
+    orders: list[BolOrderUpdate]
+    newest_shipment_at: datetime.datetime | None = None
 
 
 def clear_token_cache() -> None:
@@ -194,12 +207,11 @@ class BolClient:
             return payload
         raise BolAuthenticationError("bol heeft de API-toegang geweigerd")
 
-    def fetch_open_orders(self):
-        """Yield full open FBR order payloads, including VVB orders."""
+    def _fetch_order_ids(self, *, status: str):
         for page in range(1, _MAX_ORDER_PAGES + 1):
             payload = self._get(
                 "/orders",
-                params={"fulfilment-method": "FBR", "status": "OPEN", "page": page},
+                params={"fulfilment-method": "FBR", "status": status, "page": page},
             )
             orders = payload.get("orders") or []
             if not isinstance(orders, list):
@@ -210,9 +222,92 @@ class BolClient:
                 order_id = str((summary or {}).get("orderId") or "").strip()
                 if not order_id:
                     raise BolAPIError("bol-order mist een orderId")
-                yield self._get(f"/orders/{quote(order_id, safe='')}")
+                yield order_id
         raise BolAPIError(
             f"bol-orderlijst overschrijdt de veiligheidslimiet van {_MAX_ORDER_PAGES} pagina's"
+        )
+
+    def fetch_open_orders(self):
+        """Yield full open FBR order payloads, including VVB orders."""
+        for order_id in self._fetch_order_ids(status="OPEN"):
+            yield self._get(f"/orders/{quote(order_id, safe='')}")
+
+    def _fetch_recent_shipments(
+        self, *, since: datetime.datetime | None
+    ) -> tuple[dict[str, datetime.datetime], datetime.datetime | None]:
+        """Return recently shipped FBR order ids and their latest shipment time.
+
+        The first call has no cursor and backfills the API's three-month shipment
+        window. Later calls stop once they cross a small overlap before the last
+        seen shipment, avoiding both full rescans and timestamp-boundary misses.
+        """
+        cutoff = _as_utc(since) - _SHIPMENT_CURSOR_OVERLAP if since else None
+        shipped_at_by_order: dict[str, datetime.datetime] = {}
+        newest: datetime.datetime | None = None
+
+        for page in range(1, _MAX_ORDER_PAGES + 1):
+            payload = self._get(
+                "/shipments",
+                params={"fulfilment-method": "FBR", "page": page},
+            )
+            shipments = payload.get("shipments") or []
+            if not isinstance(shipments, list):
+                raise BolAPIError("bol gaf een ongeldige verzendlijst")
+            if not shipments:
+                return shipped_at_by_order, newest
+
+            reached_cursor = False
+            for shipment in shipments:
+                order_id = str(
+                    ((shipment or {}).get("order") or {}).get("orderId") or ""
+                ).strip()
+                shipped_at = _parse_datetime((shipment or {}).get("shipmentDateTime"))
+                if not order_id or shipped_at is None:
+                    raise BolAPIError("bol-zending mist orderId of shipmentDateTime")
+                shipped_at = _as_utc(shipped_at)
+                if newest is None or shipped_at > newest:
+                    newest = shipped_at
+                if cutoff is not None and shipped_at < cutoff:
+                    reached_cursor = True
+                    continue
+                previous = shipped_at_by_order.get(order_id)
+                if previous is None or shipped_at > previous:
+                    shipped_at_by_order[order_id] = shipped_at
+
+            if reached_cursor:
+                return shipped_at_by_order, newest
+
+        raise BolAPIError(
+            f"bol-verzendlijst overschrijdt de veiligheidslimiet van {_MAX_ORDER_PAGES} pagina's"
+        )
+
+    def fetch_order_updates(
+        self, *, shipped_since: datetime.datetime | None = None
+    ) -> BolOrderBatch:
+        """Fetch open orders plus new/recent shipment history as one order set."""
+        shipment_dates, newest_shipment_at = self._fetch_recent_shipments(
+            since=shipped_since
+        )
+        ordered_ids: list[str] = []
+        seen: set[str] = set()
+        for order_id in self._fetch_order_ids(status="OPEN"):
+            if order_id not in seen:
+                seen.add(order_id)
+                ordered_ids.append(order_id)
+        for order_id in shipment_dates:
+            if order_id not in seen:
+                seen.add(order_id)
+                ordered_ids.append(order_id)
+
+        return BolOrderBatch(
+            orders=[
+                BolOrderUpdate(
+                    payload=self._get(f"/orders/{quote(order_id, safe='')}"),
+                    shipped_at=shipment_dates.get(order_id),
+                )
+                for order_id in ordered_ids
+            ],
+            newest_shipment_at=newest_shipment_at,
         )
 
 
@@ -232,7 +327,15 @@ def _parse_datetime(value: str | None) -> datetime.datetime | None:
         return None
 
 
-def to_normalized(payload: dict) -> NormalizedChannelOrder:
+def _as_utc(value: datetime.datetime) -> datetime.datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=datetime.timezone.utc)
+    return value.astimezone(datetime.timezone.utc)
+
+
+def to_normalized(
+    payload: dict, *, shipped_at: datetime.datetime | None = None
+) -> NormalizedChannelOrder:
     """Map one full bol v10 order to the shared channel order shape."""
     order_id = str(payload.get("orderId") or "").strip()
     if not order_id:
@@ -294,6 +397,7 @@ def to_normalized(payload: dict) -> NormalizedChannelOrder:
         customer_name=customer_name,
         financial_status=financial_status,
         fulfillment_status=fulfillment_status,
+        shipped_at=shipped_at,
         cancelled_at=cancelled_at,
         lines=lines,
     )
@@ -302,7 +406,7 @@ def to_normalized(payload: dict) -> NormalizedChannelOrder:
 def sync_bol(
     db: Session, connection: ChannelConnection, client: BolClient | None = None
 ) -> BolSyncSummary:
-    """Read and idempotently import every currently-open FBR/VVB bol order."""
+    """Import open orders and recent FBR/VVB shipment history idempotently."""
     db.flush()
     connection = (
         db.query(ChannelConnection)
@@ -318,8 +422,14 @@ def sync_bol(
 
     client = client or BolClient()
     summary = BolSyncSummary()
-    for payload in client.fetch_open_orders():
-        result = import_channel_order(db, connection, to_normalized(payload))
+    shipped_since = _parse_datetime(connection.cursor)
+    batch = client.fetch_order_updates(shipped_since=shipped_since)
+    for update in batch.orders:
+        result = import_channel_order(
+            db,
+            connection,
+            to_normalized(update.payload, shipped_at=update.shipped_at),
+        )
         summary.fetched += 1
         if result.created:
             summary.created += 1
@@ -327,6 +437,12 @@ def sync_bol(
             summary.updated += 1
         summary.unmatched += len(result.unmatched_eans)
         summary.reserved_sku_ids.update(result.reserved_sku_ids)
+
+    if batch.newest_shipment_at is not None and (
+        shipped_since is None
+        or _as_utc(batch.newest_shipment_at) > _as_utc(shipped_since)
+    ):
+        connection.cursor = batch.newest_shipment_at.isoformat()
 
     connection.last_synced_at = datetime.datetime.utcnow()
     db.flush()

@@ -9,6 +9,8 @@ from app.models import ChannelConnection, Order, Organization, SKU
 from app.services.bol import (
     BolAPIError,
     BolClient,
+    BolOrderBatch,
+    BolOrderUpdate,
     clear_token_cache,
     sync_bol,
     to_normalized,
@@ -74,15 +76,30 @@ class _HTTP:
 class _FakeBolClient:
     configured = True
 
-    def __init__(self, payloads=None):
+    def __init__(
+        self, payloads=None, shipped_at_by_order=None, newest_shipment_at=None
+    ):
         self.payloads = payloads or []
+        self.shipped_at_by_order = shipped_at_by_order or {}
+        self.newest_shipment_at = newest_shipment_at
         self.validated = False
+        self.shipped_since = None
 
     def validate_credentials(self):
         self.validated = True
 
-    def fetch_open_orders(self):
-        yield from self.payloads
+    def fetch_order_updates(self, *, shipped_since=None):
+        self.shipped_since = shipped_since
+        return BolOrderBatch(
+            orders=[
+                BolOrderUpdate(
+                    payload=payload,
+                    shipped_at=self.shipped_at_by_order.get(payload["orderId"]),
+                )
+                for payload in self.payloads
+            ],
+            newest_shipment_at=self.newest_shipment_at,
+        )
 
 
 def _org(db, slug):
@@ -182,6 +199,55 @@ def test_open_order_pagination_has_a_safety_limit(monkeypatch):
         list(client.fetch_open_orders())
 
 
+def test_fetch_order_updates_combines_open_and_shipped_orders_once(monkeypatch):
+    client = BolClient(
+        client_id="client-id",
+        client_secret="client-secret",
+        token_url="https://login.bol.test/token",
+        api_base_url="https://api.bol.test/retailer",
+        http_client=_HTTP(),
+    )
+    shipped_at = datetime.datetime.fromisoformat("2026-07-19T12:30:00+02:00")
+    calls = []
+
+    def api_get(path, *, params=None):
+        calls.append((path, params))
+        if path == "/shipments" and params["page"] == 1:
+            return {
+                "shipments": [
+                    {
+                        "shipmentDateTime": shipped_at.isoformat(),
+                        "order": {"orderId": "SHIPPED-1"},
+                    },
+                    {
+                        "shipmentDateTime": "2026-07-19T11:00:00+02:00",
+                        "order": {"orderId": "SHIPPED-1"},
+                    },
+                ]
+            }
+        if path == "/shipments":
+            return {"shipments": []}
+        if path == "/orders" and params["page"] == 1:
+            return {"orders": [{"orderId": "OPEN-1"}]}
+        if path == "/orders":
+            return {"orders": []}
+        return _payload(path.rsplit("/", 1)[-1])
+
+    monkeypatch.setattr(client, "_get", api_get)
+
+    batch = client.fetch_order_updates()
+
+    assert [update.payload["orderId"] for update in batch.orders] == [
+        "OPEN-1",
+        "SHIPPED-1",
+    ]
+    assert batch.orders[0].shipped_at is None
+    assert batch.orders[1].shipped_at == shipped_at.astimezone(datetime.timezone.utc)
+    assert batch.newest_shipment_at == shipped_at.astimezone(datetime.timezone.utc)
+    detail_calls = [path for path, _ in calls if path.startswith("/orders/")]
+    assert detail_calls == ["/orders/OPEN-1", "/orders/SHIPPED-1"]
+
+
 def test_bol_status_checks_settings_without_constructing_client(monkeypatch):
     _configure_bol_settings(monkeypatch)
     monkeypatch.setattr(
@@ -237,6 +303,67 @@ def test_sync_bol_imports_idempotently_in_observe_mode(db):
     order = db.query(Order).filter_by(channel="bol", external_id="A2K8290LP8").one()
     assert order.status == "observed"
     assert connection.last_synced_at is not None
+
+
+def test_sync_bol_persists_shipped_order_in_same_observe_list(db):
+    org = _org(db, "bol-shipped")
+    db.add(
+        SKU(
+            sku_code="BOL-SHIPPED",
+            name="Verzonden bol-product",
+            organization_id=org.id,
+            product_type="barcode",
+            ean="8710000000001",
+        )
+    )
+    connection = ChannelConnection(
+        organization_id=org.id, channel="bol", mode="observe", status="active"
+    )
+    db.add(connection)
+    db.commit()
+
+    payload = _payload("SHIPPED-1")
+    payload["orderItems"][0]["quantityShipped"] = 3
+    payload["orderItems"][0]["quantityCancelled"] = 0
+    shipped_at = datetime.datetime.fromisoformat("2026-07-19T12:30:00+02:00")
+    newest = shipped_at.astimezone(datetime.timezone.utc)
+    fake = _FakeBolClient(
+        [payload],
+        shipped_at_by_order={"SHIPPED-1": newest},
+        newest_shipment_at=newest,
+    )
+
+    summary = sync_bol(db, connection, fake)
+    db.commit()
+
+    order = db.query(Order).filter_by(channel="bol", external_id="SHIPPED-1").one()
+    assert (summary.fetched, summary.created, summary.unmatched) == (1, 1, 0)
+    assert order.status == "observed"
+    assert order.channel_fulfillment_status == "fulfilled"
+    stored_shipped_at = order.channel_shipped_at
+    if stored_shipped_at.tzinfo is None:
+        stored_shipped_at = stored_shipped_at.replace(tzinfo=datetime.timezone.utc)
+    assert stored_shipped_at == newest
+    assert connection.cursor == newest.isoformat()
+
+    older = newest - datetime.timedelta(minutes=1)
+    sync_bol(
+        db,
+        connection,
+        _FakeBolClient(
+            [payload],
+            shipped_at_by_order={"SHIPPED-1": older},
+            newest_shipment_at=older,
+        ),
+    )
+    db.commit()
+    db.refresh(order)
+    db.refresh(connection)
+    stored_shipped_at = order.channel_shipped_at
+    if stored_shipped_at.tzinfo is None:
+        stored_shipped_at = stored_shipped_at.replace(tzinfo=datetime.timezone.utc)
+    assert stored_shipped_at == newest
+    assert connection.cursor == newest.isoformat()
 
 
 def test_admin_can_connect_and_sync_bol(client, db, admin_token, sample_org, monkeypatch):
