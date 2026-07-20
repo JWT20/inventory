@@ -265,8 +265,8 @@ const uploadStatus: Record<
   { label: string; className: string }
 > = {
   processing: { label: "Wordt verwerkt", className: "bg-blue-100 text-blue-800" },
-  needs_action: { label: "Actie nodig", className: "bg-amber-100 text-amber-800" },
-  draft: { label: "Draft opgeslagen", className: "bg-amber-100 text-amber-800" },
+  needs_action: { label: "Mislukt", className: "bg-red-100 text-red-800" },
+  draft: { label: "Mislukt", className: "bg-red-100 text-red-800" },
   booked: { label: "Voorraad geboekt", className: "bg-emerald-100 text-emerald-800" },
   failed: { label: "Mislukt", className: "bg-red-100 text-red-800" },
 };
@@ -687,6 +687,13 @@ export function InboundPage() {
     });
   }
 
+  // An extracted preview only lives in this component. Keep the attempt that
+  // is currently open out of history; if the user leaves without confirming,
+  // the preview is lost and the attempt is shown as failed on the next visit.
+  const visibleUploadHistory = uploadHistory.filter(
+    (attempt) => attempt.id !== preview?.upload_attempt_id,
+  );
+
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-bold">Inbound pakbon/factuur</h2>
@@ -1000,13 +1007,13 @@ export function InboundPage() {
           </Button>
         </div>
 
-        {uploadHistory.length === 0 ? (
+        {visibleUploadHistory.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {historyLoading ? "Historie laden..." : "Nog geen uploads geregistreerd."}
           </p>
         ) : (
           <div className="divide-y divide-border">
-            {uploadHistory.map((attempt) => {
+            {visibleUploadHistory.map((attempt) => {
               const status = uploadStatus[attempt.status];
               const title =
                 attempt.reference ||
@@ -1014,7 +1021,16 @@ export function InboundPage() {
                 (attempt.source_type === "text" ? "Geplakte tekst" : `Upload #${attempt.id}`);
               const countText = attempt.status === "booked"
                 ? `${attempt.booked_line_count} regels · ${attempt.booked_quantity} eenheden`
-                : `${attempt.bookable_line_count}/${attempt.line_count} regels boekbaar`;
+                : attempt.line_count > 0
+                  ? `${attempt.line_count} regels · geen voorraad geboekt`
+                  : "Geen voorraad geboekt";
+              const failureMessage = attempt.error_message || (
+                attempt.status === "needs_action"
+                  ? "Niet bevestigd; geen voorraad bijgeboekt."
+                  : attempt.status === "draft"
+                    ? "Niet volledig geboekt; geen voorraad bijgeboekt."
+                    : null
+              );
 
               return (
                 <div key={attempt.id} className="py-3 first:pt-0 last:pb-0">
@@ -1036,8 +1052,8 @@ export function InboundPage() {
                       {status.label}
                     </span>
                   </div>
-                  {attempt.error_message && (
-                    <p className="mt-1 text-xs text-red-700">{attempt.error_message}</p>
+                  {failureMessage && (
+                    <p className="mt-1 text-xs text-red-700">{failureMessage}</p>
                   )}
                 </div>
               );
