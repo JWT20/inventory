@@ -92,8 +92,11 @@ export function ChannelsPage() {
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [orgId, setOrgId] = useState<number | null>(null);
   const [recon, setRecon] = useState<Reconciliation | null>(null);
+  const [bolRecon, setBolRecon] = useState<Reconciliation | null>(null);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [bolConnecting, setBolConnecting] = useState(false);
+  const [bolSyncing, setBolSyncing] = useState(false);
   const [changingMode, setChangingMode] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [resolving, setResolving] = useState(false);
@@ -114,7 +117,12 @@ export function ChannelsPage() {
     if (!orgId) return;
     setLoading(true);
     try {
-      setRecon(await api.channelReconciliation(orgId));
+      const [shopify, bol] = await Promise.all([
+        api.channelReconciliation(orgId),
+        api.bolChannelReconciliation(orgId),
+      ]);
+      setRecon(shopify);
+      setBolRecon(bol);
     } catch {
       toast.error("Kan kanaaloverzicht niet laden");
     } finally {
@@ -157,6 +165,36 @@ export function ChannelsPage() {
       toast.error(err instanceof Error ? err.message : "Sync mislukt");
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function connectBol() {
+    if (!orgId) return;
+    setBolConnecting(true);
+    try {
+      await api.bolChannelConnect(orgId);
+      toast.success("bol gekoppeld in observe-modus");
+      await load();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Kan bol niet koppelen");
+    } finally {
+      setBolConnecting(false);
+    }
+  }
+
+  async function syncBol() {
+    if (!orgId) return;
+    setBolSyncing(true);
+    try {
+      const r = await api.bolChannelSync(orgId);
+      toast.success(
+        `bol-sync klaar: ${r.fetched} opgehaald · ${r.created} nieuw · ${r.unmatched} ongematchte EAN's`,
+      );
+      await load();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "bol-sync mislukt");
+    } finally {
+      setBolSyncing(false);
     }
   }
 
@@ -236,7 +274,7 @@ export function ChannelsPage() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-bold">Kanalen — Shopify</h2>
+      <h2 className="text-xl font-bold">Kanalen</h2>
 
       {orgs.length === 0 ? (
         <p className="text-sm text-muted-foreground">
@@ -259,10 +297,11 @@ export function ChannelsPage() {
             </Select>
           )}
 
+          <h3 className="text-base font-semibold">Shopify</h3>
           <Card className="p-4">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div>
-                <p className="text-sm font-semibold flex items-center gap-2">
+                <div className="text-sm font-semibold flex items-center gap-2">
                   {status?.connected ? (
                     <>
                       <Badge variant="default">Verbonden</Badge>
@@ -274,7 +313,7 @@ export function ChannelsPage() {
                   ) : (
                     <Badge variant="outline">Niet verbonden</Badge>
                   )}
-                </p>
+                </div>
                 <p className="text-xs text-muted-foreground mt-1">
                   {status?.connected
                     ? isLive
@@ -338,14 +377,14 @@ export function ChannelsPage() {
 
           <Card className="p-0 overflow-hidden">
             <div className="px-4 py-3 border-b border-border">
-              <p className="text-sm font-semibold flex items-center gap-2">
+              <div className="text-sm font-semibold flex items-center gap-2">
                 Binnengehaalde orders{loading ? " — laden…" : ""}
                 {blockedCount > 0 && (
                   <Badge variant="outline" className="text-xs border-red-300 bg-red-50 text-red-700">
                     {blockedCount} geblokkeerd
                   </Badge>
                 )}
-              </p>
+              </div>
               <p className="text-xs text-muted-foreground mt-1">
                 Het ordernummer is wat Veloyd als referentie op het verzendlabel zet.
                 Bij de latere labelscan tijdens het picken matchen we hierop.
@@ -361,7 +400,7 @@ export function ChannelsPage() {
                   return (
                   <div key={o.external_id} className="px-4 py-3 flex justify-between items-start gap-3">
                     <div className="min-w-0">
-                      <p className="text-sm font-medium">
+                      <div className="text-sm font-medium">
                         Order {o.channel_reference ?? "—"}
                         {o.status && (
                           <Badge
@@ -380,7 +419,7 @@ export function ChannelsPage() {
                         ) : (
                           <Badge variant="secondary" className="ml-2 text-xs">nog te picken</Badge>
                         )}
-                      </p>
+                      </div>
                       <p className="text-xs text-muted-foreground">
                         Shopify-id {o.external_id} · {fmtDate(o.ordered_at)}
                       </p>
@@ -441,6 +480,102 @@ export function ChannelsPage() {
             ) : (
               <p className="px-4 py-8 text-center text-sm text-muted-foreground">
                 Nog geen orders binnengehaald.
+              </p>
+            )}
+          </Card>
+
+          <h3 className="text-base font-semibold pt-3">bol</h3>
+          <Card className="p-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div className="text-sm font-semibold flex items-center gap-2">
+                  {bolRecon?.status.connected ? (
+                    <>
+                      <Badge variant="default">Verbonden</Badge>
+                      <Badge variant="outline">Observe</Badge>
+                    </>
+                  ) : (
+                    <Badge variant="outline">Niet verbonden</Badge>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {bolRecon?.status.connected
+                    ? `Alleen lezen — openstaande FBR/VVB-orders ophalen, niets bij bol wijzigen · laatst gesynct: ${fmtDate(bolRecon.status.last_synced_at)}`
+                    : "Koppel het bol-account uit de beveiligde serveromgeving."}
+                </p>
+              </div>
+              <div className="flex gap-2 flex-wrap">
+                <Button variant="outline" onClick={connectBol} disabled={bolConnecting}>
+                  {bolConnecting
+                    ? "Controleren…"
+                    : bolRecon?.status.connected
+                      ? "Opnieuw controleren"
+                      : "Koppel bol"}
+                </Button>
+                <Button
+                  onClick={syncBol}
+                  disabled={!bolRecon?.status.connected || bolSyncing}
+                >
+                  {bolSyncing ? "Synchroniseren…" : "Nu synchroniseren"}
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          {bolRecon && bolRecon.unmatched_eans.length > 0 && (
+            <Card className="p-4 bg-amber-50 border-amber-200">
+              <p className="text-sm font-semibold text-amber-800 mb-1">
+                bol: {bolRecon.unmatched_eans.length} EAN('s) zonder product
+              </p>
+              <p className="text-xs text-amber-700 font-mono break-all">
+                {bolRecon.unmatched_eans.join(", ")}
+              </p>
+            </Card>
+          )}
+
+          <Card className="p-0 overflow-hidden">
+            <div className="px-4 py-3 border-b border-border">
+              <p className="text-sm font-semibold">
+                Binnengehaalde bol-orders{loading ? " — laden…" : ""}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Observe-modus: deze orders reserveren nog geen voorraad en zijn nog niet pickbaar.
+              </p>
+            </div>
+            {bolRecon && bolRecon.orders.length > 0 ? (
+              <div className="divide-y divide-border">
+                {bolRecon.orders.map((o) => (
+                  <div
+                    key={o.external_id}
+                    className="px-4 py-3 flex justify-between items-start gap-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium">
+                        Order {o.channel_reference ?? o.external_id}
+                        {o.status && (
+                          <Badge variant="outline" className="ml-2 text-xs">
+                            {ORDER_STATUS_LABELS[o.status] ?? o.status}
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        bol-id {o.external_id} · {fmtDate(o.ordered_at)}
+                      </p>
+                    </div>
+                    <div className="text-right text-xs shrink-0">
+                      <p className="text-emerald-700">{o.matched_lines} gematcht</p>
+                      {o.unmatched_eans.length > 0 && (
+                        <p className="text-amber-600">
+                          {o.unmatched_eans.length} ontbreken
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+                Nog geen bol-orders binnengehaald.
               </p>
             )}
           </Card>

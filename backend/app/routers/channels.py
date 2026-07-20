@@ -21,6 +21,7 @@ from app.database import get_db
 from app.models import (
     Booking,
     ChannelConnection,
+    ChannelSyncLog,
     Order,
     OrderLine,
     Organization,
@@ -39,6 +40,14 @@ from app.schemas import (
     InventoryPushSummary,
 )
 from app.services.channel_import import CANCELLATION_REVIEW_REASONS
+from app.services.bol import (
+    BolAPIError,
+    BolAuthenticationError,
+    BolClient,
+    BolConfigurationError,
+    clear_token_cache,
+    sync_bol,
+)
 from app.services.channel_credentials import (
     CredentialEncryptionError,
     get_access_token,
@@ -126,6 +135,77 @@ def _status_for(conn: ChannelConnection | None) -> ChannelStatus:
         shop_domain=conn.shop_domain,
         mode=conn.mode,
         last_synced_at=conn.last_synced_at,
+    )
+
+
+def _bol_status_for(conn: ChannelConnection | None) -> ChannelStatus:
+    configured = bool(
+        settings.bol_client_id
+        and settings.bol_client_secret
+        and settings.bol_token_url
+        and settings.bol_api_base_url
+    )
+    return ChannelStatus(
+        connected=bool(conn and conn.status == "active" and configured),
+        mode=conn.mode if conn else None,
+        last_synced_at=conn.last_synced_at if conn else None,
+    )
+
+
+def _raise_bol_http(exc: Exception) -> None:
+    if isinstance(exc, BolConfigurationError):
+        raise HTTPException(400, str(exc)) from exc
+    if isinstance(exc, BolAuthenticationError):
+        # Do not return HTTP 401: that status means the Admin's own login expired
+        # to the SPA and would incorrectly sign the operator out.
+        raise HTTPException(400, str(exc)) from exc
+    raise HTTPException(503, str(exc)) from exc
+
+
+def _reconciliation_for(
+    db: Session, org_id: int, channel: str, status: ChannelStatus
+) -> ChannelReconciliation:
+    logs = (
+        db.query(ChannelSyncLog)
+        .filter(
+            ChannelSyncLog.organization_id == org_id,
+            ChannelSyncLog.channel == channel,
+        )
+        .order_by(ChannelSyncLog.synced_at.desc())
+        .all()
+    )
+    orders_by_ext = {
+        o.external_id: o
+        for o in db.query(Order).filter(
+            Order.organization_id == org_id, Order.channel == channel
+        )
+    }
+    rows: list[ChannelOrderRow] = []
+    all_unmatched: set[str] = set()
+    for log in logs:
+        unmatched = json.loads(log.unmatched_eans or "[]")
+        all_unmatched.update(unmatched)
+        order = orders_by_ext.get(log.external_id)
+        rows.append(
+            ChannelOrderRow(
+                order_id=order.id if order else None,
+                external_id=log.external_id,
+                reference=order.reference if order else None,
+                channel_reference=order.channel_reference if order else None,
+                channel_fulfillment_status=(
+                    order.channel_fulfillment_status if order else None
+                ),
+                review_reason=order.review_reason if order else None,
+                ordered_at=order.ordered_at if order else None,
+                status=order.status if order else None,
+                matched_lines=log.matched_lines,
+                unmatched_eans=unmatched,
+            )
+        )
+    return ChannelReconciliation(
+        status=status,
+        orders=rows,
+        unmatched_eans=sorted(all_unmatched),
     )
 
 
@@ -281,6 +361,82 @@ def trigger_shopify_sync(
     if full:
         connection.cursor = None
     summary = _sync_connection(db, connection, background_tasks, org_id)
+    return ChannelSyncSummary(
+        fetched=summary.fetched,
+        created=summary.created,
+        updated=summary.updated,
+        unmatched=summary.unmatched,
+    )
+
+
+@router.get("/bol/status", response_model=ChannelStatus)
+def bol_status(
+    organization_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_platform_admin),
+):
+    org_id = _require_org_id(organization_id)
+    _assert_org_has_channel(db, org_id)
+    return _bol_status_for(_get_connection(db, org_id, "bol"))
+
+
+@router.post("/bol/connect", response_model=ChannelStatus)
+def connect_bol(
+    organization_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_platform_admin),
+):
+    """Validate the single server-side bol account and bind it to one org."""
+    org_id = _require_org_id(organization_id)
+    _assert_org_has_channel(db, org_id)
+    bound_elsewhere = (
+        db.query(ChannelConnection)
+        .filter(
+            ChannelConnection.channel == "bol",
+            ChannelConnection.organization_id != org_id,
+            ChannelConnection.status == "active",
+        )
+        .first()
+    )
+    if bound_elsewhere:
+        raise HTTPException(
+            409,
+            "Het bol-account uit .env is al aan een andere organisatie gekoppeld",
+        )
+
+    client = BolClient()
+    try:
+        clear_token_cache()
+        client.validate_credentials()
+    except (BolConfigurationError, BolAuthenticationError, BolAPIError) as exc:
+        db.rollback()
+        _raise_bol_http(exc)
+
+    connection = _get_or_create_connection(db, org_id, "bol")
+    connection.mode = "observe"
+    connection.status = "active"
+    db.commit()
+    return _bol_status_for(connection)
+
+
+@router.post("/bol/sync", response_model=ChannelSyncSummary)
+def trigger_bol_sync(
+    organization_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_platform_admin),
+):
+    """Read and import open FBR/VVB orders; never writes to bol."""
+    org_id = _require_org_id(organization_id)
+    _assert_org_has_channel(db, org_id)
+    connection = _get_connection(db, org_id, "bol")
+    if not connection or not _bol_status_for(connection).connected:
+        raise HTTPException(400, "bol is niet verbonden — koppel eerst in Admin")
+    try:
+        summary = sync_bol(db, connection, BolClient())
+        db.commit()
+    except (BolConfigurationError, BolAuthenticationError, BolAPIError) as exc:
+        db.rollback()
+        _raise_bol_http(exc)
     return ChannelSyncSummary(
         fetched=summary.fetched,
         created=summary.created,
@@ -494,52 +650,27 @@ def shopify_reconciliation(
 ):
     """Observe-mode overview: per imported order how many lines matched a SKU and
     which EANs did not, plus the deduped list of all unmatched EANs to fix."""
-    from app.models import ChannelSyncLog
-
     org_id = _require_org_id(organization_id)
     _assert_org_has_channel(db, org_id)
-
-    logs = (
-        db.query(ChannelSyncLog)
-        .filter(
-            ChannelSyncLog.organization_id == org_id,
-            ChannelSyncLog.channel == "shopify",
-        )
-        .order_by(ChannelSyncLog.synced_at.desc())
-        .all()
+    return _reconciliation_for(
+        db,
+        org_id,
+        "shopify",
+        _status_for(_get_connection(db, org_id, "shopify")),
     )
-    orders_by_ext = {
-        o.external_id: o
-        for o in db.query(Order).filter(
-            Order.organization_id == org_id, Order.channel == "shopify"
-        )
-    }
 
-    rows: list[ChannelOrderRow] = []
-    all_unmatched: set[str] = set()
-    for log in logs:
-        unmatched = json.loads(log.unmatched_eans or "[]")
-        all_unmatched.update(unmatched)
-        order = orders_by_ext.get(log.external_id)
-        rows.append(
-            ChannelOrderRow(
-                order_id=order.id if order else None,
-                external_id=log.external_id,
-                reference=order.reference if order else None,
-                channel_reference=order.channel_reference if order else None,
-                channel_fulfillment_status=(
-                    order.channel_fulfillment_status if order else None
-                ),
-                review_reason=order.review_reason if order else None,
-                ordered_at=order.ordered_at if order else None,
-                status=order.status if order else None,
-                matched_lines=log.matched_lines,
-                unmatched_eans=unmatched,
-            )
-        )
 
-    return ChannelReconciliation(
-        status=_status_for(_get_connection(db, org_id, "shopify")),
-        orders=rows,
-        unmatched_eans=sorted(all_unmatched),
+@router.get("/bol/reconciliation", response_model=ChannelReconciliation)
+def bol_reconciliation(
+    organization_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_platform_admin),
+):
+    org_id = _require_org_id(organization_id)
+    _assert_org_has_channel(db, org_id)
+    return _reconciliation_for(
+        db,
+        org_id,
+        "bol",
+        _bol_status_for(_get_connection(db, org_id, "bol")),
     )

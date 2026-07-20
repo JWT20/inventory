@@ -134,6 +134,11 @@ services:
       SHOPIFY_API_SECRET: ${SHOPIFY_API_SECRET:-}
       SHOPIFY_API_VERSION: ${SHOPIFY_API_VERSION:-2025-01}
       CHANNEL_CREDENTIAL_ENCRYPTION_KEY: ${CHANNEL_CREDENTIAL_ENCRYPTION_KEY:-}
+      BOL_CLIENT_ID: ${BOL_CLIENT_ID:-}
+      BOL_CLIENT_SECRET: ${BOL_CLIENT_SECRET:-}
+      BOL_TOKEN_URL: ${BOL_TOKEN_URL:-https://login.bol.com/token}
+      BOL_API_BASE_URL: ${BOL_API_BASE_URL:-https://api.bol.com/retailer}
+      BOL_DEMO_BASE_URL: ${BOL_DEMO_BASE_URL:-https://api.bol.com/retailer-demo}
       VELOYD_API_KEY: ${VELOYD_API_KEY:-}
       VELOYD_API_BASE_URL: ${VELOYD_API_BASE_URL:-https://app.veloyd.nl/api}
     volumes:

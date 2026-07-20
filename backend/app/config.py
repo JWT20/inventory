@@ -80,6 +80,15 @@ class Settings(BaseSettings):
     # now" button covers "I need it now". Set to 0 to disable (manual sync only).
     shopify_autosync_interval_seconds: int = 180
 
+    # bol Retailer API — first, single-account integration. Credentials stay in
+    # the server environment; the Admin connection binds that account to exactly
+    # one organization and starts read-only in observe mode.
+    bol_client_id: str = ""
+    bol_client_secret: str = ""
+    bol_token_url: str = "https://login.bol.com/token"
+    bol_api_base_url: str = "https://api.bol.com/retailer"
+    bol_demo_base_url: str = "https://api.bol.com/retailer-demo"
+
     # Veloyd shipping labels encode a track-and-trace value (for example V...)
     # rather than the visible Shopify order reference. The server uses this key
     # to resolve the barcode and verify its reference before shipping.
