@@ -51,7 +51,9 @@ class BolAuthenticationError(BolError):
 
 
 class BolAPIError(BolError):
-    pass
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass
@@ -211,11 +213,19 @@ class BolClient:
             if response.status_code == 429:
                 retry_after = response.headers.get("Retry-After")
                 suffix = f"; probeer over {retry_after} seconden opnieuw" if retry_after else ""
-                raise BolAPIError(f"bol rate limit bereikt{suffix}")
+                raise BolAPIError(
+                    f"bol rate limit bereikt{suffix}", status_code=429
+                )
             if response.status_code >= 500:
-                raise BolAPIError("bol Retailer API is tijdelijk niet beschikbaar")
+                raise BolAPIError(
+                    "bol Retailer API is tijdelijk niet beschikbaar",
+                    status_code=response.status_code,
+                )
             if response.status_code >= 400:
-                raise BolAPIError(f"bol Retailer API gaf HTTP {response.status_code}")
+                raise BolAPIError(
+                    f"bol Retailer API gaf HTTP {response.status_code}",
+                    status_code=response.status_code,
+                )
             if response.status_code == 204:
                 return {}
             try:

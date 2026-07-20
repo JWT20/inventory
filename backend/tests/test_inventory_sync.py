@@ -174,6 +174,40 @@ def test_bol_push_sets_absolute_available_for_single_fbr_offer(db):
     assert push_bol_available(db, sku.id, org.id, client_factory=FakeBolClient) is True
     assert FakeBolClient.last.eans == ["8710000040001"]
     assert FakeBolClient.last.sets == [("bol-offer-1", 7)]
+    assert sku.bol_offer_id == "bol-offer-1"
+
+
+def test_bol_push_reuses_cached_offer_without_lookup(db):
+    org = _org(db, "bol-sync-cached")
+    _live_bol_conn(db, org)
+    sku = _sku(db, org, "BOL-CACHED", "8710000040011")
+    sku.bol_offer_id = "cached-offer"
+    db.commit()
+    _balance(db, sku, org, on_hand=8, reserved=2)
+
+    assert push_bol_available(db, sku.id, org.id, client_factory=FakeBolClient) is True
+    assert FakeBolClient.last.eans == []
+    assert FakeBolClient.last.sets == [("cached-offer", 6)]
+
+
+def test_bol_push_re_resolves_stale_cached_offer_once(db):
+    org = _org(db, "bol-sync-stale")
+    _live_bol_conn(db, org)
+    sku = _sku(db, org, "BOL-STALE", "8710000040012")
+    sku.bol_offer_id = "deleted-offer"
+    db.commit()
+    _balance(db, sku, org, on_hand=4)
+
+    class StaleBolClient(FakeBolClient):
+        def set_offer_stock(self, offer_id, amount):
+            if offer_id == "deleted-offer":
+                raise BolAPIError("bol Retailer API gaf HTTP 404", status_code=404)
+            super().set_offer_stock(offer_id, amount)
+
+    assert push_bol_available(db, sku.id, org.id, client_factory=StaleBolClient) is True
+    assert StaleBolClient.last.eans == ["8710000040012"]
+    assert StaleBolClient.last.sets == [("bol-offer-1", 4)]
+    assert sku.bol_offer_id == "bol-offer-1"
 
 
 def test_bol_push_rejects_multiple_fbr_offers_for_one_ean(db):

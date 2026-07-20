@@ -432,6 +432,11 @@ def connect_bol(
 
     connection = _get_or_create_connection(db, org_id, "bol")
     connection.status = "active"
+    # Credentials may now point at a recreated or different bol account. Drop
+    # cached offer ids for this org; the next write-back resolves them lazily.
+    db.query(SKU).filter(SKU.organization_id == org_id).update(
+        {SKU.bol_offer_id: None}, synchronize_session=False
+    )
     db.commit()
     return _bol_status_for(connection)
 
@@ -490,9 +495,9 @@ def set_bol_mode(
         ):
             connection.inventory_authority_started_at = datetime.datetime.utcnow()
         connection.mode = "live"
-        # Re-read open orders so observed rows promote to active and reserve.
-        # Shipment history before this cutover remains part of opening stock.
-        connection.cursor = None
+        # Open orders are fetched on every bol sync and will promote to active.
+        # Keep the shipment cursor: observe already imported the history, so
+        # resetting it would synchronously re-fetch up to three months here.
         try:
             _sync_bol_connection(db, connection, background_tasks, org_id)
         except (BolConfigurationError, BolAuthenticationError, BolAPIError) as exc:

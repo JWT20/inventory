@@ -151,16 +151,42 @@ def push_bol_available(
     client = client_factory()
     if not client.configured:
         return False
-    offer_ids = client.find_fbr_offer_ids(sku.ean)
-    if not offer_ids:
-        logger.info("bol push: no FBR offer with EAN %s (sku %s)", sku.ean, sku_id)
-        return False
-    if len(offer_ids) > 1:
-        raise BolAPIError(
-            f"EAN {sku.ean} heeft meerdere FBR-offers; voorraad niet aangepast"
-        )
+    def resolve_offer_id() -> str | None:
+        offer_ids = client.find_fbr_offer_ids(sku.ean)
+        if not offer_ids:
+            logger.info(
+                "bol push: no FBR offer with EAN %s (sku %s)", sku.ean, sku_id
+            )
+            return None
+        if len(offer_ids) > 1:
+            raise BolAPIError(
+                f"EAN {sku.ean} heeft meerdere FBR-offers; voorraad niet aangepast"
+            )
+        sku.bol_offer_id = offer_ids[0]
+        return offer_ids[0]
 
-    client.set_offer_stock(offer_ids[0], _available(db, sku_id, organization_id))
+    had_cached_offer = bool(sku.bol_offer_id)
+    offer_id = sku.bol_offer_id or resolve_offer_id()
+    if not offer_id:
+        return False
+    available = _available(db, sku_id, organization_id)
+    try:
+        client.set_offer_stock(offer_id, available)
+    except BolAPIError as exc:
+        if not had_cached_offer or exc.status_code != 404:
+            raise
+        # The offer may have been deleted/recreated in bol. Invalidate once and
+        # resolve from the stable EAN; any second failure is returned normally.
+        logger.info(
+            "bol push: cached offer %s is stale for sku %s; resolving again",
+            offer_id,
+            sku_id,
+        )
+        sku.bol_offer_id = None
+        offer_id = resolve_offer_id()
+        if not offer_id:
+            return False
+        client.set_offer_stock(offer_id, available)
     return True
 
 

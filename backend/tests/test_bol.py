@@ -460,15 +460,15 @@ def test_admin_can_connect_and_sync_bol(client, db, admin_token, sample_org, mon
     _configure_bol_settings(monkeypatch)
     fake = _FakeBolClient([_payload()])
     monkeypatch.setattr(channels_mod, "BolClient", lambda: fake)
-    db.add(
-        SKU(
-            sku_code="BOL-API",
-            name="Bol API sok",
-            organization_id=sample_org.id,
-            product_type="barcode",
-            ean="8710000000001",
-        )
+    sku = SKU(
+        sku_code="BOL-API",
+        name="Bol API sok",
+        organization_id=sample_org.id,
+        product_type="barcode",
+        ean="8710000000001",
+        bol_offer_id="old-account-offer",
     )
+    db.add(sku)
     db.commit()
 
     connect = client.post(
@@ -479,6 +479,8 @@ def test_admin_can_connect_and_sync_bol(client, db, admin_token, sample_org, mon
     assert connect.json()["connected"] is True
     assert connect.json()["mode"] == "observe"
     assert fake.validated is True
+    db.refresh(sku)
+    assert sku.bol_offer_id is None
 
     sync = client.post(
         f"/api/channels/bol/sync?organization_id={sample_org.id}",
@@ -515,6 +517,8 @@ def test_admin_can_promote_bol_from_observe_to_live(
     db.add_all([sku, connection])
     db.commit()
     sync_bol(db, connection, _FakeBolClient([_payload()]))
+    shipment_cursor = "2026-07-19T12:30:00+00:00"
+    connection.cursor = shipment_cursor
     db.commit()
 
     fake = _FakeBolClient([_payload()])
@@ -537,6 +541,8 @@ def test_admin_can_promote_bol_from_observe_to_live(
         organization_id=sample_org.id, sku_id=sku.id
     ).one()
     assert connection.inventory_authority_started_at is not None
+    assert connection.cursor == shipment_cursor
+    assert fake.shipped_since == datetime.datetime.fromisoformat(shipment_cursor)
     assert order.status == "active"
     assert balance.quantity_reserved == 1
 
