@@ -488,11 +488,14 @@ export const api = {
     supplier_name?: string | null;
     reference?: string | null;
     document_sha256?: string | null;
+    upload_attempt_id?: number | null;
     force?: boolean;
     lines: { sku_id: number; quantity: number; supplier_code?: string | null }[];
   }) => json("/shipments", "POST", data),
   bookShipment: (shipmentId: number) =>
     request(`/shipments/${shipmentId}/book`, { method: "POST" }),
+  listInboundUploads: (limit = 50, offset = 0) =>
+    request(`/inbound-uploads?limit=${limit}&offset=${offset}`),
   confirmLineMatch: (data: {
     supplier_name: string;
     supplier_code: string;

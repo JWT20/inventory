@@ -2,7 +2,7 @@ import hashlib
 import logging
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import (
     APIRouter,
@@ -11,6 +11,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     Response,
     UploadFile,
 )
@@ -31,6 +32,7 @@ from app.models import (
     SKUAttribute,
     Customer,
     CustomerSKU,
+    InboundUploadAttempt,
     InboundShipment,
     InboundShipmentLine,
     InventoryBalance,
@@ -48,6 +50,7 @@ from app.schemas import (
     InventoryBalanceResponse,
     InventoryCountRequest,
     InventoryOverviewItem,
+    InboundUploadAttemptResponse,
     SupplierMappingResponse,
     ShipmentCreate,
     ShipmentMatchCandidate,
@@ -77,6 +80,10 @@ from app.services.storage import storage
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["inventory"])
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _normalize_supplier_name(value: str | None) -> str:
@@ -398,6 +405,89 @@ def _find_duplicate_shipment(db: Session, org_id: int | None, document_sha256: s
     )
 
 
+def _create_upload_attempt(
+    db: Session,
+    user: User,
+    *,
+    source_type: str,
+    original_filename: str | None = None,
+) -> InboundUploadAttempt:
+    attempt = InboundUploadAttempt(
+        organization_id=user.organization_id,
+        uploaded_by=user.id,
+        source_type=source_type,
+        original_filename=(original_filename or "").strip()[:255] or None,
+        status="processing",
+    )
+    db.add(attempt)
+    db.commit()
+    db.refresh(attempt)
+    return attempt
+
+
+def _fail_upload_attempt(
+    db: Session,
+    attempt_id: int,
+    *,
+    stage: str,
+    error: Exception,
+) -> None:
+    """Persist a safe failure summary without masking the original error."""
+    try:
+        db.rollback()
+        attempt = db.get(InboundUploadAttempt, attempt_id)
+        if not attempt:
+            return
+        detail = error.detail if isinstance(error, HTTPException) else str(error)
+        attempt.status = "failed"
+        attempt.error_stage = stage
+        attempt.error_message = str(detail or error.__class__.__name__)[:500]
+        attempt.updated_at = _utcnow()
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning("Failed to persist inbound upload failure", exc_info=True)
+
+
+def sweep_stale_inbound_uploads(db: Session) -> int:
+    """Mark processing attempts abandoned by a crash or deploy as failed."""
+    stale = (
+        db.query(InboundUploadAttempt)
+        .filter(
+            InboundUploadAttempt.status == "processing",
+            InboundUploadAttempt.updated_at < _utcnow() - timedelta(minutes=15),
+        )
+        .all()
+    )
+    for attempt in stale:
+        attempt.status = "failed"
+        attempt.error_stage = "extraction"
+        attempt.error_message = "Verwerking onderbroken"
+        attempt.updated_at = _utcnow()
+    if stale:
+        db.commit()
+    return len(stale)
+
+
+@router.get("/inbound-uploads", response_model=list[InboundUploadAttemptResponse])
+def list_inbound_uploads(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_merchant_inbound),
+):
+    """Return the current merchant's most recent inbound upload attempts."""
+    query = db.query(InboundUploadAttempt)
+    if not user.is_platform_admin:
+        query = query.filter(InboundUploadAttempt.organization_id == user.organization_id)
+    return (
+        query.order_by(InboundUploadAttempt.created_at.desc(), InboundUploadAttempt.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
 @router.post("/shipments/extract-preview", response_model=ShipmentExtractPreviewResponse)
 @observe()
 async def extract_shipment_preview(
@@ -408,42 +498,77 @@ async def extract_shipment_preview(
     user: User = Depends(require_merchant_inbound),
 ):
     """Extraction preview for an uploaded pakbon/factuur (image or PDF)."""
+    attempt = _create_upload_attempt(
+        db,
+        user,
+        source_type="file",
+        original_filename=file.filename,
+    )
     with propagate_attributes(
         user_id=str(user.id),
-        metadata={"endpoint": "/api/shipments/extract-preview", "username": user.username},
+        metadata={
+            "endpoint": "/api/shipments/extract-preview",
+            "username": user.username,
+            "upload_attempt_id": attempt.id,
+        },
     ):
-        file_bytes = file.file.read()
-        if not file_bytes:
-            raise HTTPException(400, "Leeg bestand")
-        if len(file_bytes) > 20 * 1024 * 1024:
-            raise HTTPException(413, "Bestand te groot (max 20 MB)")
+        try:
+            file_bytes = file.file.read()
+            if not file_bytes:
+                raise HTTPException(400, "Leeg bestand")
+            if len(file_bytes) > 20 * 1024 * 1024:
+                raise HTTPException(413, "Bestand te groot (max 20 MB)")
 
-        document_sha256 = hashlib.sha256(file_bytes).hexdigest()
-        duplicate_shipment = _find_duplicate_shipment(db, user.organization_id, document_sha256)
+            document_sha256 = hashlib.sha256(file_bytes).hexdigest()
+            duplicate_shipment = _find_duplicate_shipment(db, user.organization_id, document_sha256)
 
-        is_pdf = file_bytes[:1024].find(b"%PDF-") != -1
-        ext = "pdf" if is_pdf else "jpg"
-        image_key = f"shipment_docs/{uuid.uuid4().hex}.{ext}"
-        storage.save(image_key, file_bytes)
+            is_pdf = file_bytes[:1024].find(b"%PDF-") != -1
+            ext = "pdf" if is_pdf else "jpg"
+            image_key = f"shipment_docs/{uuid.uuid4().hex}.{ext}"
+            storage.save(image_key, file_bytes)
+            attempt.document_sha256 = document_sha256
+            attempt.document_key = image_key
+            attempt.updated_at = _utcnow()
+            db.commit()
 
-        extracted = await extract_shipment_document(file_bytes)
-        detected_type = extracted.get("document_type") or "unknown"
-        if document_type in {"pakbon", "invoice"}:
-            detected_type = document_type
+            extracted = await extract_shipment_document(file_bytes)
+            detected_type = extracted.get("document_type") or "unknown"
+            if document_type in {"pakbon", "invoice"}:
+                detected_type = document_type
 
-        lines = await _build_preview_lines(db, user, extracted, supplier_name)
+            lines = await _build_preview_lines(db, user, extracted, supplier_name)
+            resolved_supplier = (
+                supplier_name.strip()
+                or str(extracted.get("supplier_name", "") or "").strip()
+            )
+            reference = str(extracted.get("reference", "") or "")
+            attempt.supplier_name = resolved_supplier or None
+            attempt.reference = reference or None
+            attempt.status = "needs_action"
+            attempt.line_count = len(lines)
+            attempt.bookable_line_count = sum(
+                1 for line in lines if line.matched_sku_id and line.quantity_boxes > 0
+            )
+            attempt.error_stage = None
+            attempt.error_message = None
+            attempt.updated_at = _utcnow()
+            db.commit()
 
-        return ShipmentExtractPreviewResponse(
-            supplier_name=(supplier_name.strip() or str(extracted.get("supplier_name", "") or "").strip()),
-            reference=str(extracted.get("reference", "") or ""),
-            document_type=detected_type,
-            lines=lines,
-            image_url=("" if is_pdf else storage.url(image_key)),
-            raw_text=str(extracted.get("raw_text", "") or ""),
-            document_sha256=document_sha256,
-            duplicate_of_shipment_id=(duplicate_shipment.id if duplicate_shipment else None),
-            duplicate_of_status=(duplicate_shipment.status if duplicate_shipment else None),
-        )
+            return ShipmentExtractPreviewResponse(
+                supplier_name=resolved_supplier,
+                reference=reference,
+                document_type=detected_type,
+                lines=lines,
+                image_url=("" if is_pdf else storage.url(image_key)),
+                raw_text=str(extracted.get("raw_text", "") or ""),
+                upload_attempt_id=attempt.id,
+                document_sha256=document_sha256,
+                duplicate_of_shipment_id=(duplicate_shipment.id if duplicate_shipment else None),
+                duplicate_of_status=(duplicate_shipment.status if duplicate_shipment else None),
+            )
+        except Exception as exc:
+            _fail_upload_attempt(db, attempt.id, stage="extraction", error=exc)
+            raise
 
 
 @router.post("/shipments/extract-preview-text", response_model=ShipmentExtractPreviewResponse)
@@ -454,25 +579,34 @@ async def extract_shipment_preview_text(
     user: User = Depends(require_merchant_inbound),
 ):
     """Extraction preview from pasted order text (no file). LLM-only extraction."""
+    attempt = _create_upload_attempt(db, user, source_type="text")
     with propagate_attributes(
         user_id=str(user.id),
-        metadata={"endpoint": "/api/shipments/extract-preview-text", "username": user.username},
+        metadata={
+            "endpoint": "/api/shipments/extract-preview-text",
+            "username": user.username,
+            "upload_attempt_id": attempt.id,
+        },
     ):
-        text = body.text.strip()
-        if not text:
-            raise HTTPException(400, "Lege tekst")
-        if len(text) > 50_000:
-            raise HTTPException(413, "Tekst te lang (max 50.000 tekens)")
-
-        # Hash normalized text so an accidental re-paste of the same order is
-        # flagged (soft warning), scoped per merchant via organization_id.
-        normalized_text = " ".join(text.split()).lower()
-        document_sha256 = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
-        duplicate_shipment = _find_duplicate_shipment(db, user.organization_id, document_sha256)
-
         try:
+            text = body.text.strip()
+            if not text:
+                raise HTTPException(400, "Lege tekst")
+            if len(text) > 50_000:
+                raise HTTPException(413, "Tekst te lang (max 50.000 tekens)")
+
+            # Hash normalized text so an accidental re-paste of the same order is
+            # flagged (soft warning), scoped per merchant via organization_id.
+            normalized_text = " ".join(text.split()).lower()
+            document_sha256 = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+            duplicate_shipment = _find_duplicate_shipment(db, user.organization_id, document_sha256)
+            attempt.document_sha256 = document_sha256
+            attempt.updated_at = _utcnow()
+            db.commit()
+
             extracted = await extract_shipment_text(text)
         except PromptUnavailableError as exc:
+            _fail_upload_attempt(db, attempt.id, stage="extraction", error=exc)
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -480,24 +614,48 @@ async def extract_shipment_preview_text(
                     "'extract-shipment-text' kon niet worden opgehaald."
                 ),
             ) from exc
+        except Exception as exc:
+            _fail_upload_attempt(db, attempt.id, stage="extraction", error=exc)
+            raise
 
-        detected_type = extracted.get("document_type") or "unknown"
-        if body.document_type in {"pakbon", "invoice"}:
-            detected_type = body.document_type
+        try:
+            detected_type = extracted.get("document_type") or "unknown"
+            if body.document_type in {"pakbon", "invoice"}:
+                detected_type = body.document_type
 
-        lines = await _build_preview_lines(db, user, extracted, body.supplier_name)
+            lines = await _build_preview_lines(db, user, extracted, body.supplier_name)
+            resolved_supplier = (
+                body.supplier_name.strip()
+                or str(extracted.get("supplier_name", "") or "").strip()
+            )
+            reference = str(extracted.get("reference", "") or "")
+            attempt.supplier_name = resolved_supplier or None
+            attempt.reference = reference or None
+            attempt.status = "needs_action"
+            attempt.line_count = len(lines)
+            attempt.bookable_line_count = sum(
+                1 for line in lines if line.matched_sku_id and line.quantity_boxes > 0
+            )
+            attempt.error_stage = None
+            attempt.error_message = None
+            attempt.updated_at = _utcnow()
+            db.commit()
 
-        return ShipmentExtractPreviewResponse(
-            supplier_name=(body.supplier_name.strip() or str(extracted.get("supplier_name", "") or "").strip()),
-            reference=str(extracted.get("reference", "") or ""),
-            document_type=detected_type,
-            lines=lines,
-            image_url="",
-            raw_text=str(extracted.get("raw_text", "") or ""),
-            document_sha256=document_sha256,
-            duplicate_of_shipment_id=(duplicate_shipment.id if duplicate_shipment else None),
-            duplicate_of_status=(duplicate_shipment.status if duplicate_shipment else None),
-        )
+            return ShipmentExtractPreviewResponse(
+                supplier_name=resolved_supplier,
+                reference=reference,
+                document_type=detected_type,
+                lines=lines,
+                image_url="",
+                raw_text=str(extracted.get("raw_text", "") or ""),
+                upload_attempt_id=attempt.id,
+                document_sha256=document_sha256,
+                duplicate_of_shipment_id=(duplicate_shipment.id if duplicate_shipment else None),
+                duplicate_of_status=(duplicate_shipment.status if duplicate_shipment else None),
+            )
+        except Exception as exc:
+            _fail_upload_attempt(db, attempt.id, stage="extraction", error=exc)
+            raise
 
 
 @router.post("/shipments", response_model=ShipmentResponse, status_code=201)
@@ -518,6 +676,29 @@ def create_shipment(
         org_id = user.organization_id
     else:
         raise HTTPException(400, "User has no organization")
+
+    upload_attempt = None
+    if data.upload_attempt_id:
+        upload_attempt = (
+            db.query(InboundUploadAttempt)
+            .filter(
+                InboundUploadAttempt.id == data.upload_attempt_id,
+                InboundUploadAttempt.organization_id == org_id,
+            )
+            .with_for_update()
+            .first()
+        )
+        if not upload_attempt:
+            raise HTTPException(404, "Uploadpoging niet gevonden")
+        if upload_attempt.shipment_id:
+            raise HTTPException(409, "Deze uploadpoging is al opgeslagen")
+        if (
+            upload_attempt.document_sha256
+            and data.document_sha256
+            and upload_attempt.document_sha256 != data.document_sha256
+        ):
+            raise HTTPException(400, "Document komt niet overeen met de uploadpoging")
+
     normalized_supplier_name = _normalize_supplier_name(data.supplier_name)
     supplier_name_display = data.supplier_name.strip() if data.supplier_name else None
 
@@ -597,6 +778,16 @@ def create_shipment(
                 "existing_status": existing.status if existing else None,
             },
         )
+
+    if upload_attempt:
+        upload_attempt.shipment_id = shipment.id
+        upload_attempt.supplier_name = supplier_name_display
+        upload_attempt.reference = reference_value
+        upload_attempt.status = "draft"
+        upload_attempt.bookable_line_count = len(data.lines)
+        upload_attempt.error_stage = None
+        upload_attempt.error_message = None
+        upload_attempt.updated_at = _utcnow()
 
     for line in data.lines:
         db.add(InboundShipmentLine(
@@ -792,22 +983,43 @@ def book_shipment(
     if shipment.status != "draft":
         raise HTTPException(400, "Pakbon is al geboekt")
 
-    for line in shipment.lines:
-        apply_stock_movement(
-            db,
-            sku_id=line.sku_id,
-            organization_id=shipment.organization_id,
-            quantity=line.quantity,
-            movement_type="receive",
-            reference_type="shipment",
-            reference_id=shipment.id,
-            performed_by=user.id,
-        )
+    upload_attempt = (
+        db.query(InboundUploadAttempt)
+        .filter(InboundUploadAttempt.shipment_id == shipment.id)
+        .with_for_update()
+        .first()
+    )
+    try:
+        for line in shipment.lines:
+            apply_stock_movement(
+                db,
+                sku_id=line.sku_id,
+                organization_id=shipment.organization_id,
+                quantity=line.quantity,
+                movement_type="receive",
+                reference_type="shipment",
+                reference_id=shipment.id,
+                performed_by=user.id,
+            )
 
-    shipment.status = "booked"
-    shipment.booked_at = func.now()
-    shipment.booked_by = user.id
-    db.commit()
+        shipment.status = "booked"
+        shipment.booked_at = func.now()
+        shipment.booked_by = user.id
+        if upload_attempt:
+            upload_attempt.status = "booked"
+            upload_attempt.booked_line_count = len(shipment.lines)
+            upload_attempt.booked_quantity = sum(line.quantity for line in shipment.lines)
+            upload_attempt.error_stage = None
+            upload_attempt.error_message = None
+            upload_attempt.updated_at = _utcnow()
+        db.commit()
+    except Exception as exc:
+        if upload_attempt:
+            _fail_upload_attempt(db, upload_attempt.id, stage="booking", error=exc)
+        else:
+            db.rollback()
+        raise
+
     db.refresh(shipment)
 
     # Mirror each affected product's new available to Shopify. Dedupe: a pakbon
@@ -851,6 +1063,15 @@ def delete_shipment(
         )
 
     reference = shipment.reference
+    upload_attempt = db.query(InboundUploadAttempt).filter(
+        InboundUploadAttempt.shipment_id == shipment.id
+    ).first()
+    if upload_attempt:
+        upload_attempt.shipment_id = None
+        upload_attempt.status = "failed"
+        upload_attempt.error_stage = "shipment"
+        upload_attempt.error_message = "Conceptshipment verwijderd"
+        upload_attempt.updated_at = _utcnow()
     db.delete(shipment)
     db.commit()
     publish_event(

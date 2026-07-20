@@ -805,6 +805,7 @@ class ShipmentCreate(BaseModel):
     supplier_name: str | None = None
     reference: str | None = None
     document_sha256: str | None = None
+    upload_attempt_id: int | None = Field(None, gt=0)
     force: bool = False
     lines: list[ShipmentLineCreate] = Field(..., min_length=1)
 
@@ -873,9 +874,30 @@ class ShipmentExtractPreviewResponse(BaseModel):
     lines: list[ShipmentExtractedLine] = []
     image_url: str = ""
     raw_text: str = ""
+    upload_attempt_id: int | None = None
     document_sha256: str | None = None
     duplicate_of_shipment_id: int | None = None
     duplicate_of_status: str | None = None
+
+
+class InboundUploadAttemptResponse(BaseModel):
+    id: int
+    source_type: str
+    original_filename: str | None = None
+    supplier_name: str | None = None
+    reference: str | None = None
+    status: str
+    error_stage: str | None = None
+    error_message: str | None = None
+    shipment_id: int | None = None
+    line_count: int = 0
+    bookable_line_count: int = 0
+    booked_line_count: int = 0
+    booked_quantity: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 # --- Inventory ---

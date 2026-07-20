@@ -236,10 +236,40 @@ interface ExtractPreview {
   lines: ExtractedLine[];
   image_url: string;
   raw_text: string;
+  upload_attempt_id?: number | null;
   document_sha256?: string | null;
   duplicate_of_shipment_id?: number | null;
   duplicate_of_status?: string | null;
 }
+
+interface InboundUploadAttempt {
+  id: number;
+  source_type: string;
+  original_filename: string | null;
+  supplier_name: string | null;
+  reference: string | null;
+  status: "processing" | "needs_action" | "draft" | "booked" | "failed";
+  error_stage: string | null;
+  error_message: string | null;
+  shipment_id: number | null;
+  line_count: number;
+  bookable_line_count: number;
+  booked_line_count: number;
+  booked_quantity: number;
+  created_at: string;
+  updated_at: string;
+}
+
+const uploadStatus: Record<
+  InboundUploadAttempt["status"],
+  { label: string; className: string }
+> = {
+  processing: { label: "Wordt verwerkt", className: "bg-blue-100 text-blue-800" },
+  needs_action: { label: "Actie nodig", className: "bg-amber-100 text-amber-800" },
+  draft: { label: "Draft opgeslagen", className: "bg-amber-100 text-amber-800" },
+  booked: { label: "Voorraad geboekt", className: "bg-emerald-100 text-emerald-800" },
+  failed: { label: "Mislukt", className: "bg-red-100 text-red-800" },
+};
 
 interface DuplicatePakbonDetail {
   code: "duplicate_pakbon";
@@ -271,6 +301,24 @@ export function InboundPage() {
   const [pasteText, setPasteText] = useState("");
   const [ignoredLines, setIgnoredLines] = useState<Set<number>>(new Set());
   const [editingLines, setEditingLines] = useState<Set<number>>(new Set());
+  const [uploadHistory, setUploadHistory] = useState<InboundUploadAttempt[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const loadUploadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const attempts = await api.listInboundUploads(50, 0);
+      setUploadHistory((attempts || []) as InboundUploadAttempt[]);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Uploadhistorie laden mislukt");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadUploadHistory();
+  }, [loadUploadHistory]);
 
   useEffect(() => {
     async function loadSkus() {
@@ -390,6 +438,7 @@ export function InboundPage() {
       toast.error(err instanceof Error ? err.message : "Extractie mislukt");
     } finally {
       setLoading(false);
+      void loadUploadHistory();
     }
   }
 
@@ -407,6 +456,7 @@ export function InboundPage() {
       toast.error(err instanceof Error ? err.message : "Extractie mislukt");
     } finally {
       setLoading(false);
+      void loadUploadHistory();
     }
   }
 
@@ -449,6 +499,7 @@ export function InboundPage() {
           supplier_name: preview.supplier_name || null,
           reference: preview.reference || null,
           document_sha256: preview.document_sha256 ?? null,
+          upload_attempt_id: preview.upload_attempt_id ?? null,
           lines,
         });
       } catch (err: unknown) {
@@ -471,6 +522,7 @@ export function InboundPage() {
             supplier_name: preview.supplier_name || null,
             reference: preview.reference || null,
             document_sha256: preview.document_sha256 ?? null,
+            upload_attempt_id: preview.upload_attempt_id ?? null,
             force: true,
             lines,
           });
@@ -487,6 +539,7 @@ export function InboundPage() {
       toast.error(err instanceof Error ? err.message : "Inbound boeken mislukt");
     } finally {
       setConfirmingInbound(false);
+      void loadUploadHistory();
     }
   }
 
@@ -930,6 +983,68 @@ export function InboundPage() {
           </Card>
         </div>
       )}
+
+      <Card className="p-3">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div>
+            <p className="font-semibold">Uploadhistorie</p>
+            <p className="text-xs text-muted-foreground">Laatste 50 pogingen</p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={historyLoading}
+            onClick={() => void loadUploadHistory()}
+          >
+            {historyLoading ? "Laden..." : "Vernieuwen"}
+          </Button>
+        </div>
+
+        {uploadHistory.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {historyLoading ? "Historie laden..." : "Nog geen uploads geregistreerd."}
+          </p>
+        ) : (
+          <div className="divide-y divide-border">
+            {uploadHistory.map((attempt) => {
+              const status = uploadStatus[attempt.status];
+              const title =
+                attempt.reference ||
+                attempt.original_filename ||
+                (attempt.source_type === "text" ? "Geplakte tekst" : `Upload #${attempt.id}`);
+              const countText = attempt.status === "booked"
+                ? `${attempt.booked_line_count} regels · ${attempt.booked_quantity} eenheden`
+                : `${attempt.bookable_line_count}/${attempt.line_count} regels boekbaar`;
+
+              return (
+                <div key={attempt.id} className="py-3 first:pt-0 last:pb-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{title}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {attempt.supplier_name || "Leverancier onbekend"} · {countText}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {new Date(attempt.created_at).toLocaleString("nl-NL", {
+                          dateStyle: "short",
+                          timeStyle: "short",
+                        })}
+                        {attempt.shipment_id ? ` · Pakbon #${attempt.shipment_id}` : ""}
+                      </p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-medium ${status.className}`}>
+                      {status.label}
+                    </span>
+                  </div>
+                  {attempt.error_message && (
+                    <p className="mt-1 text-xs text-red-700">{attempt.error_message}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

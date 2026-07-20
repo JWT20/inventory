@@ -1,0 +1,208 @@
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, patch
+
+from app.models import (
+    InboundUploadAttempt,
+    InventoryBalance,
+    Organization,
+    SKU,
+    StockMovement,
+)
+from tests.conftest import auth_header
+
+
+class _TmpStorage:
+    def __init__(self, base):
+        self.base = base
+
+    def save(self, key: str, content: bytes) -> str:
+        path = self.base / key
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        return key
+
+    def url(self, key: str) -> str:
+        return f"/api/files/{key}"
+
+
+def test_extract_preview_creates_visible_upload_attempt(
+    client, db, owner_token, owner_user, tmp_path
+):
+    mocked = {
+        "supplier_name": "Vojacek",
+        "reference": "PKB-HISTORY-1",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [
+            {
+                "supplier_code": "UNKNOWN-1",
+                "description": "Unknown wine",
+                "quantity": 6,
+                "quantity_unit": "pieces",
+                "confidence": 0.95,
+            }
+        ],
+    }
+
+    with patch(
+        "app.routers.inventory.extract_shipment_document",
+        new=AsyncMock(return_value=mocked),
+    ), patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        response = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(owner_token),
+            files={"file": ("vojacek.pdf", b"%PDF-fake", "application/pdf")},
+        )
+
+    assert response.status_code == 200, response.text
+    attempt_id = response.json()["upload_attempt_id"]
+    attempt = db.get(InboundUploadAttempt, attempt_id)
+    assert attempt.organization_id == owner_user.organization_id
+    assert attempt.original_filename == "vojacek.pdf"
+    assert attempt.reference == "PKB-HISTORY-1"
+    assert attempt.status == "needs_action"
+    assert attempt.line_count == 1
+    assert attempt.bookable_line_count == 0
+
+    history = client.get(
+        "/api/inbound-uploads",
+        headers=auth_header(owner_token),
+    )
+    assert history.status_code == 200
+    assert history.json()[0]["id"] == attempt_id
+    assert history.json()[0]["status"] == "needs_action"
+
+
+def test_empty_upload_is_recorded_as_failed(client, db, owner_token):
+    response = client.post(
+        "/api/shipments/extract-preview",
+        headers=auth_header(owner_token),
+        files={"file": ("empty.pdf", b"", "application/pdf")},
+    )
+
+    assert response.status_code == 400
+    attempt = db.query(InboundUploadAttempt).one()
+    assert attempt.status == "failed"
+    assert attempt.error_stage == "extraction"
+    assert attempt.error_message == "Leeg bestand"
+
+
+def test_upload_attempt_tracks_draft_and_successful_stock_booking(
+    client, db, owner_token, owner_user
+):
+    sku = SKU(
+        sku_code="HISTORY-SKU",
+        name="History wine",
+        organization_id=owner_user.organization_id,
+    )
+    db.add(sku)
+    db.flush()
+    attempt = InboundUploadAttempt(
+        organization_id=owner_user.organization_id,
+        uploaded_by=owner_user.id,
+        source_type="file",
+        original_filename="history.pdf",
+        document_sha256="a" * 64,
+        supplier_name="Vojacek",
+        reference="PKB-HISTORY-2",
+        status="needs_action",
+        line_count=1,
+        bookable_line_count=1,
+    )
+    db.add(attempt)
+    db.commit()
+
+    created = client.post(
+        "/api/shipments",
+        headers=auth_header(owner_token),
+        json={
+            "supplier_name": "Vojacek",
+            "reference": "PKB-HISTORY-2",
+            "document_sha256": "a" * 64,
+            "upload_attempt_id": attempt.id,
+            "lines": [
+                {"sku_id": sku.id, "quantity": 4, "supplier_code": "SUP-HISTORY"}
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    shipment_id = created.json()["id"]
+    db.refresh(attempt)
+    assert attempt.status == "draft"
+    assert attempt.shipment_id == shipment_id
+
+    booked = client.post(
+        f"/api/shipments/{shipment_id}/book",
+        headers=auth_header(owner_token),
+    )
+    assert booked.status_code == 200, booked.text
+    db.refresh(attempt)
+    assert attempt.status == "booked"
+    assert attempt.booked_line_count == 1
+    assert attempt.booked_quantity == 4
+
+    balance = db.query(InventoryBalance).filter_by(sku_id=sku.id).one()
+    assert balance.quantity_on_hand == 4
+    movement = db.query(StockMovement).filter_by(
+        reference_type="shipment",
+        reference_id=shipment_id,
+    ).one()
+    assert movement.quantity == 4
+
+
+def test_upload_history_is_scoped_and_not_available_to_customers(
+    client, db, owner_token, customer_token, owner_user
+):
+    other_org = Organization(name="Other", slug="other-history")
+    db.add(other_org)
+    db.flush()
+    db.add_all(
+        [
+            InboundUploadAttempt(
+                organization_id=owner_user.organization_id,
+                uploaded_by=owner_user.id,
+                source_type="text",
+                status="needs_action",
+                reference="MINE",
+            ),
+            InboundUploadAttempt(
+                organization_id=other_org.id,
+                source_type="file",
+                status="failed",
+                reference="OTHER",
+            ),
+        ]
+    )
+    db.commit()
+
+    history = client.get(
+        "/api/inbound-uploads",
+        headers=auth_header(owner_token),
+    )
+    assert history.status_code == 200
+    assert [row["reference"] for row in history.json()] == ["MINE"]
+
+    forbidden = client.get(
+        "/api/inbound-uploads",
+        headers=auth_header(customer_token),
+    )
+    assert forbidden.status_code == 403
+
+
+def test_stale_processing_attempt_is_marked_failed(db, owner_user):
+    from app.routers.inventory import sweep_stale_inbound_uploads
+
+    attempt = InboundUploadAttempt(
+        organization_id=owner_user.organization_id,
+        uploaded_by=owner_user.id,
+        source_type="file",
+        status="processing",
+        updated_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=30),
+    )
+    db.add(attempt)
+    db.commit()
+
+    assert sweep_stale_inbound_uploads(db) == 1
+    db.refresh(attempt)
+    assert attempt.status == "failed"
+    assert attempt.error_message == "Verwerking onderbroken"
