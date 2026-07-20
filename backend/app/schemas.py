@@ -591,6 +591,7 @@ class ChannelOrderRow(BaseModel):
     channel_fulfillment_status: str | None = None
     review_reason: str | None = None
     ordered_at: datetime | None = None
+    channel_shipped_at: datetime | None = None
     status: str | None = None
     matched_lines: int
     unmatched_eans: list[str] = []

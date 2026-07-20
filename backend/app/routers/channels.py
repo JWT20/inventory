@@ -197,6 +197,7 @@ def _reconciliation_for(
                 ),
                 review_reason=order.review_reason if order else None,
                 ordered_at=order.ordered_at if order else None,
+                channel_shipped_at=(order.channel_shipped_at if order else None),
                 status=order.status if order else None,
                 matched_lines=log.matched_lines,
                 unmatched_eans=unmatched,
@@ -425,7 +426,7 @@ def trigger_bol_sync(
     db: Session = Depends(get_db),
     user: User = Depends(require_platform_admin),
 ):
-    """Read and import open FBR/VVB orders; never writes to bol."""
+    """Read open FBR/VVB orders and shipment history; never writes to bol."""
     org_id = _require_org_id(organization_id)
     _assert_org_has_channel(db, org_id)
     connection = _get_connection(db, org_id, "bol")

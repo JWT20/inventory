@@ -59,6 +59,9 @@ class NormalizedChannelOrder:
     # home or by the courier); the cutover will keep fulfilled orders out of the
     # pick list. Observe-mode does not act on it.
     fulfillment_status: str = "unfulfilled"
+    # Latest shipment timestamp at the source. Adapters that do not expose it
+    # leave this unset; an unset value never erases a previously observed date.
+    shipped_at: datetime.datetime | None = None
     # Shopify's cancelledAt (ISO timestamp) or None. The authoritative cancel
     # signal — an order can be cancelled without a refund, so financial_status
     # alone ("paid") does not reveal it.
@@ -459,6 +462,7 @@ def import_channel_order(
             status=final_status,
             review_reason=review_reason,
             ordered_at=order.ordered_at,
+            channel_shipped_at=order.shipped_at,
             created_by=None,
         )
         db.add(db_order)
@@ -472,6 +476,11 @@ def import_channel_order(
         if order.reference is not None:
             db_order.channel_reference = order.reference
         db_order.channel_fulfillment_status = order.fulfillment_status
+        if order.shipped_at is not None and (
+            db_order.channel_shipped_at is None
+            or _on_or_after(order.shipped_at, db_order.channel_shipped_at)
+        ):
+            db_order.channel_shipped_at = order.shipped_at
 
     affected_sku_ids: list[int] = []
     if final_status != "needs_review":

@@ -426,6 +426,11 @@ class Order(Base):
     # for manual orders. Distinct from created_at, which is the row insert time —
     # the reconciliation view sorts/shows by this, not the import moment.
     ordered_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    # Latest shipment timestamp reported by the source channel. Used by the
+    # read-only bol history view; NULL means the order has not been shipped.
+    channel_shipped_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     remarks: Mapped[str] = mapped_column(Text, default="", server_default="")
     delivery_week: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
