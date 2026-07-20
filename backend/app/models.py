@@ -29,6 +29,7 @@ VALID_ROLES = ("owner", "member", "courier", "customer")
 # vision); "vision" = matched via reference photos + AI (the wine flow).
 VALID_PRODUCT_TYPES = ("barcode", "vision")
 VALID_SHIPMENT_STATUSES = ("draft", "booked")
+VALID_INBOUND_UPLOAD_STATUSES = ("processing", "needs_action", "draft", "booked", "failed")
 VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count")
 VALID_DISCOUNT_TYPES = ("percentage", "fixed")
 VALID_DELIVERY_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday")
@@ -580,6 +581,50 @@ class InboundShipmentLine(Base):
 
     shipment: Mapped["InboundShipment"] = relationship(back_populates="lines")
     sku: Mapped["SKU"] = relationship()
+
+
+class InboundUploadAttempt(Base):
+    """One inbound document-processing attempt, including attempts that never book."""
+
+    __tablename__ = "inbound_upload_attempts"
+    __table_args__ = (
+        Index("ix_inbound_uploads_org_created", "organization_id", "created_at"),
+        Index("ix_inbound_uploads_org_sha", "organization_id", "document_sha256"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True
+    )
+    uploaded_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    shipment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inbound_shipments.id", ondelete="SET NULL"), nullable=True, unique=True
+    )
+    source_type: Mapped[str] = mapped_column(String(20), default="file")
+    original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    document_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    document_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    supplier_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="processing")
+    error_stage: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    line_count: Mapped[int] = mapped_column(Integer, default=0)
+    bookable_line_count: Mapped[int] = mapped_column(Integer, default=0)
+    booked_line_count: Mapped[int] = mapped_column(Integer, default=0)
+    booked_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    organization: Mapped["Organization | None"] = relationship()
+    uploaded_by_user: Mapped["User | None"] = relationship(foreign_keys=[uploaded_by])
+    shipment: Mapped["InboundShipment | None"] = relationship()
 
 
 class SupplierSKUMapping(Base):

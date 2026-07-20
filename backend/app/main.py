@@ -122,6 +122,7 @@ async def lifespan(app: FastAPI):
     sweep_db = SessionLocal()
     try:
         sweep_stale_reference_images(sweep_db)
+        inventory.sweep_stale_inbound_uploads(sweep_db)
     finally:
         sweep_db.close()
 
