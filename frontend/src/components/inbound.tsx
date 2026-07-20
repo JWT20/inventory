@@ -992,19 +992,9 @@ export function InboundPage() {
       )}
 
       <Card className="p-3">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <div>
-            <p className="font-semibold">Uploadhistorie</p>
-            <p className="text-xs text-muted-foreground">Laatste 50 pogingen</p>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={historyLoading}
-            onClick={() => void loadUploadHistory()}
-          >
-            {historyLoading ? "Laden..." : "Vernieuwen"}
-          </Button>
+        <div className="mb-3">
+          <p className="font-semibold">Uploadhistorie</p>
+          <p className="text-xs text-muted-foreground">Laatste 50 pogingen</p>
         </div>
 
         {visibleUploadHistory.length === 0 ? (
