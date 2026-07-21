@@ -192,6 +192,28 @@ interface Order {
   hidden_lines_count: number;
 }
 
+const emptyUnitForOrder = (order: Order): "boxes" | "items" =>
+  order.pick_method === "barcode" || order.channel !== "manual" ? "items" : "boxes";
+
+const formatOrderTotals = (order: Order): string =>
+  formatBoxesBottles(
+    order.total_boxes,
+    order.total_bottles,
+    order.total_items,
+    emptyUnitForOrder(order),
+  );
+
+const formatBookedOrderTotals = (order: Order): string =>
+  formatBookedBoxesBottles(
+    order.booked_boxes,
+    order.total_boxes,
+    order.booked_bottles,
+    order.total_bottles,
+    order.booked_items,
+    order.total_items,
+    emptyUnitForOrder(order),
+  );
+
 const orderIncomingDate = (order: Order): string =>
   order.ordered_at || order.created_at;
 
@@ -592,8 +614,8 @@ export function OrdersPage() {
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <span>
           {isCustomer
-            ? formatBoxesBottles(o.total_boxes, o.total_bottles, o.total_items)
-            : `${formatBookedBoxesBottles(o.booked_boxes, o.total_boxes, o.booked_bottles, o.total_bottles, o.booked_items, o.total_items)} geboekt`}
+            ? formatOrderTotals(o)
+            : `${formatBookedOrderTotals(o)} geboekt`}
         </span>
         <span className="ml-auto flex gap-1">
           {o.pick_method === "barcode" ? (
@@ -655,8 +677,8 @@ export function OrdersPage() {
               <p className="truncate text-sm font-medium">{order.reference}</p>
               <p className="truncate text-xs text-muted-foreground">
                 {isCustomer
-                  ? formatBoxesBottles(order.total_boxes, order.total_bottles, order.total_items)
-                  : `${order.customer_name ?? "—"} · ${formatBookedBoxesBottles(order.booked_boxes, order.total_boxes, order.booked_bottles, order.total_bottles, order.booked_items, order.total_items)}`}
+                  ? formatOrderTotals(order)
+                  : `${order.customer_name ?? "—"} · ${formatBookedOrderTotals(order)}`}
               </p>
             </div>
             {!isCustomer && (
@@ -1742,6 +1764,7 @@ function OrderDetailDialog({
                 order.total_bottles,
                 order.booked_items,
                 order.total_items,
+                emptyUnitForOrder(order),
               )}{" "}
               geboekt
             </p>

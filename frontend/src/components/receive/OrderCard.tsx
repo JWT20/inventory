@@ -63,6 +63,9 @@ export function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (ord
           o.total_bottles,
           o.booked_items,
           o.total_items,
+          o.pick_method === "barcode" || (o.channel !== undefined && o.channel !== "manual")
+            ? "items"
+            : "boxes",
         )}{" "}
         geboekt
       </p>
