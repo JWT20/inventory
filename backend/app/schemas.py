@@ -460,6 +460,7 @@ class OrderLineResponse(BaseModel):
     booked_count: int
     has_image: bool
     is_bottle: bool = False
+    is_item: bool = False
     # Scannable code of the product's primary pick location (barcode products
     # only). NULL for vision/wine and for barcode products without a location.
     pick_location: str | None = None
@@ -490,6 +491,7 @@ class OrderResponse(BaseModel):
     organization_name: str = ""
     created_by_name: str = ""
     created_at: datetime
+    ordered_at: datetime | None = None
     updated_at: datetime
     customer_name: str | None = None
     lines: list[OrderLineResponse] = []
@@ -498,6 +500,8 @@ class OrderResponse(BaseModel):
     booked_boxes: int = 0
     total_bottles: int = 0
     booked_bottles: int = 0
+    total_items: int = 0
+    booked_items: int = 0
     visible_total: float | None = None
     hidden_lines_count: int = 0
 
@@ -1146,6 +1150,7 @@ class MonthlyBoxesMonth(BaseModel):
     month: str  # "YYYY-MM"
     boxes: int
     bottles: int = 0
+    items: int = 0
 
 
 class MonthlyBoxesOrganization(BaseModel):
@@ -1153,6 +1158,7 @@ class MonthlyBoxesOrganization(BaseModel):
     organization_name: str
     total_boxes: int
     total_bottles: int = 0
+    total_items: int = 0
     months: list[MonthlyBoxesMonth] = []
 
 

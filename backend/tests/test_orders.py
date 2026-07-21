@@ -8,7 +8,7 @@ class TestCreateOrder:
     def test_owner_creates_order(self, client, db, owner_user, owner_token, sample_org):
         # Create customer and SKU
         customer = Customer(name="test klant", organization_id=sample_org.id)
-        sku = SKU(sku_code="WINE-002", name="Test Wine 2")
+        sku = SKU(sku_code="WINE-002", name="Test Wine 2", product_type="vision")
         db.add_all([customer, sku])
         db.commit()
 
@@ -35,8 +35,13 @@ class TestCreateOrder:
         self, client, db, owner_user, owner_token, sample_org
     ):
         customer = Customer(name="fles klant", organization_id=sample_org.id)
-        box_sku = SKU(sku_code="BOX-001", name="Doos Wijn")
-        bottle_sku = SKU(sku_code="FLES-001", name="Cava 0,0", is_bottle=True)
+        box_sku = SKU(sku_code="BOX-001", name="Doos Wijn", product_type="vision")
+        bottle_sku = SKU(
+            sku_code="FLES-001",
+            name="Cava 0,0",
+            is_bottle=True,
+            product_type="vision",
+        )
         db.add_all([customer, box_sku, bottle_sku])
         db.commit()
 
@@ -60,6 +65,61 @@ class TestCreateOrder:
         lines_by_code = {l["sku_code"]: l for l in data["lines"]}
         assert lines_by_code["BOX-001"]["is_bottle"] is False
         assert lines_by_code["FLES-001"]["is_bottle"] is True
+
+    def test_barcode_order_uses_items_total(
+        self, client, db, owner_user, owner_token, sample_org
+    ):
+        customer = Customer(name="EAN klant", organization_id=sample_org.id)
+        sku = SKU(
+            sku_code="EAN-001",
+            name="EAN product",
+            product_type="barcode",
+            ean="8712345678906",
+        )
+        db.add_all([customer, sku])
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [{"customer_id": customer.id, "sku_id": sku.id, "quantity": 4}],
+            },
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_boxes"] == 0
+        assert data["total_items"] == 4
+        assert data["lines"][0]["is_item"] is True
+
+    def test_barcode_only_org_cannot_create_manual_order(
+        self, client, db, owner_token, sample_org
+    ):
+        sample_org.modules = ["inventory", "orders", "barcode_picking", "channel_orders"]
+        customer = Customer(name="EAN klant", organization_id=sample_org.id)
+        sku = SKU(
+            sku_code="EAN-ONLY-001",
+            name="EAN product",
+            organization_id=sample_org.id,
+            product_type="barcode",
+            ean="8712345678907",
+        )
+        db.add_all([customer, sku])
+        db.commit()
+
+        resp = client.post(
+            "/api/orders",
+            json={
+                "organization_id": sample_org.id,
+                "lines": [{"customer_id": customer.id, "sku_id": sku.id, "quantity": 1}],
+            },
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 403
+        assert "Handmatige orders" in resp.json()["detail"]
 
     def test_customer_creates_order(self, client, db, customer_user, customer_token, sample_org):
         customer = Customer(name="klant record", organization_id=sample_org.id)

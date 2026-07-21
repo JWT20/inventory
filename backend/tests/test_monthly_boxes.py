@@ -33,8 +33,21 @@ def _make_line(db, order, sku, customer, quantity, booked_count):
     return line
 
 
-def _seed(db, org, ref, status, booked, quantity=12, finalized_at=None):
-    sku = SKU(sku_code=f"SKU-{ref}", name=f"Wine {ref}")
+def _seed(
+    db,
+    org,
+    ref,
+    status,
+    booked,
+    quantity=12,
+    finalized_at=None,
+    product_type="vision",
+):
+    sku = SKU(
+        sku_code=f"SKU-{ref}",
+        name=f"Wine {ref}",
+        product_type=product_type,
+    )
     db.add(sku)
     db.flush()
     customer = Customer(name=f"Cust {ref}", organization_id=org.id)
@@ -68,7 +81,9 @@ def test_closed_partial_counts_booked_only(client, db, courier_token, sample_org
     org = orgs[0]
     assert org["organization_id"] == sample_org.id
     assert org["total_boxes"] == 10
-    assert org["months"] == [{"month": "2026-03", "boxes": 10, "bottles": 0}]
+    assert org["months"] == [
+        {"month": "2026-03", "boxes": 10, "bottles": 0, "items": 0}
+    ]
 
 
 def test_groups_by_finalized_month(client, db, courier_token, sample_org):
@@ -86,15 +101,20 @@ def test_groups_by_finalized_month(client, db, courier_token, sample_org):
     org = resp.json()["organizations"][0]
     # Months sorted newest first.
     assert org["months"] == [
-        {"month": "2026-04", "boxes": 7, "bottles": 0},
-        {"month": "2026-03", "boxes": 17, "bottles": 0},
+        {"month": "2026-04", "boxes": 7, "bottles": 0, "items": 0},
+        {"month": "2026-03", "boxes": 17, "bottles": 0, "items": 0},
     ]
     assert org["total_boxes"] == 24
 
 
 def test_bottles_counted_separately(client, db, courier_token, sample_org):
-    box_sku = SKU(sku_code="SKU-MIX-BOX", name="Doos Wijn")
-    bottle_sku = SKU(sku_code="SKU-MIX-FLES", name="Cava 0,0", is_bottle=True)
+    box_sku = SKU(sku_code="SKU-MIX-BOX", name="Doos Wijn", product_type="vision")
+    bottle_sku = SKU(
+        sku_code="SKU-MIX-FLES",
+        name="Cava 0,0",
+        is_bottle=True,
+        product_type="vision",
+    )
     db.add_all([box_sku, bottle_sku])
     db.flush()
     customer = Customer(name="Cust Mix", organization_id=sample_org.id)
@@ -116,7 +136,34 @@ def test_bottles_counted_separately(client, db, courier_token, sample_org):
     org = resp.json()["organizations"][0]
     assert org["total_boxes"] == 4
     assert org["total_bottles"] == 2
-    assert org["months"] == [{"month": "2026-03", "boxes": 4, "bottles": 2}]
+    assert org["months"] == [
+        {"month": "2026-03", "boxes": 4, "bottles": 2, "items": 0}
+    ]
+
+
+def test_barcode_products_counted_as_items(client, db, courier_token, sample_org):
+    _seed(
+        db,
+        sample_org,
+        "EAN",
+        status="shipped",
+        booked=6,
+        quantity=6,
+        finalized_at=datetime.datetime(2026, 4, 3, 9, 0),
+        product_type="barcode",
+    )
+
+    resp = client.get(
+        "/api/orders/reports/monthly-boxes",
+        headers=auth_header(courier_token),
+    )
+
+    org = resp.json()["organizations"][0]
+    assert org["total_boxes"] == 0
+    assert org["total_items"] == 6
+    assert org["months"] == [
+        {"month": "2026-04", "boxes": 0, "bottles": 0, "items": 6}
+    ]
 
 
 def test_active_and_pending_orders_excluded(client, db, courier_token, sample_org):
@@ -194,8 +241,7 @@ def test_customer_forbidden(client, db, customer_token, sample_org):
 
 
 def test_shipped_order_counts(client, db, courier_token, sample_org):
-    # A shipped (label-verified) barcode order is finalized and must count its
-    # booked boxes, same as completed/closed.
+    # A shipped (label-verified) barcode order is finalized and counts as items.
     _seed(
         db,
         sample_org,
@@ -204,6 +250,7 @@ def test_shipped_order_counts(client, db, courier_token, sample_org):
         booked=4,
         quantity=4,
         finalized_at=datetime.datetime(2026, 4, 2, 9, 0),
+        product_type="barcode",
     )
 
     resp = client.get(
@@ -213,4 +260,5 @@ def test_shipped_order_counts(client, db, courier_token, sample_org):
     assert resp.status_code == 200
     orgs = resp.json()["organizations"]
     assert len(orgs) == 1
-    assert orgs[0]["total_boxes"] == 4
+    assert orgs[0]["total_boxes"] == 0
+    assert orgs[0]["total_items"] == 4

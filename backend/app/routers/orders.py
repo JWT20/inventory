@@ -155,6 +155,7 @@ def _order_line_to_response(
         # the "Wacht op foto's" bucket or prompt a camera capture.
         has_image=len(line.sku.reference_images) > 0 or line.sku.product_type == "barcode",
         is_bottle=line.sku.is_bottle,
+        is_item=line.sku.product_type == "barcode",
         pick_location=_primary_location_code(line.sku),
         show_prices=customer_show_prices,
         unit_price=unit_price if customer_show_prices else None,
@@ -228,13 +229,36 @@ def _order_to_response(
         organization_name=order.organization.name if order.organization else "",
         created_by_name=order.creator.username if order.creator else "",
         created_at=order.created_at,
+        ordered_at=order.ordered_at,
         updated_at=order.updated_at,
         customer_name=order.lines[0].customer_name if order.lines else None,
         lines=lines,
-        total_boxes=sum(l.quantity for l in order.lines if not l.sku.is_bottle),
-        booked_boxes=sum(l.booked_count for l in order.lines if not l.sku.is_bottle),
-        total_bottles=sum(l.quantity for l in order.lines if l.sku.is_bottle),
-        booked_bottles=sum(l.booked_count for l in order.lines if l.sku.is_bottle),
+        total_boxes=sum(
+            l.quantity
+            for l in order.lines
+            if l.sku.product_type != "barcode" and not l.sku.is_bottle
+        ),
+        booked_boxes=sum(
+            l.booked_count
+            for l in order.lines
+            if l.sku.product_type != "barcode" and not l.sku.is_bottle
+        ),
+        total_bottles=sum(
+            l.quantity
+            for l in order.lines
+            if l.sku.product_type != "barcode" and l.sku.is_bottle
+        ),
+        booked_bottles=sum(
+            l.booked_count
+            for l in order.lines
+            if l.sku.product_type != "barcode" and l.sku.is_bottle
+        ),
+        total_items=sum(
+            l.quantity for l in order.lines if l.sku.product_type == "barcode"
+        ),
+        booked_items=sum(
+            l.booked_count for l in order.lines if l.sku.product_type == "barcode"
+        ),
         visible_total=visible_total,
         hidden_lines_count=hidden_lines_count,
     )
@@ -300,6 +324,12 @@ def _default_delivery_day(customer: Customer) -> str:
     return customer.delivery_days[0]
 
 
+def _is_barcode_only_org(org: Organization | None) -> bool:
+    if org is None:
+        return False
+    return "barcode_picking" in org.modules and "vision_picking" not in org.modules
+
+
 def _current_iso_week() -> str:
     today = datetime.date.today()
     return f"{today.isocalendar().year}-W{today.isocalendar().week:02d}"
@@ -349,13 +379,15 @@ def create_order(
                 )
 
     ref = f"ORD-{uuid.uuid4().hex[:8].upper()}"
-    # Orders await merchant approval only where the organization runs the weekly
-    # approval flow (the week_overview module). Merchants without it — the
-    # barcode/channel merchants — have no approval step, so their orders are born
-    # active and ready to pick. Keyed on the org's modules, not the channel, so a
-    # manually-placed barcode order is treated the same as an imported one. The
-    # delivery week stays None and is assigned at approval (week-flow orders only).
+    # Barcode-only merchants receive orders through their sales channel and do not
+    # have a manual order flow. Other organizations await approval only when they
+    # use weekly planning; without it a manual order is born active.
     org = db.get(Organization, org_id)
+    if _is_barcode_only_org(org):
+        raise HTTPException(
+            403,
+            "Handmatige orders zijn niet beschikbaar voor EAN-organisaties",
+        )
     needs_approval = bool(org and "week_overview" in org.modules)
     order = Order(
         organization_id=org_id,
@@ -730,11 +762,11 @@ def monthly_booked_boxes(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Aantal geboekte dozen per maand voor voltooide, verzonden en gesloten orders.
+    """Aantal verwerkte eenheden per maand voor voltooide/verzonden/gesloten orders.
 
-    Een doos telt mee in de maand waarin de order is afgerond (``finalized_at``).
-    Het aantal is het werkelijk geboekte aantal: een order die op 10/12 wordt
-    gesloten draagt 10 dozen bij. Gegroepeerd per handelaar (organisatie).
+    Eenheden tellen mee in de maand waarin de order is afgerond (``finalized_at``)
+    en worden uitgesplitst als dozen, flessen of items. Het aantal is het werkelijk
+    geboekte aantal. Gegroepeerd per handelaar (organisatie).
 
     Zichtbaar voor de koerier en platform-admin (alle handelaren) en voor een
     owner/member (alleen de eigen handelaar).
@@ -745,6 +777,7 @@ def monthly_booked_boxes(
             Order.organization_id.label("org_id"),
             Order.finalized_at.label("finalized_at"),
             SKU.is_bottle.label("is_bottle"),
+            SKU.product_type.label("product_type"),
             func.coalesce(func.sum(OrderLine.booked_count), 0).label("units"),
         )
         .join(OrderLine, OrderLine.order_id == Order.id)
@@ -753,7 +786,13 @@ def monthly_booked_boxes(
             Order.status.in_(("completed", "shipped", "closed")),
             Order.finalized_at.isnot(None),
         )
-        .group_by(Order.id, Order.organization_id, Order.finalized_at, SKU.is_bottle)
+        .group_by(
+            Order.id,
+            Order.organization_id,
+            Order.finalized_at,
+            SKU.is_bottle,
+            SKU.product_type,
+        )
     )
 
     if user.is_platform_admin or user.role == "courier":
@@ -764,15 +803,21 @@ def monthly_booked_boxes(
     else:
         raise HTTPException(403, "Geen toegang tot dit overzicht")
 
-    # Bucket booked units into (organization, "YYYY-MM"), boxes and bottles apart.
+    # Bucket booked units into (organization, "YYYY-MM") by handling unit.
     buckets: dict[int | None, dict[str, dict[str, int]]] = defaultdict(
-        lambda: defaultdict(lambda: {"boxes": 0, "bottles": 0})
+        lambda: defaultdict(lambda: {"boxes": 0, "bottles": 0, "items": 0})
     )
     for row in query.all():
         if not row.units or row.finalized_at is None:
             continue
         month = row.finalized_at.strftime("%Y-%m")
-        unit = "bottles" if row.is_bottle else "boxes"
+        unit = (
+            "items"
+            if row.product_type == "barcode"
+            else "bottles"
+            if row.is_bottle
+            else "boxes"
+        )
         buckets[row.org_id][month][unit] += int(row.units)
 
     if not buckets:
@@ -795,7 +840,12 @@ def monthly_booked_boxes(
             else "Zonder handelaar"
         )
         month_rows = [
-            MonthlyBoxesMonth(month=m, boxes=v["boxes"], bottles=v["bottles"])
+            MonthlyBoxesMonth(
+                month=m,
+                boxes=v["boxes"],
+                bottles=v["bottles"],
+                items=v["items"],
+            )
             for m, v in sorted(months.items(), reverse=True)
         ]
         organizations.append(
@@ -804,6 +854,7 @@ def monthly_booked_boxes(
                 organization_name=org_name,
                 total_boxes=sum(v["boxes"] for v in months.values()),
                 total_bottles=sum(v["bottles"] for v in months.values()),
+                total_items=sum(v["items"] for v in months.values()),
                 months=month_rows,
             )
         )

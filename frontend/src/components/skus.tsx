@@ -247,10 +247,12 @@ export function SKUsPage() {
                 </Badge>
               </div>
               <p className="text-sm text-muted-foreground">{s.sku_code}</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                {s.image_count} referentiebeeld
-                {s.image_count !== 1 ? "en" : ""}
-              </p>
+              {s.product_type !== "barcode" && (
+                <p className="text-sm text-muted-foreground mt-1">
+                  {s.image_count} referentiebeeld
+                  {s.image_count !== 1 ? "en" : ""}
+                </p>
+              )}
             </Card>
           ))
         )}

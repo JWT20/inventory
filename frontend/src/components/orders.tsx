@@ -75,6 +75,7 @@ interface OrderLine {
   booked_count: number;
   has_image: boolean;
   is_bottle: boolean;
+  is_item: boolean;
   show_prices: boolean;
   unit_price: number | null;
   discount_type: string | null;
@@ -170,6 +171,8 @@ interface Order {
   id: number;
   reference: string;
   status: string;
+  channel: string;
+  pick_method: "vision" | "barcode";
   remarks: string;
   delivery_week: string | null;
   allowed_delivery_days: string[];
@@ -177,14 +180,27 @@ interface Order {
   created_by_name: string;
   customer_name: string | null;
   created_at: string;
+  ordered_at: string | null;
   lines: OrderLine[];
   total_boxes: number;
   booked_boxes: number;
   total_bottles: number;
   booked_bottles: number;
+  total_items: number;
+  booked_items: number;
   visible_total: number | null;
   hidden_lines_count: number;
 }
+
+const orderIncomingDate = (order: Order): string =>
+  order.ordered_at || order.created_at;
+
+const formatOrderIncomingDate = (order: Order): string =>
+  new Date(orderIncomingDate(order)).toLocaleDateString("nl-NL", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
 
 interface CustomerSkuLine {
   sku_id: number;
@@ -267,6 +283,8 @@ export function OrdersPage() {
 
   const isCustomer = user?.role === "customer";
   const isCourier = user?.role === "courier";
+  const isBarcodeOnlyOrg =
+    hasModule(user, "barcode_picking") && !hasModule(user, "vision_picking");
   // Notes are a wine-flow concept (per-delivery remarks to customers). Show the
   // overview only to the courier (cross-org) and the wine merchant (owner/member
   // with the weekly flow); hide it for customers and EAN orgs (barcode/channel,
@@ -279,6 +297,7 @@ export function OrdersPage() {
   // Who can create orders?
   const canCreate =
     user &&
+    !isBarcodeOnlyOrg &&
     (user.is_platform_admin ||
       user.role === "owner" ||
       user.role === "member" ||
@@ -294,10 +313,27 @@ export function OrdersPage() {
 
   // Determine unique delivery days across all order lines for display on cards
   const getOrderDeliveryDays = (order: Order): string[] => {
+    if (order.pick_method === "barcode") return [];
     const days = new Set(order.lines.map((l) => l.delivery_day));
     return Array.from(days).sort(
       (a, b) => (DELIVERY_DAY_ORDER[a] ?? 9) - (DELIVERY_DAY_ORDER[b] ?? 9)
     );
+  };
+
+  const formatIncomingRange = (weekOrders: Order[]): string => {
+    const dates = weekOrders
+      .map((order) => new Date(orderIncomingDate(order)))
+      .sort((a, b) => a.getTime() - b.getTime());
+    if (dates.length === 0) return "";
+    const format = (date: Date) =>
+      date.toLocaleDateString("nl-NL", {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+      });
+    const first = format(dates[0]);
+    const last = format(dates[dates.length - 1]);
+    return first === last ? first : `${first} - ${last}`;
   };
 
   // Group orders by ISO week
@@ -327,6 +363,7 @@ export function OrdersPage() {
   const formatWeekRange = (weekStr: string, weekOrders: Order[] = []): string => {
     const mon = getWeekMonday(weekStr);
     const offsets = weekOrders
+      .filter((order) => order.pick_method !== "barcode")
       .flatMap((order) => order.lines.map((line) => DELIVERY_DAY_ORDER[line.delivery_day]))
       .filter((offset): offset is number => offset !== undefined);
     const firstOffset = offsets.length > 0 ? Math.min(...offsets) : DELIVERY_DAY_ORDER.wednesday;
@@ -362,8 +399,11 @@ export function OrdersPage() {
   const remainingBottles = (order: Order) =>
     Math.max(order.total_bottles - order.booked_bottles, 0);
 
+  const remainingItems = (order: Order) =>
+    Math.max(order.total_items - order.booked_items, 0);
+
   const remainingUnits = (order: Order) =>
-    remainingBoxes(order) + remainingBottles(order);
+    remainingBoxes(order) + remainingBottles(order) + remainingItems(order);
 
   const isOpenWorkOrder = (order: Order) =>
     order.status === "active" && remainingUnits(order) > 0;
@@ -383,13 +423,19 @@ export function OrdersPage() {
   const missingImageCount = (order: Order) =>
     order.lines.filter((l) => !l.has_image).length;
 
-  type WeekGroup = { week: string; label: string; range: string; orders: Order[] };
+  type WeekGroup = {
+    week: string;
+    label: string;
+    range: string;
+    allBarcode: boolean;
+    orders: Order[];
+  };
 
   const buildWeekGroups = (sourceOrders: Order[]): WeekGroup[] => {
     if (sourceOrders.length === 0) return [];
     const groups: Record<string, Order[]> = {};
     for (const o of sourceOrders) {
-      const week = o.delivery_week || getISOWeek(o.created_at);
+      const week = o.delivery_week || getISOWeek(orderIncomingDate(o));
       if (!groups[week]) groups[week] = [];
       groups[week].push(o);
     }
@@ -398,7 +444,10 @@ export function OrdersPage() {
       .map((week) => ({
         week,
         label: getWeekLabel(week),
-        range: formatWeekRange(week, groups[week]),
+        allBarcode: groups[week].every((order) => order.pick_method === "barcode"),
+        range: groups[week].every((order) => order.pick_method === "barcode")
+          ? formatIncomingRange(groups[week])
+          : formatWeekRange(week, groups[week]),
         orders: groups[week],
       }));
   };
@@ -410,7 +459,7 @@ export function OrdersPage() {
   const visibleOrders = isCustomer
     ? orders.filter((o) => o.status !== "cancelled")
     : orders;
-  const orderWeek = (o: Order) => o.delivery_week || getISOWeek(o.created_at);
+  const orderWeek = (o: Order) => o.delivery_week || getISOWeek(orderIncomingDate(o));
 
   const approvalOrders = isCustomer ? [] : visibleOrders.filter(isApprovalOrder);
 
@@ -472,6 +521,9 @@ export function OrdersPage() {
     [...items].sort((a, b) => {
       const [aDay] = getOrderDeliveryDays(a);
       const [bDay] = getOrderDeliveryDays(b);
+      if (a.pick_method === "barcode" && b.pick_method === "barcode") {
+        return orderIncomingDate(a).localeCompare(orderIncomingDate(b));
+      }
       const dayDiff = (DELIVERY_DAY_ORDER[aDay] ?? 9) - (DELIVERY_DAY_ORDER[bDay] ?? 9);
       if (dayDiff !== 0) return dayDiff;
       return remainingUnits(b) - remainingUnits(a);
@@ -487,6 +539,7 @@ export function OrdersPage() {
         (sum, order) => sum + remainingBottles(order),
         0,
       ),
+      openItems: openOrders.reduce((sum, order) => sum + remainingItems(order), 0),
       openOrders: openOrders.length,
     };
   };
@@ -539,15 +592,21 @@ export function OrdersPage() {
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <span>
           {isCustomer
-            ? formatBoxesBottles(o.total_boxes, o.total_bottles)
-            : `${formatBookedBoxesBottles(o.booked_boxes, o.total_boxes, o.booked_bottles, o.total_bottles)} geboekt`}
+            ? formatBoxesBottles(o.total_boxes, o.total_bottles, o.total_items)
+            : `${formatBookedBoxesBottles(o.booked_boxes, o.total_boxes, o.booked_bottles, o.total_bottles, o.booked_items, o.total_items)} geboekt`}
         </span>
         <span className="ml-auto flex gap-1">
-          {getOrderDeliveryDays(o).map((day) => (
-            <Badge key={day} variant="secondary" className="text-xs px-1.5 py-0">
-              {DELIVERY_DAY_LABELS[day] ?? day}
+          {o.pick_method === "barcode" ? (
+            <Badge variant="secondary" className="text-xs px-1.5 py-0">
+              Binnengekomen {formatOrderIncomingDate(o)}
             </Badge>
-          ))}
+          ) : (
+            getOrderDeliveryDays(o).map((day) => (
+              <Badge key={day} variant="secondary" className="text-xs px-1.5 py-0">
+                {DELIVERY_DAY_LABELS[day] ?? day}
+              </Badge>
+            ))
+          )}
         </span>
       </div>
     </Card>
@@ -563,7 +622,7 @@ export function OrdersPage() {
           {group.label}
         </span>
         <span className="text-xs text-muted-foreground">
-          levering {group.range}
+          {group.allBarcode ? "binnengekomen" : "levering"} {group.range}
         </span>
         <div className="flex-1 border-t border-border" />
       </div>
@@ -580,7 +639,7 @@ export function OrdersPage() {
           {group.label}
         </span>
         <span className="text-xs text-muted-foreground">
-          levering {group.range}
+          {group.allBarcode ? "binnengekomen" : "levering"} {group.range}
         </span>
         <div className="flex-1 border-t border-border" />
       </div>
@@ -596,8 +655,8 @@ export function OrdersPage() {
               <p className="truncate text-sm font-medium">{order.reference}</p>
               <p className="truncate text-xs text-muted-foreground">
                 {isCustomer
-                  ? formatBoxesBottles(order.total_boxes, order.total_bottles)
-                  : `${order.customer_name ?? "—"} · ${formatBookedBoxesBottles(order.booked_boxes, order.total_boxes, order.booked_bottles, order.total_bottles)}`}
+                  ? formatBoxesBottles(order.total_boxes, order.total_bottles, order.total_items)
+                  : `${order.customer_name ?? "—"} · ${formatBookedBoxesBottles(order.booked_boxes, order.total_boxes, order.booked_bottles, order.total_bottles, order.booked_items, order.total_items)}`}
               </p>
             </div>
             {!isCustomer && (
@@ -708,13 +767,22 @@ export function OrdersPage() {
                 {isCustomer
                   ? `${currentGroup?.orders.length ?? 0} order${
                       (currentGroup?.orders.length ?? 0) === 1 ? "" : "s"
-                    }${currentGroup ? ` · levering ${currentGroup.range}` : ""}`
+                    }${
+                      currentGroup
+                        ? ` · ${currentGroup.allBarcode ? "binnengekomen" : "levering"} ${currentGroup.range}`
+                        : ""
+                    }`
                   : `${formatBoxesBottles(
                       currentWeekStats.openBoxes,
                       currentWeekStats.openBottles,
+                      currentWeekStats.openItems,
                     )} open · ${
                       currentWeekStats.openOrders
-                    } orders${currentGroup ? ` · levering ${currentGroup.range}` : ""}`}
+                    } orders${
+                      currentGroup
+                        ? ` · ${currentGroup.allBarcode ? "binnengekomen" : "levering"} ${currentGroup.range}`
+                        : ""
+                    }`}
               </p>
             </div>
 
@@ -763,6 +831,7 @@ export function OrdersPage() {
                 `${formatBoxesBottles(
                   groupStats(overdueWorkGroups).openBoxes,
                   groupStats(overdueWorkGroups).openBottles,
+                  groupStats(overdueWorkGroups).openItems,
                 )} open · ${groupStats(overdueWorkGroups).openOrders} orders`,
                 showOverdue,
                 () => setShowOverdue((value) => !value),
@@ -788,6 +857,7 @@ export function OrdersPage() {
                   : `${formatBoxesBottles(
                       groupStats(upcomingWorkGroups).openBoxes,
                       groupStats(upcomingWorkGroups).openBottles,
+                      groupStats(upcomingWorkGroups).openItems,
                     )} open · ${groupStats(upcomingWorkGroups).openOrders} orders`,
                 showUpcoming,
                 () => setShowUpcoming((value) => !value),
@@ -1554,11 +1624,12 @@ function OrderDetailDialog({
     if (!order) return;
     const openBoxes = Math.max(order.total_boxes - order.booked_boxes, 0);
     const openBottles = Math.max(order.total_bottles - order.booked_bottles, 0);
+    const openItems = Math.max(order.total_items - order.booked_items, 0);
     if (
       !confirm(
         `Order ${order.reference} sluiten?` +
-          (openBoxes + openBottles > 0
-            ? ` Er blijven ${formatBoxesBottles(openBoxes, openBottles)} open die niet meer geboekt worden.`
+          (openBoxes + openBottles + openItems > 0
+            ? ` Er blijven ${formatBoxesBottles(openBoxes, openBottles, openItems)} open die niet meer geboekt worden.`
             : ""),
       )
     )
@@ -1656,6 +1727,11 @@ function OrderDetailDialog({
               ? `${order.organization_name}${order.created_by_name ? ` — ${order.created_by_name}` : ""}`
               : (order.customer_name ?? "—")}
           </p>
+          {order.pick_method === "barcode" && (
+            <p className="text-sm text-muted-foreground">
+              Binnengekomen {formatOrderIncomingDate(order)}
+            </p>
+          )}
           {!isCustomer && (
             <p className="text-sm text-muted-foreground">
               Voortgang:{" "}
@@ -1664,6 +1740,8 @@ function OrderDetailDialog({
                 order.total_boxes,
                 order.booked_bottles,
                 order.total_bottles,
+                order.booked_items,
+                order.total_items,
               )}{" "}
               geboekt
             </p>
@@ -1713,10 +1791,14 @@ function OrderDetailDialog({
                     <p className="font-medium">{line.sku_name}</p>
                     <p className="text-xs text-muted-foreground">
                       {line.sku_code}
-                      {" "}&middot;{" "}
-                      <Badge variant="secondary" className="text-xs px-1 py-0">
-                        {DELIVERY_DAY_LABELS[line.delivery_day] ?? line.delivery_day}
-                      </Badge>
+                      {!line.is_item && (
+                        <>
+                          {" "}&middot;{" "}
+                          <Badge variant="secondary" className="text-xs px-1 py-0">
+                            {DELIVERY_DAY_LABELS[line.delivery_day] ?? line.delivery_day}
+                          </Badge>
+                        </>
+                      )}
                       {line.is_bottle && (
                         <>
                           {" "}
@@ -1748,8 +1830,8 @@ function OrderDetailDialog({
                     <div>
                       <p>
                         {isCustomer
-                          ? `${line.quantity} ${unitLabel(line.is_bottle, line.quantity)}`
-                          : `${line.booked_count}/${line.quantity} ${unitLabel(line.is_bottle, line.quantity)}`}
+                          ? `${line.quantity} ${unitLabel(line.is_bottle, line.quantity, line.is_item)}`
+                          : `${line.booked_count}/${line.quantity} ${unitLabel(line.is_bottle, line.quantity, line.is_item)}`}
                       </p>
                       {line.show_prices && line.effective_price != null && (
                         <p className="text-xs text-muted-foreground">
