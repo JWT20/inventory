@@ -44,6 +44,11 @@ def upgrade() -> None:
                   AND a.status = 'needs_action'
                   AND a.document_sha256 IS NOT NULL
                   AND s.status IN ('draft', 'booked')
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM inbound_upload_attempts linked
+                      WHERE linked.shipment_id = s.id
+                  )
             ),
             unique_pairs AS (
                 SELECT *
