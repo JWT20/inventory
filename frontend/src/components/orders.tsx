@@ -158,9 +158,12 @@ const normalizeDeliveryDays = (days: string[] | undefined, fallback?: string): s
 const deliveryDayOptionsFor = (customer: CustomerOption | undefined): string[] =>
   normalizeDeliveryDays(customer?.delivery_days, customer?.delivery_day);
 
+const clampDeliveryDay = (options: string[], preferred?: string): string =>
+  preferred && options.includes(preferred) ? preferred : options[0];
+
 const defaultDeliveryDayFor = (customer: CustomerOption): string => {
   const options = deliveryDayOptionsFor(customer);
-  return options.includes(customer.delivery_day) ? customer.delivery_day : options[0];
+  return clampDeliveryDay(options, customer.delivery_day);
 };
 
 interface Order {
@@ -1414,8 +1417,12 @@ function OrderDetailDialog({
     setDraftQty({});
     if (open && order?.status === "pending_approval") {
       setApproveWeek(isoWeekString(new Date()));
+      const allowedDays = normalizeDeliveryDays(
+        order.allowed_delivery_days,
+        order.lines[0]?.delivery_day,
+      );
       setApproveDeliveryDay(
-        order.lines[0]?.delivery_day || order.allowed_delivery_days[0] || "thursday",
+        clampDeliveryDay(allowedDays, order.lines[0]?.delivery_day),
       );
     }
     if (open && canEditLines) {
