@@ -30,6 +30,7 @@ interface MonthRow {
   month: string; // "YYYY-MM"
   boxes: number;
   bottles: number;
+  items: number;
 }
 
 interface OrgReport {
@@ -37,6 +38,7 @@ interface OrgReport {
   organization_name: string;
   total_boxes: number;
   total_bottles: number;
+  total_items: number;
   months: MonthRow[];
 }
 
@@ -115,11 +117,11 @@ export function MonthlyBoxesPage() {
   return (
     <>
       <div className="flex justify-between items-center mb-4">
-        <h2 className="text-xl font-bold">Geboekt per maand</h2>
+        <h2 className="text-xl font-bold">Verwerkt per maand</h2>
       </div>
 
       <p className="text-sm text-muted-foreground mb-4">
-        Aantal geboekte dozen en flessen voor voltooide en gesloten orders,
+        Aantal verwerkte dozen, flessen en items voor voltooide en gesloten orders,
         per maand waarin de order is afgerond.
       </p>
 
@@ -172,7 +174,7 @@ export function MonthlyBoxesPage() {
                   <TableRow key={m.month}>
                     <TableCell>{formatMonth(m.month)}</TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {formatBoxesBottles(m.boxes, m.bottles)}
+                      {formatBoxesBottles(m.boxes, m.bottles, m.items)}
                     </TableCell>
                     <TableCell className="text-right">
                       <Badge variant={closed ? "completed" : "pending"}>

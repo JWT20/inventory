@@ -11,11 +11,14 @@ function testOrder(pickMethod: "vision" | "barcode"): Order {
     status: "active",
     channel: pickMethod === "vision" ? "manual" : "shopify",
     pick_method: pickMethod,
+    created_at: "2026-07-21T09:00:00Z",
     customer_name: "Testklant",
-    total_boxes: 1,
+    total_boxes: pickMethod === "vision" ? 1 : 0,
     booked_boxes: 0,
     total_bottles: 0,
     booked_bottles: 0,
+    total_items: pickMethod === "barcode" ? 1 : 0,
+    booked_items: 0,
     lines: [],
   };
 }

@@ -14,6 +14,11 @@ export function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (ord
     friday: 4,
   };
   days.sort((a, b) => (dayOrderMap[a] ?? 9) - (dayOrderMap[b] ?? 9));
+  const incoming = new Date(o.ordered_at || o.created_at).toLocaleDateString("nl-NL", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
 
   return (
     <Card
@@ -34,11 +39,17 @@ export function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (ord
           >
             {o.pick_method === "barcode" ? "Scanner" : "Camera"}
           </Badge>
-          {days.map((d) => (
-            <Badge key={d} variant="secondary" className="text-xs">
-              {DELIVERY_DAY_SHORT[d] || d}
+          {o.pick_method === "barcode" ? (
+            <Badge variant="secondary" className="text-xs">
+              Binnengekomen {incoming}
             </Badge>
-          ))}
+          ) : (
+            days.map((d) => (
+              <Badge key={d} variant="secondary" className="text-xs">
+                {DELIVERY_DAY_SHORT[d] || d}
+              </Badge>
+            ))
+          )}
         </div>
       </div>
       <p className="text-sm text-muted-foreground">
@@ -50,6 +61,8 @@ export function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (ord
           o.total_boxes,
           o.booked_bottles,
           o.total_bottles,
+          o.booked_items,
+          o.total_items,
         )}{" "}
         geboekt
       </p>

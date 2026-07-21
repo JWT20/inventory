@@ -2,8 +2,8 @@
 
 - Order.channel defaults to "manual"; (org, channel, external_id) is unique so
   the same channel order cannot be imported twice.
-- An order awaits approval only when its organization runs the weekly approval
-  flow (week_overview). Merchants without it get born-active orders (no week).
+- Manual orders are available to vision merchants; barcode-only merchants receive
+  their orders through a channel and cannot create them by hand.
 - Born-active weekless orders must not leak into the wine week views.
 """
 import pytest
@@ -42,7 +42,12 @@ def _make_owner(db, org, username):
 
 def _make_customer_and_sku(db, org, code):
     customer = Customer(name=f"Klant {code}", organization_id=org.id)
-    sku = SKU(sku_code=code, name=f"Product {code}", organization_id=org.id)
+    sku = SKU(
+        sku_code=code,
+        name=f"Product {code}",
+        organization_id=org.id,
+        product_type="vision" if "vision_picking" in org.modules else "barcode",
+    )
     db.add_all([customer, sku])
     db.commit()
     db.refresh(customer)
@@ -63,17 +68,14 @@ def _create_order(client, token, org, customer, sku):
 
 # --- born-active vs approval semantics ------------------------------------
 
-def test_org_without_week_overview_gets_born_active_order(client, db):
+def test_barcode_only_org_cannot_create_manual_order(client, db):
     org = _make_org(db, "socks", ["inventory", "orders", "barcode_picking"])
     token = _make_owner(db, org, "socks-owner")
     customer, sku = _make_customer_and_sku(db, org, "SOCK-1")
 
     resp = _create_order(client, token, org, customer, sku)
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "active"  # no approval step → ready to pick
-    assert data["delivery_week"] is None
-    assert data["channel"] == "manual"
+    assert resp.status_code == 403
+    assert "Handmatige orders" in resp.json()["detail"]
 
 
 def test_org_with_week_overview_still_awaits_approval(client, db):

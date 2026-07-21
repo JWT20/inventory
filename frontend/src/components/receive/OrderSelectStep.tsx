@@ -52,10 +52,14 @@ export function OrderSelectStep({
           const shipB = b.status === "completed" ? 0 : 1;
           if (shipA !== shipB) return shipA - shipB;
           // Then active orders by booked percentage ascending (least progress first).
-          const totalA = a.total_boxes + a.total_bottles;
-          const totalB = b.total_boxes + b.total_bottles;
-          const pctA = totalA > 0 ? (a.booked_boxes + a.booked_bottles) / totalA : 0;
-          const pctB = totalB > 0 ? (b.booked_boxes + b.booked_bottles) / totalB : 0;
+          const totalA = a.total_boxes + a.total_bottles + a.total_items;
+          const totalB = b.total_boxes + b.total_bottles + b.total_items;
+          const pctA = totalA > 0
+            ? (a.booked_boxes + a.booked_bottles + a.booked_items) / totalA
+            : 0;
+          const pctB = totalB > 0
+            ? (b.booked_boxes + b.booked_bottles + b.booked_items) / totalB
+            : 0;
           return pctA - pctB;
         });
         setOrders(worklist);

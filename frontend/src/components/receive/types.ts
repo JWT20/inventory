@@ -21,12 +21,16 @@ export interface Order {
   // "vision" = camera + AI; "barcode" = handscanner EAN scan.
   pick_method?: "vision" | "barcode";
   delivery_week?: string | null;
+  created_at: string;
+  ordered_at?: string | null;
   organization_id?: number | null;
   customer_name: string | null;
   total_boxes: number;
   booked_boxes: number;
   total_bottles: number;
   booked_bottles: number;
+  total_items: number;
+  booked_items: number;
   lines?: OrderLine[];
 }
 
