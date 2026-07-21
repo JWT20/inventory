@@ -35,7 +35,7 @@ const BOTTLES_PER_BOX = 6;
 // de preview: een fles-SKU telt pieces 1-op-1 en kan dozen/onbekend niet zelf
 // omrekenen (0 → operator vult het aantal flessen in); een doos-SKU houdt de
 // bestaande deling door BOTTLES_PER_BOX.
-function resolveQuantityForUnit(
+export function resolveQuantityForUnit(
   quantity: number,
   unit: ExtractedLine["quantity_unit"],
   isBottle: boolean,
@@ -45,6 +45,13 @@ function resolveQuantityForUnit(
   if (unit === "boxes") return quantity;
   if (unit === "pieces") return Math.floor(quantity / BOTTLES_PER_BOX);
   return 0;
+}
+
+export function bottleRemainderForBoxSku(line: ExtractedLine): number {
+  if (line.is_bottle || line.quantity_unit !== "pieces" || line.quantity <= 0) return 0;
+  const automaticBoxes = Math.floor(line.quantity / BOTTLES_PER_BOX);
+  if (line.quantity_boxes !== automaticBoxes) return 0;
+  return line.quantity % BOTTLES_PER_BOX;
 }
 
 function extractedLabel(line: ExtractedLine): string {
@@ -301,6 +308,7 @@ export function InboundPage() {
   const [pasteText, setPasteText] = useState("");
   const [ignoredLines, setIgnoredLines] = useState<Set<number>>(new Set());
   const [editingLines, setEditingLines] = useState<Set<number>>(new Set());
+  const [acceptedRemainderLines, setAcceptedRemainderLines] = useState<Set<number>>(new Set());
   const [uploadHistory, setUploadHistory] = useState<InboundUploadAttempt[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
@@ -341,6 +349,7 @@ export function InboundPage() {
     setSelectedSkuByLine({});
     setIgnoredLines(new Set());
     setEditingLines(new Set());
+    setAcceptedRemainderLines(new Set());
     toast.success("Extractie voltooid");
   }
 
@@ -358,6 +367,15 @@ export function InboundPage() {
       const next = new Set(prev);
       if (open) next.add(lineIndex);
       else next.delete(lineIndex);
+      return next;
+    });
+  }
+
+  function clearRemainderDecision(lineIndex: number) {
+    setAcceptedRemainderLines((prev) => {
+      if (!prev.has(lineIndex)) return prev;
+      const next = new Set(prev);
+      next.delete(lineIndex);
       return next;
     });
   }
@@ -420,6 +438,7 @@ export function InboundPage() {
       delete next[lineIndex];
       return next;
     });
+    clearRemainderDecision(lineIndex);
     setEditing(lineIndex, false);
     toast.success("Ontkoppeld — kies een nieuw SKU of zet de regel op niet boeken");
   }
@@ -483,6 +502,22 @@ export function InboundPage() {
       const codes = needsDecision.map(({ line }) => line.supplier_code || "(geen code)").join(", ");
       toast.error(
         `Nog niet boekbaar: ${codes}. Koppel een SKU en zet een aantal, of zet de regel op "niet boeken".`,
+      );
+      return;
+    }
+    const unconfirmedRemainders = active.filter(
+      ({ line, idx }) =>
+        Boolean(line.matched_sku_id) &&
+        line.quantity_boxes > 0 &&
+        bottleRemainderForBoxSku(line) > 0 &&
+        !acceptedRemainderLines.has(idx),
+    );
+    if (unconfirmedRemainders.length > 0) {
+      const codes = unconfirmedRemainders
+        .map(({ line }) => line.supplier_code || "(geen code)")
+        .join(", ");
+      toast.error(
+        `Restflessen nog niet bevestigd: ${codes}. Koppel aan een fles-SKU of bevestig hoeveel dozen je boekt.`,
       );
       return;
     }
@@ -599,6 +634,7 @@ export function InboundPage() {
       };
       return { ...prev, lines: nextLines };
     });
+    clearRemainderDecision(lineIndex);
     setEditing(lineIndex, false);
     if (sku.is_bottle && unitChanged && resolvedQty === 0 && line.quantity > 0) {
       toast(
@@ -615,7 +651,7 @@ export function InboundPage() {
     }
   }
 
-  async function createConceptForLine(lineIndex: number) {
+  async function createConceptForLine(lineIndex: number, isBottle: boolean) {
     if (!preview) return;
     const line = preview.lines[lineIndex];
     if (!line || line.matched_sku_id) return;
@@ -630,6 +666,7 @@ export function InboundPage() {
       const created = await api.createConceptProduct(
         supplierCode,
         line.description || undefined,
+        isBottle,
       );
 
       const supplierNameForMapping = (preview.supplier_name || "").trim();
@@ -655,14 +692,22 @@ export function InboundPage() {
       setPreview((prev) => {
         if (!prev) return prev;
         const nextLines = [...prev.lines];
+        const resolvedQty = resolveQuantityForUnit(
+          nextLines[lineIndex].quantity,
+          nextLines[lineIndex].quantity_unit,
+          created.is_bottle,
+        );
         nextLines[lineIndex] = {
           ...nextLines[lineIndex],
           matched_sku_id: created.id,
           matched_sku_code: created.sku_code,
           matched_sku_name: created.name,
+          is_bottle: created.is_bottle,
+          quantity_boxes: resolvedQty,
         };
         return { ...prev, lines: nextLines };
       });
+      clearRemainderDecision(lineIndex);
       setEditing(lineIndex, false);
       if (mappingPersisted) {
         toast.success(`Concept product ${created.sku_code} aangemaakt en gekoppeld`);
@@ -679,6 +724,7 @@ export function InboundPage() {
   }
 
   function updateLineQuantity(lineIndex: number, newQty: number) {
+    clearRemainderDecision(lineIndex);
     setPreview((prev) => {
       if (!prev) return prev;
       const nextLines = [...prev.lines];
@@ -812,6 +858,8 @@ export function InboundPage() {
               <div className="space-y-2 max-h-[520px] overflow-auto">
                 {preview.lines.map((line, idx) => {
                   const reason = mismatchReason(line);
+                  const bottleRemainder = bottleRemainderForBoxSku(line);
+                  const remainderAccepted = acceptedRemainderLines.has(idx);
                   const unknownUnit = line.quantity_unit === "unknown";
                   const ignored = ignoredLines.has(idx);
                   const editing = editingLines.has(idx);
@@ -899,6 +947,38 @@ export function InboundPage() {
                         Confidence: {(line.confidence * 100).toFixed(0)}%
                       </span>
                     </div>
+                    {bottleRemainder > 0 && line.quantity_boxes > 0 && line.matched_sku_id && !ignored && (
+                      <div
+                        className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {remainderAccepted ? (
+                          <p>
+                            Bevestigd: {line.quantity_boxes} dozen boeken; {bottleRemainder} losse
+                            flessen niet boeken.
+                          </p>
+                        ) : (
+                          <>
+                            <p>
+                              De pakbon noemt {line.quantity} flessen. Dat is {line.quantity_boxes}
+                              {line.quantity_boxes === 1 ? " doos" : " dozen"} plus {bottleRemainder}
+                              losse flessen.
+                            </p>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="mt-2 h-7 text-xs"
+                              onClick={() =>
+                                setAcceptedRemainderLines((prev) => new Set(prev).add(idx))
+                              }
+                            >
+                              Boek {line.quantity_boxes} {line.quantity_boxes === 1 ? "doos" : "dozen"};
+                              negeer {bottleRemainder} flessen
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    )}
                     <div className="flex items-center gap-2 mt-1">
                       <p className="text-xs">
                         {line.matched_sku_code
@@ -951,15 +1031,27 @@ export function InboundPage() {
                             Koppel
                           </Button>
                         </div>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => {
-                            void createConceptForLine(idx);
-                          }}
-                        >
-                          Concept product
-                        </Button>
+                        {!line.matched_sku_id && <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">Nieuw concept als:</span>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                              void createConceptForLine(idx, false);
+                            }}
+                          >
+                            Doos
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                              void createConceptForLine(idx, true);
+                            }}
+                          >
+                            Losse fles
+                          </Button>
+                        </div>}
                         {editing && (
                           <Button
                             type="button"
