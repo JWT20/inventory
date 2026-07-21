@@ -647,6 +647,41 @@ class TestApproveOrder:
         assert data["status"] == "active"
         assert data["delivery_week"] == "2026-W30"
 
+    def test_approve_can_change_delivery_day(
+        self, client, db, owner_token, sample_org
+    ):
+        order_id = self._create_order(
+            client, db, owner_token, sample_org, "WINE-104-DAY", with_image=True
+        )
+
+        resp = client.post(
+            f"/api/orders/{order_id}/approve",
+            json={"week": "2026-W30", "delivery_day": "wednesday"},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["lines"][0]["delivery_day"] == "wednesday"
+
+    def test_approve_rejects_delivery_day_not_allowed_for_customer(
+        self, client, db, owner_token, sample_org
+    ):
+        order_id = self._create_order(
+            client, db, owner_token, sample_org, "WINE-104-BAD-DAY", with_image=True
+        )
+
+        resp = client.post(
+            f"/api/orders/{order_id}/approve",
+            json={"delivery_day": "monday"},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 400
+        order = db.get(Order, order_id)
+        db.refresh(order)
+        assert order.status == "pending_approval"
+        assert order.lines[0].delivery_day == "thursday"
+
     def test_approve_with_invalid_week_rejected(
         self, client, db, owner_token, sample_org
     ):
@@ -747,7 +782,7 @@ class TestApproveSplitUnimaged:
 
         resp = client.post(
             f"/api/orders/{order_id}/approve",
-            json={"split_unimaged": True},
+            json={"split_unimaged": True, "delivery_day": "wednesday"},
             headers=auth_header(owner_token),
         )
         assert resp.status_code == 200, resp.text
@@ -755,6 +790,7 @@ class TestApproveSplitUnimaged:
         # Original keeps only the imaged line and goes active.
         assert data["status"] == "active"
         assert [l["sku_id"] for l in data["lines"]] == [sku_img_id]
+        assert data["lines"][0]["delivery_day"] == "wednesday"
 
         # A sibling order holds the unimaged line, waiting for photos.
         siblings = [
@@ -769,6 +805,7 @@ class TestApproveSplitUnimaged:
         # Line details carried over.
         moved = sibling["lines"][0]
         assert moved["quantity"] == 5
+        assert moved["delivery_day"] == "wednesday"
         assert sibling["delivery_week"] == data["delivery_week"]
 
     def test_split_noop_when_all_lines_unimaged(

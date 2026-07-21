@@ -485,6 +485,7 @@ class OrderResponse(BaseModel):
     pick_method: str = "vision"
     remarks: str = ""
     delivery_week: str | None = None
+    allowed_delivery_days: list[str] = []
     organization_id: int | None = None
     organization_name: str = ""
     created_by_name: str = ""
@@ -691,6 +692,8 @@ class OrderUpdate(BaseModel):
 class OrderApprove(BaseModel):
     # ISO week to deliver in, e.g. "2026-W24". Defaults to the week of approval.
     week: str | None = None
+    # Optional merchant override, limited to the customer's configured days.
+    delivery_day: Literal["monday", "tuesday", "wednesday", "thursday", "friday"] | None = None
     # When True, lines whose SKU still lacks a reference image are moved to a
     # new sibling order (pending_images) so the original order can go active
     # immediately. Lines that already have bookings stay put.

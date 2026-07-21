@@ -376,10 +376,14 @@ export const api = {
     return request(`/orders${query ? `?${query}` : ""}`);
   },
   getOrder: (id: number) => request(`/orders/${id}`),
-  approveOrder: (id: number, week?: string, splitUnimaged = false) =>
+  approveOrder: (
+    id: number,
+    options: { week?: string; deliveryDay?: string; splitUnimaged?: boolean } = {},
+  ) =>
     json(`/orders/${id}/approve`, "POST", {
-      ...(week ? { week } : {}),
-      ...(splitUnimaged ? { split_unimaged: true } : {}),
+      ...(options.week ? { week: options.week } : {}),
+      ...(options.deliveryDay ? { delivery_day: options.deliveryDay } : {}),
+      ...(options.splitUnimaged ? { split_unimaged: true } : {}),
     }),
   addOrderLine: (
     orderId: number,
