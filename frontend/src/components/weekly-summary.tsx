@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -30,6 +31,9 @@ interface Wine {
   default_price: number | null;
   is_bottle: boolean;
   total_quantity: number;
+  current_stock: number;
+  completed_order_count: number;
+  closed_order_count: number;
   orders: CustomerOrder[];
   wine_total: number | null;
 }
@@ -117,6 +121,7 @@ export function WeeklySummaryPage() {
   const [data, setData] = useState<WeeklySummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const isPastWeek = week < getISOWeek(new Date());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -344,14 +349,42 @@ export function WeeklySummaryPage() {
                             </span>
                           </div>
                           <div className="text-right">
-                            <span className="text-sm">
-                              {wine.total_quantity} {unitLabel(wine.is_bottle, wine.total_quantity)}
-                            </span>
-                            {wine.wine_total != null && (
-                              <span className="ml-3 text-sm font-medium">
-                                {formatPrice(wine.wine_total)}
+                            <div className="text-sm">
+                              <span>
+                                {wine.total_quantity} {unitLabel(wine.is_bottle, wine.total_quantity)}
                               </span>
-                            )}
+                              <span
+                                className={`ml-2 ${
+                                  isPastWeek
+                                    ? "text-muted-foreground/50"
+                                    : "text-muted-foreground"
+                                }`}
+                                title={
+                                  isPastWeek
+                                    ? "Dit is de huidige voorraad, niet de voorraad in deze historische week"
+                                    : "Huidige fysieke voorraad"
+                                }
+                              >
+                                / huidige voorraad {wine.current_stock}
+                              </span>
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5">
+                              {wine.completed_order_count > 0 && (
+                                <Badge variant="completed" className="px-2 py-0 text-[10px]">
+                                  {wine.completed_order_count} voltooid
+                                </Badge>
+                              )}
+                              {wine.closed_order_count > 0 && (
+                                <Badge variant="secondary" className="px-2 py-0 text-[10px]">
+                                  {wine.closed_order_count} gesloten
+                                </Badge>
+                              )}
+                              {wine.wine_total != null && (
+                                <span className="ml-1 text-sm font-medium">
+                                  {formatPrice(wine.wine_total)}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                         <Table>
