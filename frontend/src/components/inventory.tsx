@@ -34,6 +34,7 @@ interface InventoryItem {
   sku_id: number;
   sku_code: string;
   sku_name: string;
+  active: boolean;
   attributes: Record<string, string>;
   default_price: number | null;
   quantity_on_hand: number;
@@ -185,7 +186,14 @@ export function InventoryPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-start">
                     <div className="min-w-0">
-                      <p className="font-semibold truncate">{item.sku_name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold truncate">{item.sku_name}</p>
+                        {!item.active && (
+                          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                            Inactief
+                          </span>
+                        )}
+                      </div>
                       <p className="text-sm text-muted-foreground">
                         {item.attributes.producent || ""}{" "}
                         {item.attributes.wijntype ? `\u00B7 ${item.attributes.wijntype}` : ""}
