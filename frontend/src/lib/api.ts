@@ -326,11 +326,13 @@ export const api = {
   createConceptProduct: (
     supplierCode: string,
     description?: string,
+    isBottle = false,
     organizationId?: number | null,
   ) => {
     const form = new FormData();
     form.append("supplier_code", supplierCode);
     if (description) form.append("description", description);
+    form.append("is_bottle", String(isBottle));
     if (organizationId) form.append("organization_id", String(organizationId));
     return request("/receiving/concept-product", { method: "POST", body: form });
   },

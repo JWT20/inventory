@@ -11,10 +11,12 @@ from tests.conftest import auth_header
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _post(client, token, supplier_code, description=None):
+def _post(client, token, supplier_code, description=None, is_bottle=False):
     data = {"supplier_code": supplier_code}
     if description is not None:
         data["description"] = description
+    if is_bottle:
+        data["is_bottle"] = "true"
     return client.post(
         "/api/receiving/concept-product",
         headers=auth_header(token),
@@ -109,6 +111,11 @@ class TestCreateConceptProduct:
         resp = _post(client, courier_token, "sup-lowercase")
         assert resp.status_code == 201
         assert resp.json()["sku_code"] == "SUP-LOWERCASE"
+
+    def test_can_create_bottle_concept(self, client, courier_token):
+        resp = _post(client, courier_token, "BOTTLE-001", is_bottle=True)
+        assert resp.status_code == 201
+        assert resp.json()["is_bottle"] is True
 
     def test_default_name_derived_from_code(self, client, courier_token):
         resp = _post(client, courier_token, "XYZ-42")

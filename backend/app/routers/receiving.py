@@ -1277,6 +1277,7 @@ def create_concept_product(
     response: Response,
     supplier_code: str = Form(...),
     description: str | None = Form(None),
+    is_bottle: bool = Form(False),
     organization_id: int | None = Form(None),
     db: Session = Depends(get_db),
     user: User = Depends(require_inbound_booker),
@@ -1325,6 +1326,7 @@ def create_concept_product(
         description=concept_name,
         category="wine",
         active=False,
+        is_bottle=is_bottle,
         organization_id=target_org_id,
         # An unfinished wine is a vision product; the model default is "barcode".
         product_type="vision",
