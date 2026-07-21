@@ -219,6 +219,11 @@ def _order_to_response(
         pick_method=pick_method,
         remarks=order.remarks or "",
         delivery_week=order.delivery_week,
+        allowed_delivery_days=(
+            order.lines[0].customer.delivery_days
+            if order.lines and order.lines[0].customer is not None
+            else []
+        ),
         organization_id=order.organization_id,
         organization_name=order.organization.name if order.organization else "",
         created_by_name=order.creator.username if order.creator else "",
@@ -1256,6 +1261,21 @@ def approve_order(
     if week:
         _parse_iso_week(week)  # validates the format, raises 400 otherwise
 
+    delivery_day = body.delivery_day if body else None
+    if delivery_day and order.status != "pending_approval":
+        raise HTTPException(
+            400, "Leverdag kan alleen bij de eerste goedkeuring worden aangepast"
+        )
+    if delivery_day:
+        # One order always belongs to one customer. Validate every line before
+        # mutating any of them, then apply the chosen day to the whole order.
+        for line in order.lines:
+            if line.customer is None:
+                raise HTTPException(400, "Klant bij orderregel ontbreekt")
+            _check_delivery_day_allowed(delivery_day, line.customer)
+        for line in order.lines:
+            line.delivery_day = delivery_day
+
     if order.status == "pending_approval":
         order.delivery_week = week or _current_iso_week()
     elif week:
@@ -1284,6 +1304,7 @@ def approve_order(
         details={
             "order_reference": order.reference,
             "new_status": order.status,
+            "delivery_day": delivery_day,
             "split_order_reference": sibling.reference if sibling else None,
         },
         user=user,

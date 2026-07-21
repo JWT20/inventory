@@ -158,9 +158,12 @@ const normalizeDeliveryDays = (days: string[] | undefined, fallback?: string): s
 const deliveryDayOptionsFor = (customer: CustomerOption | undefined): string[] =>
   normalizeDeliveryDays(customer?.delivery_days, customer?.delivery_day);
 
+const clampDeliveryDay = (options: string[], preferred?: string): string =>
+  preferred && options.includes(preferred) ? preferred : options[0];
+
 const defaultDeliveryDayFor = (customer: CustomerOption): string => {
   const options = deliveryDayOptionsFor(customer);
-  return options.includes(customer.delivery_day) ? customer.delivery_day : options[0];
+  return clampDeliveryDay(options, customer.delivery_day);
 };
 
 interface Order {
@@ -169,6 +172,7 @@ interface Order {
   status: string;
   remarks: string;
   delivery_week: string | null;
+  allowed_delivery_days: string[];
   organization_name: string;
   created_by_name: string;
   customer_name: string | null;
@@ -1385,6 +1389,7 @@ function OrderDetailDialog({
   const { user } = useAuth();
   const [activating, setActivating] = useState(false);
   const [approveWeek, setApproveWeek] = useState(() => isoWeekString(new Date()));
+  const [approveDeliveryDay, setApproveDeliveryDay] = useState("thursday");
   const [closing, setClosing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [uploadingSkuId, setUploadingSkuId] = useState<number | null>(null);
@@ -1410,6 +1415,16 @@ function OrderDetailDialog({
 
   useEffect(() => {
     setDraftQty({});
+    if (open && order?.status === "pending_approval") {
+      setApproveWeek(isoWeekString(new Date()));
+      const allowedDays = normalizeDeliveryDays(
+        order.allowed_delivery_days,
+        order.lines[0]?.delivery_day,
+      );
+      setApproveDeliveryDay(
+        clampDeliveryDay(allowedDays, order.lines[0]?.delivery_day),
+      );
+    }
     if (open && canEditLines) {
       api.listSKUOptions().then((s: SKUOption[]) => setAllSkus(s));
     }
@@ -1449,8 +1464,12 @@ function OrderDetailDialog({
     try {
       await api.approveOrder(
         order.id,
-        order.status === "pending_approval" ? approveWeek : undefined,
-        splitUnimaged,
+        {
+          week: order.status === "pending_approval" ? approveWeek : undefined,
+          deliveryDay:
+            order.status === "pending_approval" ? approveDeliveryDay : undefined,
+          splitUnimaged,
+        },
       );
       toast.success(
         splitUnimaged
@@ -1815,20 +1834,40 @@ function OrderDetailDialog({
           )}
 
           {canApprove && order.status === "pending_approval" && (
-            <div>
-              <Label className="mb-1 block text-sm">Leverweek</Label>
-              <Select value={approveWeek} onValueChange={setApproveWeek}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {upcomingWeekOptions().map((w) => (
-                    <SelectItem key={w.value} value={w.value}>
-                      {w.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <div className="space-y-3">
+              <div>
+                <Label className="mb-1 block text-sm">Leverweek</Label>
+                <Select value={approveWeek} onValueChange={setApproveWeek}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {upcomingWeekOptions().map((w) => (
+                      <SelectItem key={w.value} value={w.value}>
+                        {w.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="mb-1 block text-sm">Leverdag</Label>
+                <Select value={approveDeliveryDay} onValueChange={setApproveDeliveryDay}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {normalizeDeliveryDays(
+                      order.allowed_delivery_days,
+                      order.lines[0]?.delivery_day,
+                    ).map((day) => (
+                      <SelectItem key={day} value={day}>
+                        {DELIVERY_DAY_LABELS_LONG[day] ?? day}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           )}
 
