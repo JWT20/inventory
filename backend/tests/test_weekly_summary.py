@@ -1,6 +1,6 @@
 """Tests for box/bottle splits in the weekly order summary."""
 
-from app.models import Customer, Order, OrderLine, SKU
+from app.models import Customer, InventoryBalance, Order, OrderLine, SKU, Supplier
 from tests.conftest import auth_header
 
 WEEK = "2026-W30"
@@ -55,6 +55,70 @@ def test_supplier_grouping_splits_boxes_and_bottles(
     wines = {w["sku_code"]: w for w in supplier["wines"]}
     assert wines["WS-BOX"]["is_bottle"] is False
     assert wines["WS-FLES"]["is_bottle"] is True
+
+
+def test_supplier_summary_keeps_terminal_orders_and_shows_physical_stock(
+    client, db, owner_token, sample_org
+):
+    supplier = Supplier(name="Verdino", organization_id=sample_org.id)
+    sku = SKU(
+        sku_code="WS-VERDEJO",
+        name="Verdino Verdejo",
+        organization_id=sample_org.id,
+        supplier=supplier,
+    )
+    customers = [
+        Customer(name=f"Week Klant {i}", organization_id=sample_org.id)
+        for i in range(4)
+    ]
+    db.add_all([supplier, sku, *customers])
+    db.flush()
+
+    for index, (status, quantity) in enumerate(
+        [("active", 2), ("completed", 3), ("closed", 4), ("cancelled", 100)]
+    ):
+        order = Order(
+            organization_id=sample_org.id,
+            reference=f"WS-STATUS-{index}",
+            status=status,
+            delivery_week=WEEK,
+        )
+        db.add(order)
+        db.flush()
+        db.add(
+            OrderLine(
+                order_id=order.id,
+                sku_id=sku.id,
+                customer_id=customers[index].id,
+                klant=customers[index].name,
+                quantity=quantity,
+                booked_count=quantity if status == "completed" else 0,
+            )
+        )
+
+    # Reserved stock must not affect the physical box count in this overview.
+    db.add(
+        InventoryBalance(
+            sku_id=sku.id,
+            organization_id=sample_org.id,
+            quantity_on_hand=5,
+            quantity_reserved=4,
+        )
+    )
+    db.commit()
+
+    resp = client.get(
+        "/api/orders/weekly-summary",
+        params={"week": WEEK, "group_by": "supplier"},
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200
+    wine = resp.json()["suppliers"][0]["wines"][0]
+    assert wine["total_quantity"] == 9
+    assert wine["current_stock"] == 5
+    assert wine["completed_order_count"] == 1
+    assert wine["closed_order_count"] == 1
 
 
 def test_customer_grouping_splits_boxes_and_bottles(

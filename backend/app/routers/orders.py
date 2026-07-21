@@ -21,6 +21,7 @@ from app.events import publish_event
 from app.models import (
     Customer,
     CustomerSKU,
+    InventoryBalance,
     Order,
     OrderLine,
     Organization,
@@ -848,7 +849,10 @@ def weekly_order_summary(
         .filter(
             # Only approved orders count toward the weekly summary; orders
             # awaiting approval have no delivery week yet.
-            Order.status.in_(("pending_images", "active")),
+            # Keep approved orders visible after fulfilment so a selected week
+            # remains a useful historical overview. Cancelled and unapproved
+            # orders deliberately stay out.
+            Order.status.in_(("pending_images", "active", "completed", "closed")),
             or_(
                 Order.delivery_week == week,
                 # Weekless fallback only for week-planning orgs (legacy wine
@@ -876,6 +880,29 @@ def weekly_order_summary(
             grand_total_quantity=0,
             grand_total_value=0,
         )
+
+    # Physical stock is live data. Load it in one query for every product and
+    # organization in the selected week; box stock does not use reservations.
+    inventory_keys = {
+        (line.order.organization_id, line.sku_id)
+        for line in lines
+    }
+    inventory_by_key: dict[tuple[int | None, int], int] = {}
+    if inventory_keys:
+        sku_ids = {sku_id for _, sku_id in inventory_keys}
+        organization_ids = {organization_id for organization_id, _ in inventory_keys}
+        balances = (
+            db.query(InventoryBalance)
+            .filter(
+                InventoryBalance.sku_id.in_(sku_ids),
+                InventoryBalance.organization_id.in_(organization_ids),
+            )
+            .all()
+        )
+        inventory_by_key = {
+            (balance.organization_id, balance.sku_id): balance.quantity_on_hand
+            for balance in balances
+        }
 
     # Batch-load customer prices
     customer_sku_keys = {
@@ -922,8 +949,13 @@ def weekly_order_summary(
             "supplier_name": supplier_name,
             "customer_id": line.customer_id,
             "customer_name": line.customer_name,
+            "order_id": line.order_id,
+            "order_status": line.order.status,
             "sku": sku,
             "quantity": line.quantity,
+            "current_stock": inventory_by_key.get(
+                (line.order.organization_id, line.sku_id), 0
+            ),
             "effective_price": effective_price,
             "default_price": default_price,
             "remarks": line.order.remarks or "",
@@ -954,6 +986,10 @@ def weekly_order_summary(
 
         for sku_id, entries in sku_map.items():
             sku_obj = entries[0]["sku"]
+            order_status_by_id = {
+                e["order_id"]: e["order_status"]
+                for e in entries
+            }
             customer_agg: dict[str, dict] = {}
             for e in entries:
                 cname = e["customer_name"]
@@ -997,6 +1033,13 @@ def weekly_order_summary(
                 default_price=entries[0]["default_price"],
                 is_bottle=sku_obj.is_bottle,
                 total_quantity=wine_qty,
+                current_stock=entries[0]["current_stock"],
+                completed_order_count=sum(
+                    status == "completed" for status in order_status_by_id.values()
+                ),
+                closed_order_count=sum(
+                    status == "closed" for status in order_status_by_id.values()
+                ),
                 orders=orders_out,
                 wine_total=round(wine_total, 2) if wine_total else None,
             ))

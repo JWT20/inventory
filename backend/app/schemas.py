@@ -1088,6 +1088,9 @@ class WeeklySummaryWine(BaseModel):
     default_price: float | None = None
     is_bottle: bool = False
     total_quantity: int
+    current_stock: int = 0
+    completed_order_count: int = 0
+    closed_order_count: int = 0
     orders: list[WeeklySummaryCustomerOrder] = []
     wine_total: float | None = None
 
