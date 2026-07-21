@@ -104,6 +104,51 @@ class TestInventoryScope:
             "/api/thumbnails/112/reference_images/done.jpg"
         )
 
+    def test_inventory_overview_includes_only_inactive_skus_with_stock(
+        self, client, db, admin_token, sample_org
+    ):
+        active_zero = SKU(
+            sku_code="ACTIVE-ZERO",
+            name="Actief zonder voorraad",
+            organization_id=sample_org.id,
+            active=True,
+        )
+        inactive_stock = SKU(
+            sku_code="INACTIVE-STOCK",
+            name="Inactief met voorraad",
+            organization_id=sample_org.id,
+            active=False,
+        )
+        inactive_zero = SKU(
+            sku_code="INACTIVE-ZERO",
+            name="Inactief zonder voorraad",
+            organization_id=sample_org.id,
+            active=False,
+        )
+        db.add_all([active_zero, inactive_stock, inactive_zero])
+        db.flush()
+        db.add(
+            InventoryBalance(
+                sku_id=inactive_stock.id,
+                organization_id=sample_org.id,
+                quantity_on_hand=7,
+                quantity_reserved=2,
+            )
+        )
+        db.commit()
+
+        resp = client.get(
+            f"/api/inventory/overview?organization_id={sample_org.id}",
+            headers=auth_header(admin_token),
+        )
+
+        assert resp.status_code == 200
+        rows = {row["sku_code"]: row for row in resp.json()}
+        assert set(rows) == {"ACTIVE-ZERO", "INACTIVE-STOCK"}
+        assert rows["ACTIVE-ZERO"]["active"] is True
+        assert rows["INACTIVE-STOCK"]["active"] is False
+        assert rows["INACTIVE-STOCK"]["quantity_on_hand"] == 7
+
     def test_courier_inventory_overview_hides_prices(
         self, client, db, courier_token, sample_org
     ):

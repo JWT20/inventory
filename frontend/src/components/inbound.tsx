@@ -98,6 +98,10 @@ interface SKUOption {
   is_bottle: boolean;
 }
 
+function skusOrEmpty(value: unknown): SKUOption[] {
+  return Array.isArray(value) ? value as SKUOption[] : [];
+}
+
 /**
  * Zoekbare, scrollbare keuzelijst voor het koppelen van een bestaande SKU.
  * Toont de volledige lijst (scrollbaar) en filtert client-side op naam,
@@ -219,6 +223,7 @@ function SkuCombobox({
                     <span className="line-clamp-1">
                       {sku.sku_code} - {sku.name}
                       {sku.is_bottle ? " · fles" : ""}
+                      {!sku.active ? " · Inactief" : ""}
                     </span>
                     {sku.supplier_name && (
                       <span className="text-[10px] text-muted-foreground">
@@ -331,11 +336,13 @@ export function InboundPage() {
   useEffect(() => {
     async function loadSkus() {
       try {
-        // Haal de volledige actieve lijst op (niet de standaard 100) zodat ook
+        // Haal de volledige lijst op (niet de standaard 100) zodat ook
+        // inactieve producten met voorraad opnieuw gekoppeld kunnen worden en
         // SKU's verderop in het alfabet — bijv. wijnen met de T — beschikbaar
         // zijn om te scrollen en doorzoeken in de koppel-combobox.
-        const skus = await api.listSKUs(true, undefined, { limit: 10000 });
-        setSkuOptions((skus || []) as SKUOption[]);
+        const skus = (skusOrEmpty(await api.listSKUs(false, undefined, { limit: 10000 })))
+          .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, "nl"));
+        setSkuOptions(skus);
       } catch (err: unknown) {
         toast.error(err instanceof Error ? err.message : "SKU's laden mislukt");
       }

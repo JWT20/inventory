@@ -955,6 +955,7 @@ class InventoryOverviewItem(BaseModel):
     sku_id: int
     sku_code: str = ""
     sku_name: str = ""
+    active: bool = True
     attributes: dict[str, str] = {}
     default_price: float | None = None
     quantity_on_hand: int = 0

@@ -1175,7 +1175,12 @@ def inventory_overview(
         .options(
             selectinload(SKU.attributes),
         )
-        .filter(SKU.active.is_(True))
+        .filter(
+            or_(
+                SKU.active.is_(True),
+                InventoryBalance.quantity_on_hand > 0,
+            )
+        )
         .filter(SKU.organization_id == org_id)
     )
 
@@ -1283,6 +1288,7 @@ def inventory_overview(
                 sku_id=sku.id,
                 sku_code=sku.sku_code,
                 sku_name=sku.name,
+                active=sku.active,
                 attributes=sku.attributes_dict,
                 default_price=(
                     float(sku.default_price)
@@ -1332,6 +1338,7 @@ def update_default_price(
         sku_id=sku.id,
         sku_code=sku.sku_code,
         sku_name=sku.name,
+        active=sku.active,
         attributes=sku.attributes_dict,
         default_price=float(sku.default_price) if sku.default_price is not None else None,
         quantity_on_hand=balance.quantity_on_hand if balance else 0,
