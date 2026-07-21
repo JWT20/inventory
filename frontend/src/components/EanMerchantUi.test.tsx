@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrdersPage } from "./orders";
 import { SKUsPage } from "./skus";
@@ -100,5 +100,40 @@ describe("EAN merchant UI", () => {
     expect(screen.getByText(/Binnengekomen di 21 jul/i)).toBeTruthy();
     expect(screen.getByText(/2\/4 items geboekt/i)).toBeTruthy();
     expect(screen.queryByText("Do")).toBeNull();
+  });
+
+  it("keeps zero-total channel orders labeled as items", async () => {
+    mocks.listOrders.mockResolvedValue([
+      {
+        id: 2,
+        reference: "SHOP-EMPTY",
+        status: "shipped",
+        channel: "shopify",
+        pick_method: "barcode",
+        remarks: "",
+        delivery_week: "2026-W30",
+        allowed_delivery_days: [],
+        organization_name: "EAN handelaar",
+        created_by_name: "",
+        customer_name: "Webklant",
+        created_at: "2026-07-21T09:00:00Z",
+        ordered_at: "2026-07-21T08:00:00Z",
+        lines: [],
+        total_boxes: 0,
+        booked_boxes: 0,
+        total_bottles: 0,
+        booked_bottles: 0,
+        total_items: 0,
+        booked_items: 0,
+        visible_total: null,
+        hidden_lines_count: 0,
+      },
+    ]);
+
+    render(<OrdersPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Historie/i }));
+    expect(await screen.findByText(/Webklant · 0\/0 items/i)).toBeTruthy();
+    expect(screen.queryByText(/0\/0 dozen/i)).toBeNull();
   });
 });
