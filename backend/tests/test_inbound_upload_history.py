@@ -150,6 +150,98 @@ def test_upload_attempt_tracks_draft_and_successful_stock_booking(
     assert movement.quantity == 4
 
 
+def test_missing_upload_attempt_id_recovers_unique_recent_hash_match(
+    client, db, owner_token, owner_user
+):
+    sku = SKU(
+        sku_code="HISTORY-RECOVERED",
+        name="Recovered history wine",
+        organization_id=owner_user.organization_id,
+    )
+    db.add(sku)
+    db.flush()
+    attempt = InboundUploadAttempt(
+        organization_id=owner_user.organization_id,
+        uploaded_by=owner_user.id,
+        source_type="text",
+        document_sha256="b" * 64,
+        supplier_name="Anfors-Imperial",
+        status="needs_action",
+        line_count=2,
+        bookable_line_count=1,
+    )
+    db.add(attempt)
+    db.commit()
+
+    created = client.post(
+        "/api/shipments",
+        headers=auth_header(owner_token),
+        json={
+            "supplier_name": "Anfors-Imperial",
+            "document_sha256": "b" * 64,
+            # Simulate a stale frontend that does not send upload_attempt_id.
+            "lines": [{"sku_id": sku.id, "quantity": 3, "supplier_code": "RECOVERED"}],
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    db.refresh(attempt)
+    assert attempt.shipment_id == created.json()["id"]
+    assert attempt.status == "draft"
+    assert attempt.bookable_line_count == 1
+
+    booked = client.post(
+        f'/api/shipments/{created.json()["id"]}/book',
+        headers=auth_header(owner_token),
+    )
+    assert booked.status_code == 200, booked.text
+    db.refresh(attempt)
+    assert attempt.status == "booked"
+    assert attempt.booked_line_count == 1
+    assert attempt.booked_quantity == 3
+
+
+def test_missing_upload_attempt_id_does_not_guess_between_duplicate_attempts(
+    client, db, owner_token, owner_user
+):
+    sku = SKU(
+        sku_code="HISTORY-AMBIGUOUS",
+        name="Ambiguous history wine",
+        organization_id=owner_user.organization_id,
+    )
+    db.add(sku)
+    db.flush()
+    attempts = [
+        InboundUploadAttempt(
+            organization_id=owner_user.organization_id,
+            uploaded_by=owner_user.id,
+            source_type="text",
+            document_sha256="c" * 64,
+            status="needs_action",
+            line_count=1,
+        )
+        for _ in range(2)
+    ]
+    db.add_all(attempts)
+    db.commit()
+
+    created = client.post(
+        "/api/shipments",
+        headers=auth_header(owner_token),
+        json={
+            "supplier_name": "Anfors-Imperial",
+            "document_sha256": "c" * 64,
+            "lines": [{"sku_id": sku.id, "quantity": 1}],
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    for attempt in attempts:
+        db.refresh(attempt)
+        assert attempt.shipment_id is None
+        assert attempt.status == "needs_action"
+
+
 def test_upload_history_is_scoped_and_not_available_to_customers(
     client, db, owner_token, customer_token, owner_user
 ):

@@ -698,6 +698,41 @@ def create_shipment(
             and upload_attempt.document_sha256 != data.document_sha256
         ):
             raise HTTPException(400, "Document komt niet overeen met de uploadpoging")
+    elif data.document_sha256:
+        # A browser tab opened before upload history was deployed can still send
+        # the document hash but omit upload_attempt_id. Recover that link only
+        # when it is unambiguous: same user, organization and hash, still open,
+        # and created recently. With zero or multiple candidates we deliberately
+        # leave the shipment unlinked rather than risk corrupting history.
+        candidates = (
+            db.query(InboundUploadAttempt)
+            .filter(
+                InboundUploadAttempt.organization_id == org_id,
+                InboundUploadAttempt.uploaded_by == user.id,
+                InboundUploadAttempt.document_sha256 == data.document_sha256,
+                InboundUploadAttempt.shipment_id.is_(None),
+                InboundUploadAttempt.status == "needs_action",
+                InboundUploadAttempt.created_at >= _utcnow() - timedelta(hours=24),
+            )
+            .order_by(InboundUploadAttempt.created_at.desc())
+            .limit(2)
+            .with_for_update()
+            .all()
+        )
+        if len(candidates) == 1:
+            upload_attempt = candidates[0]
+            logger.info(
+                "Recovered missing upload_attempt_id: attempt=%s org=%s user=%s",
+                upload_attempt.id,
+                org_id,
+                user.id,
+            )
+        elif len(candidates) > 1:
+            logger.warning(
+                "Not recovering missing upload_attempt_id: ambiguous hash for org=%s user=%s",
+                org_id,
+                user.id,
+            )
 
     normalized_supplier_name = _normalize_supplier_name(data.supplier_name)
     supplier_name_display = data.supplier_name.strip() if data.supplier_name else None
