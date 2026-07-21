@@ -109,6 +109,174 @@ def test_extract_preview_maps_using_supplier_mapping(
     assert body["lines"][0]["matched_sku_code"] == "MAPPED-001"
 
 
+def test_extract_preview_falls_back_to_unique_supplier_code(
+    client, db, owner_token, owner_user, tmp_path
+):
+    sku = SKU(
+        sku_code="RIOJA-FLES",
+        name="Rioja Reserva",
+        organization_id=owner_user.organization_id,
+        is_bottle=True,
+    )
+    db.add(sku)
+    db.flush()
+    db.add(SupplierSKUMapping(
+        organization_id=owner_user.organization_id,
+        supplier_name="ANFORS",
+        supplier_code="AFS290021",
+        sku_id=sku.id,
+    ))
+    db.commit()
+
+    mocked = {
+        "supplier_name": "Anfors-Imperial",
+        "reference": "PKB-ALIAS",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [{
+            "supplier_code": "AFS290021",
+            "description": "Rioja Reserva Vina Alberdi",
+            "quantity": 8,
+            "quantity_unit": "pieces",
+            "confidence": 0.95,
+        }],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(owner_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={"document_type": "pakbon"},
+        )
+
+    assert resp.status_code == 200
+    line = resp.json()["lines"][0]
+    assert line["matched_sku_code"] == "RIOJA-FLES"
+    assert line["quantity_boxes"] == 8
+    assert line["match_source"] == "supplier_mapping"
+
+
+def test_extract_preview_does_not_guess_ambiguous_supplier_code(
+    client, db, owner_token, owner_user, tmp_path
+):
+    first_sku = SKU(
+        sku_code="CODE-FIRST",
+        name="First wine",
+        organization_id=owner_user.organization_id,
+    )
+    second_sku = SKU(
+        sku_code="CODE-SECOND",
+        name="Second wine",
+        organization_id=owner_user.organization_id,
+    )
+    db.add_all([first_sku, second_sku])
+    db.flush()
+    db.add_all([
+        SupplierSKUMapping(
+            organization_id=owner_user.organization_id,
+            supplier_name="ANFORS",
+            supplier_code="SHARED-42",
+            sku_id=first_sku.id,
+        ),
+        SupplierSKUMapping(
+            organization_id=owner_user.organization_id,
+            supplier_name="OTHER-SUPPLIER",
+            supplier_code="SHARED-42",
+            sku_id=second_sku.id,
+        ),
+    ])
+    db.commit()
+
+    mocked = {
+        "supplier_name": "Anfors-Imperial",
+        "reference": "PKB-AMBIGUOUS",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [{
+            "supplier_code": "SHARED-42",
+            "description": "Ambiguous wine",
+            "quantity_boxes": 1,
+            "confidence": 0.9,
+        }],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(owner_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={"document_type": "pakbon"},
+        )
+
+    assert resp.status_code == 200
+    line = resp.json()["lines"][0]
+    assert line["matched_sku_id"] is None
+    assert line["match_source"] == "unresolved"
+
+
+def test_unique_supplier_code_fallback_is_scoped_to_organization(
+    client, db, owner_token, owner_user, tmp_path
+):
+    other_org = Organization(name="Other fallback org", slug="other-fallback-org")
+    db.add(other_org)
+    db.flush()
+    own_sku = SKU(
+        sku_code="OWN-FALLBACK",
+        name="Own fallback wine",
+        organization_id=owner_user.organization_id,
+    )
+    other_sku = SKU(
+        sku_code="OTHER-FALLBACK",
+        name="Other fallback wine",
+        organization_id=other_org.id,
+    )
+    db.add_all([own_sku, other_sku])
+    db.flush()
+    db.add_all([
+        SupplierSKUMapping(
+            organization_id=owner_user.organization_id,
+            supplier_name="ANFORS",
+            supplier_code="ORG-CODE",
+            sku_id=own_sku.id,
+        ),
+        SupplierSKUMapping(
+            organization_id=other_org.id,
+            supplier_name="OTHER-SUPPLIER",
+            supplier_code="ORG-CODE",
+            sku_id=other_sku.id,
+        ),
+    ])
+    db.commit()
+
+    mocked = {
+        "supplier_name": "Anfors-Imperial",
+        "reference": "PKB-ORG-FALLBACK",
+        "document_type": "pakbon",
+        "raw_text": "sample",
+        "lines": [{
+            "supplier_code": "ORG-CODE",
+            "description": "Own organization wine",
+            "quantity_boxes": 1,
+            "confidence": 0.9,
+        }],
+    }
+
+    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
+         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        resp = client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(owner_token),
+            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
+            data={"document_type": "pakbon"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["lines"][0]["matched_sku_code"] == "OWN-FALLBACK"
+
+
 def test_extract_preview_bottle_mapping_counts_pieces_one_to_one(
     client, db, admin_token, tmp_path
 ):

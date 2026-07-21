@@ -287,6 +287,8 @@ async def _build_preview_lines(
     )
 
     mapping_lookup: dict[tuple[str, str], tuple[int, str, str]] = {}
+    mappings_by_supplier_code: dict[str, dict[int, tuple[int, str, str]]] = {}
+    unique_supplier_code_lookup: dict[str, tuple[int, str, str]] = {}
     sku_candidates: dict[str, tuple[int, str, str]] = {}
     supplier_scoped_candidates: dict[str, tuple[int, str, str]] = {}
     is_bottle_by_id: dict[int, bool] = {}
@@ -298,15 +300,26 @@ async def _build_preview_lines(
             mappings = mappings.filter(
                 SupplierSKUMapping.organization_id == target_org_id
             )
-        for mapping, sku in mappings.filter(
-            SupplierSKUMapping.supplier_name == normalized_supplier
-        ).all():
+        else:
+            mappings = mappings.filter(SupplierSKUMapping.organization_id.is_(None))
+        for mapping, sku in mappings.all():
             normalized_mapping = (sku.id, sku.sku_code, sku.name)
-            mapping_lookup[
-                (_normalize_supplier_name(mapping.supplier_name), _normalize_supplier_code(mapping.supplier_code))
+            mapping_supplier = _normalize_supplier_name(mapping.supplier_name)
+            mapping_code = _normalize_supplier_code(mapping.supplier_code)
+            mapping_lookup[(mapping_supplier, mapping_code)] = normalized_mapping
+            mappings_by_supplier_code.setdefault(mapping_code, {})[
+                sku.id
             ] = normalized_mapping
-            supplier_scoped_candidates[_normalize_supplier_code(sku.sku_code)] = normalized_mapping
+            if mapping_supplier == normalized_supplier:
+                supplier_scoped_candidates[
+                    _normalize_supplier_code(sku.sku_code)
+                ] = normalized_mapping
             is_bottle_by_id[sku.id] = sku.is_bottle
+        unique_supplier_code_lookup = {
+            code: next(iter(sku_matches.values()))
+            for code, sku_matches in mappings_by_supplier_code.items()
+            if len(sku_matches) == 1
+        }
 
     sku_query = db.query(SKU)
     if target_org_id is not None:
@@ -334,8 +347,13 @@ async def _build_preview_lines(
         match_source = "unresolved"
         candidate_matches: list[ShipmentMatchCandidate] = []
         if code:
-            # Resolution priority: supplier-specific mapping when supplier code exists
-            hit = mapping_lookup.get((normalized_supplier, _normalize_supplier_code(code)))
+            # Prefer the exact supplier mapping. If the uploaded supplier name
+            # differs, only fall back when this code identifies exactly one SKU
+            # across all supplier mappings in the organization.
+            normalized_code = _normalize_supplier_code(code)
+            hit = mapping_lookup.get((normalized_supplier, normalized_code))
+            if not hit:
+                hit = unique_supplier_code_lookup.get(normalized_code)
             if hit:
                 matched_id, matched_code, matched_name = hit
                 match_source = "supplier_mapping"
