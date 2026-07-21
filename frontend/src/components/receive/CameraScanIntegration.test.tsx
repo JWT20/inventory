@@ -171,12 +171,32 @@ describe("camera scan integration", () => {
 
     const input = screen.getByPlaceholderText("Scan Veloyd-label…");
     expect(document.activeElement).toBe(input);
-    await user.type(input, "V-LABEL-1{Enter}");
+    expect((input as HTMLInputElement).inputMode).toBe("none");
+    await user.keyboard("V-LABEL-1{Enter}");
 
     await waitFor(() =>
       expect(mocks.openOrderByLabel).toHaveBeenCalledWith("V-LABEL-1"),
     );
     expect(selected).toHaveBeenCalledWith(foundOrder);
+  });
+
+  it("enables the mobile keyboard only after tapping the EAN input", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <OrderSelectStep
+        onSelect={vi.fn()}
+        onThisWeek={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "EAN scannen" }));
+    const input = screen.getByPlaceholderText("Scan Veloyd-label…") as HTMLInputElement;
+
+    expect(input.inputMode).toBe("none");
+    await user.click(input);
+    expect(input.inputMode).toBe("text");
+    expect(document.activeElement).toBe(input);
   });
 
   it("opens an order with the camera from the EAN label panel", async () => {

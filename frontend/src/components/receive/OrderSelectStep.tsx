@@ -24,6 +24,7 @@ export function OrderSelectStep({
   const [week, setWeek] = useState(() => getISOWeek(new Date()));
   const [label, setLabel] = useState("");
   const [labelEntryOpen, setLabelEntryOpen] = useState(false);
+  const [manualLabelEntry, setManualLabelEntry] = useState(false);
   const [labelBusy, setLabelBusy] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -101,14 +102,33 @@ export function OrderSelectStep({
   }
 
   function openLabelEntry() {
+    setManualLabelEntry(false);
     setLabelEntryOpen(true);
   }
 
   function closeLabelEntry() {
     setLabelEntryOpen(false);
+    setManualLabelEntry(false);
     setCameraOpen(false);
     setLabel("");
     setLabelError(null);
+  }
+
+  function enableManualLabelEntry() {
+    if (manualLabelEntry) return;
+    const input = labelInputRef.current;
+    setManualLabelEntry(true);
+    if (!input) return;
+    // The field is already focused for a hardware scanner. Re-focus it during
+    // this explicit user gesture so mobile Safari opens the manual keyboard.
+    input.inputMode = "text";
+    input.blur();
+    input.focus({ preventScroll: true });
+  }
+
+  function openLabelCamera() {
+    setManualLabelEntry(false);
+    setCameraOpen(true);
   }
 
   return (
@@ -224,6 +244,8 @@ export function OrderSelectStep({
                     ref={labelInputRef}
                     value={label}
                     onChange={(e) => setLabel(e.target.value)}
+                    onClick={enableManualLabelEntry}
+                    inputMode={manualLabelEntry ? "text" : "none"}
                     autoComplete="off"
                     disabled={labelBusy}
                     placeholder={labelBusy ? "Order zoeken…" : "Scan Veloyd-label…"}
@@ -241,7 +263,7 @@ export function OrderSelectStep({
                     aria-label="Scan Veloyd-label met camera"
                     className="absolute right-1 top-1 h-10 gap-2 px-3 shadow-sm"
                     disabled={labelBusy}
-                    onClick={() => setCameraOpen(true)}
+                    onClick={openLabelCamera}
                   >
                     <Camera className="h-5 w-5" aria-hidden="true" />
                     Camera
