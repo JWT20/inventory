@@ -167,15 +167,20 @@ async def lifespan(app: FastAPI):
     shutdown_langfuse()
 
 
-app = FastAPI(
-    title="Warehouse Receiving API",
-    description="Vision-based product identification for warehouse receiving and labeling",
-    version="2.0.0",
-    lifespan=lifespan,
-    docs_url=None,
-    redoc_url=None,
-    openapi_url=None,
-)
+def _create_fastapi_app() -> FastAPI:
+    is_prod = bool(settings.domain)
+    return FastAPI(
+        title="Warehouse Receiving API",
+        description="Vision-based product identification for warehouse receiving and labeling",
+        version="2.0.0",
+        lifespan=lifespan,
+        docs_url=None if is_prod else "/docs",
+        redoc_url=None if is_prod else "/redoc",
+        openapi_url=None if is_prod else "/openapi.json",
+    )
+
+
+app = _create_fastapi_app()
 
 cors_origins = ["http://localhost:5173"]  # Vite dev server
 if settings.domain:
