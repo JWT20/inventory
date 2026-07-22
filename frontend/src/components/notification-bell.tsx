@@ -1,13 +1,43 @@
 import { useEffect, useState } from "react";
 import { Bell, BellOff } from "lucide-react";
+import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
-type BellState = "hidden" | "loading" | "off" | "on";
+type BellState = "loading" | "off" | "on";
+type PushAvailability =
+  | "checking"
+  | "available"
+  | "install_required"
+  | "unsupported"
+  | "unconfigured"
+  | "unavailable";
 
 interface PushConfig {
   enabled: boolean;
   public_key: string;
+}
+
+function isIosDevice(): boolean {
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
+}
+
+function isStandaloneApp(): boolean {
+  const iosNavigator = navigator as Navigator & { standalone?: boolean };
+  return (
+    window.matchMedia?.("(display-mode: standalone)").matches === true ||
+    iosNavigator.standalone === true
+  );
+}
+
+function permissionRecoveryMessage(): string {
+  if (isIosDevice() && isStandaloneApp()) {
+    return "Meldingen zijn geblokkeerd. Open Instellingen > Meldingen > Magazijn en schakel meldingen in.";
+  }
+  return "Meldingen zijn geblokkeerd. Sta ze toe via de instellingen van deze website in je browser.";
 }
 
 function applicationServerKey(value: string): ArrayBuffer {
@@ -36,6 +66,8 @@ export function NotificationBell() {
   const { user } = useAuth();
   const [state, setState] = useState<BellState>("loading");
   const [config, setConfig] = useState<PushConfig | null>(null);
+  const [availability, setAvailability] =
+    useState<PushAvailability>("checking");
 
   const eligible = Boolean(
     user &&
@@ -47,19 +79,34 @@ export function NotificationBell() {
     let cancelled = false;
 
     async function initialize() {
+      if (!eligible) return;
+
+      if (isIosDevice() && !isStandaloneApp()) {
+        if (!cancelled) {
+          setAvailability("install_required");
+          setState("off");
+        }
+        return;
+      }
+
       if (
-        !eligible ||
         !("serviceWorker" in navigator) ||
         !("PushManager" in window) ||
         !("Notification" in window)
       ) {
-        if (!cancelled) setState("hidden");
+        if (!cancelled) {
+          setAvailability("unsupported");
+          setState("off");
+        }
         return;
       }
       try {
         const nextConfig = (await api.pushConfig()) as PushConfig;
         if (!nextConfig.enabled || !nextConfig.public_key) {
-          if (!cancelled) setState("hidden");
+          if (!cancelled) {
+            setAvailability("unconfigured");
+            setState("off");
+          }
           return;
         }
         const registration = await navigator.serviceWorker.register("/sw.js");
@@ -70,12 +117,16 @@ export function NotificationBell() {
         }
         if (!cancelled) {
           setConfig(nextConfig);
+          setAvailability("available");
           setState(
             subscription && Notification.permission === "granted" ? "on" : "off",
           );
         }
       } catch {
-        if (!cancelled) setState("hidden");
+        if (!cancelled) {
+          setAvailability("unavailable");
+          setState("off");
+        }
       }
     }
 
@@ -86,7 +137,24 @@ export function NotificationBell() {
   }, [eligible, user?.id]);
 
   async function toggle() {
-    if (!config || state === "loading") return;
+    if (state === "loading") return;
+    if (availability === "install_required") {
+      toast.info("Voeg de app toe aan je beginscherm om pushmeldingen te ontvangen.");
+      return;
+    }
+    if (availability === "unsupported") {
+      toast.error("Pushmeldingen worden niet ondersteund op dit apparaat of in deze browser.");
+      return;
+    }
+    if (availability === "unconfigured") {
+      toast.info("Pushmeldingen zijn nog niet geconfigureerd.");
+      return;
+    }
+    if (availability === "unavailable" || !config) {
+      toast.error("Pushmeldingen kunnen niet worden geladen. Ververs de app en probeer opnieuw.");
+      return;
+    }
+
     setState("loading");
     try {
       const registration = await navigator.serviceWorker.ready;
@@ -95,12 +163,19 @@ export function NotificationBell() {
         await api.pushUnsubscribe(existing.endpoint);
         await existing.unsubscribe();
         setState("off");
+        toast.success("Pushmeldingen uitgeschakeld.");
         return;
       }
 
+      if (Notification.permission === "denied") {
+        setState("off");
+        toast.error(permissionRecoveryMessage());
+        return;
+      }
       const permission = await Notification.requestPermission();
       if (permission !== "granted") {
         setState("off");
+        toast.error(permissionRecoveryMessage());
         return;
       }
       const subscription = await registration.pushManager.subscribe({
@@ -110,18 +185,24 @@ export function NotificationBell() {
       try {
         await persistSubscription(subscription);
         setState("on");
+        toast.success("Pushmeldingen ingeschakeld.");
       } catch (error) {
         await subscription.unsubscribe();
         throw error;
       }
     } catch {
       setState("off");
+      toast.error("Pushmeldingen inschakelen is mislukt. Probeer het opnieuw.");
     }
   }
 
-  if (state === "hidden") return null;
+  if (!eligible) return null;
   const enabled = state === "on";
-  const label = enabled ? "Pushmeldingen uitschakelen" : "Pushmeldingen inschakelen";
+  const label = state === "loading"
+    ? "Pushmeldingen controleren"
+    : enabled
+      ? "Pushmeldingen uitschakelen"
+      : "Pushmeldingen inschakelen";
 
   return (
     <button
