@@ -1,5 +1,6 @@
 """Web Push subscription, routing, deduplication, and outbox tests."""
 
+import datetime
 from types import SimpleNamespace
 
 from pywebpush import WebPushException
@@ -298,3 +299,95 @@ def test_dispatcher_removes_expired_browser_subscription(db, owner_user, monkeyp
     db.expire_all()
     assert db.query(PushSubscription).count() == 0
     assert db.query(PushDelivery).count() == 0
+
+
+def test_transient_failure_uses_backoff_instead_of_immediate_give_up(
+    db, owner_user, monkeypatch
+):
+    _enable_push(monkeypatch)
+    subscription = _subscription(db, owner_user, "temporary-failure")
+    delivery = PushDelivery(
+        subscription_id=subscription.id,
+        event_key="test:temporary-failure",
+        title="Tijdelijk niet bereikbaar",
+        body="Later opnieuw proberen",
+        url="/",
+    )
+    db.add(delivery)
+    db.commit()
+    calls = []
+    monkeypatch.setattr(push_notifications, "SessionLocal", TestingSessionLocal)
+
+    def unavailable(**kwargs):
+        calls.append(kwargs)
+        raise WebPushException(
+            "Provider unavailable", response=SimpleNamespace(status_code=503)
+        )
+
+    monkeypatch.setattr(push_notifications, "webpush", unavailable)
+
+    assert push_notifications.dispatch_pending_push_deliveries() == 0
+    db.expire_all()
+    retried = db.get(PushDelivery, delivery.id)
+    assert retried.attempts == 1
+    assert retried.failed_at is None
+    assert retried.next_attempt_at is not None
+    assert retried.next_attempt_at > datetime.datetime.now(datetime.UTC).replace(
+        tzinfo=None
+    )
+
+    # A second dispatcher tick five seconds later must not burn another attempt;
+    # the first retry is scheduled 30 seconds after the failure.
+    assert push_notifications.dispatch_pending_push_deliveries() == 0
+    assert len(calls) == 1
+
+
+def test_prune_removes_only_old_terminal_deliveries(db, owner_user, monkeypatch):
+    subscription = _subscription(db, owner_user, "prune")
+    now = datetime.datetime(2026, 7, 22, 12, 0, 0)
+    old = now - datetime.timedelta(days=8)
+    recent = now - datetime.timedelta(days=1)
+    db.add_all(
+        [
+            PushDelivery(
+                subscription_id=subscription.id,
+                event_key="test:old-sent",
+                title="Oud",
+                body="Verzonden",
+                url="/",
+                sent_at=old,
+            ),
+            PushDelivery(
+                subscription_id=subscription.id,
+                event_key="test:old-failed",
+                title="Oud",
+                body="Mislukt",
+                url="/",
+                failed_at=old,
+            ),
+            PushDelivery(
+                subscription_id=subscription.id,
+                event_key="test:old-pending",
+                title="Oud",
+                body="Nog in behandeling",
+                url="/",
+                created_at=old,
+            ),
+            PushDelivery(
+                subscription_id=subscription.id,
+                event_key="test:recent-sent",
+                title="Recent",
+                body="Verzonden",
+                url="/",
+                sent_at=recent,
+            ),
+        ]
+    )
+    db.commit()
+    monkeypatch.setattr(push_notifications, "SessionLocal", TestingSessionLocal)
+
+    assert push_notifications.prune_push_deliveries(now) == 2
+
+    db.expire_all()
+    remaining = {row.event_key for row in db.query(PushDelivery).all()}
+    assert remaining == {"test:old-pending", "test:recent-sent"}

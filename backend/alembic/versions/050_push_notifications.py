@@ -52,6 +52,7 @@ def upgrade() -> None:
         sa.Column(
             "created_at", sa.DateTime(), server_default=sa.func.now(), nullable=False
         ),
+        sa.Column("next_attempt_at", sa.DateTime(), nullable=True),
         sa.Column("sent_at", sa.DateTime(), nullable=True),
         sa.Column("failed_at", sa.DateTime(), nullable=True),
         sa.ForeignKeyConstraint(
@@ -67,7 +68,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_push_deliveries_pending",
         "push_deliveries",
-        ["sent_at", "failed_at", "created_at"],
+        ["sent_at", "failed_at", "next_attempt_at", "created_at"],
     )
 
 

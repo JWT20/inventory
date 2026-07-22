@@ -150,7 +150,13 @@ class PushDelivery(Base):
         UniqueConstraint(
             "event_key", "subscription_id", name="uq_push_delivery_event_subscription"
         ),
-        Index("ix_push_deliveries_pending", "sent_at", "failed_at", "created_at"),
+        Index(
+            "ix_push_deliveries_pending",
+            "sent_at",
+            "failed_at",
+            "next_attempt_at",
+            "created_at",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -165,6 +171,9 @@ class PushDelivery(Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
+    )
+    next_attempt_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime, nullable=True
     )
     sent_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
     failed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
