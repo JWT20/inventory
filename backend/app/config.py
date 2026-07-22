@@ -102,6 +102,11 @@ class Settings(BaseSettings):
     veloyd_api_key: str = ""
     veloyd_api_base_url: str = "https://app.veloyd.nl/api"
 
+    # Read-only stock feed for the wine advice app. The organization is bound
+    # server-side so callers can never select a different merchant.
+    advice_stock_api_key: str = ""
+    advice_stock_organization_id: int | None = None
+
     @property
     def push_enabled(self) -> bool:
         return bool(
@@ -137,6 +142,13 @@ class Settings(BaseSettings):
                 "ADMIN_PASSWORD is not set. Choose a strong password and set it as an environment variable."
             )
         return v
+
+    @field_validator("advice_stock_organization_id", mode="before")
+    @classmethod
+    def _empty_advice_stock_organization_id(cls, v: object) -> object:
+        # Allows ADVICE_STOCK_ORGANIZATION_ID= in example/local env files while
+        # retaining integer validation as soon as a value is configured.
+        return None if v == "" else v
 
     class Config:
         env_file = ".env"

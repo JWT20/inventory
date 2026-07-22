@@ -83,6 +83,12 @@ require_envfile_safe DOMAIN         "$DOMAIN"
 require_envfile_safe VAPID_PUBLIC_KEY "${VAPID_PUBLIC_KEY:-}"
 require_envfile_safe VAPID_PRIVATE_KEY "${VAPID_PRIVATE_KEY:-}"
 require_envfile_safe VAPID_SUBJECT "${VAPID_SUBJECT:-https://${DOMAIN}}"
+require_envfile_safe ADVICE_STOCK_API_KEY "${ADVICE_STOCK_API_KEY:-}"
+if [[ -n "${ADVICE_STOCK_ORGANIZATION_ID:-}" \
+  && ! "${ADVICE_STOCK_ORGANIZATION_ID}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ADVICE_STOCK_ORGANIZATION_ID must be a positive integer." >&2
+  exit 1
+fi
 
 tmp_file="$(mktemp)"
 trap 'rm -f "$tmp_file"' EXIT
@@ -146,6 +152,10 @@ CHANNEL_CREDENTIAL_ENCRYPTION_KEY=${CHANNEL_CREDENTIAL_ENCRYPTION_KEY}
 # Veloyd label verification
 VELOYD_API_KEY=${VELOYD_API_KEY:-}
 VELOYD_API_BASE_URL=${VELOYD_API_BASE_URL:-https://app.veloyd.nl/api}
+
+# Read-only wine advice stock integration
+ADVICE_STOCK_API_KEY=${ADVICE_STOCK_API_KEY:-}
+ADVICE_STOCK_ORGANIZATION_ID=${ADVICE_STOCK_ORGANIZATION_ID:-}
 ENVEOF
 
 install -d -m 0755 "$APP_DIR"
