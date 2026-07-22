@@ -44,6 +44,32 @@ class LogoutRequest(BaseModel):
     refresh_token: str
 
 
+class PushConfigResponse(BaseModel):
+    enabled: bool
+    public_key: str = ""
+
+
+class PushSubscriptionKeys(BaseModel):
+    p256dh: str = Field(..., min_length=1)
+    auth: str = Field(..., min_length=1)
+
+
+class PushSubscriptionUpsert(BaseModel):
+    endpoint: str = Field(..., min_length=1, max_length=4096)
+    keys: PushSubscriptionKeys
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint(cls, value: str) -> str:
+        if not value.startswith("https://"):
+            raise ValueError("Push-endpoint moet HTTPS gebruiken")
+        return value
+
+
+class PushSubscriptionDelete(BaseModel):
+    endpoint: str = Field(..., min_length=1, max_length=4096)
+
+
 def _validate_password(password: str) -> str:
     from app.auth import validate_password_strength
     errors = validate_password_strength(password)

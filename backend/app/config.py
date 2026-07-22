@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
 
+    # Standards-based Web Push. Empty keys disable the feature without affecting
+    # the rest of the app. Generate one stable key pair per deployment.
+    vapid_public_key: str = ""
+    vapid_private_key: str = ""
+    vapid_subject: str = ""
+    push_dispatch_interval_seconds: int = 5
+
     # Domain (used for CORS)
     domain: str = ""
 
@@ -94,6 +101,15 @@ class Settings(BaseSettings):
     # to resolve the barcode and verify its reference before shipping.
     veloyd_api_key: str = ""
     veloyd_api_base_url: str = "https://app.veloyd.nl/api"
+
+    @property
+    def push_enabled(self) -> bool:
+        return bool(
+            self.vapid_public_key
+            and self.vapid_private_key
+            and self.vapid_subject
+            and self.push_dispatch_interval_seconds > 0
+        )
 
     @field_validator("database_url")
     @classmethod

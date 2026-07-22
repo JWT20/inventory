@@ -80,6 +80,9 @@ require_channel_credential_key "$CHANNEL_CREDENTIAL_ENCRYPTION_KEY"
 require_envfile_safe ADMIN_PASSWORD "$ADMIN_PASSWORD"
 require_envfile_safe GEMINI_API_KEY "$GEMINI_API_KEY"
 require_envfile_safe DOMAIN         "$DOMAIN"
+require_envfile_safe VAPID_PUBLIC_KEY "${VAPID_PUBLIC_KEY:-}"
+require_envfile_safe VAPID_PRIVATE_KEY "${VAPID_PRIVATE_KEY:-}"
+require_envfile_safe VAPID_SUBJECT "${VAPID_SUBJECT:-https://${DOMAIN}}"
 
 tmp_file="$(mktemp)"
 trap 'rm -f "$tmp_file"' EXIT
@@ -106,6 +109,12 @@ UPLOAD_DIR=${UPLOAD_DIR:-/app/uploads}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
 REFRESH_TOKEN_EXPIRE_DAYS=${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+
+# Web Push (empty key pair disables the bell and dispatcher)
+VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
+VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
+VAPID_SUBJECT=${VAPID_SUBJECT:-https://${DOMAIN}}
+PUSH_DISPATCH_INTERVAL_SECONDS=${PUSH_DISPATCH_INTERVAL_SECONDS:-5}
 
 # Storage backend ("local" or "s3")
 STORAGE_BACKEND=${STORAGE_BACKEND:-local}

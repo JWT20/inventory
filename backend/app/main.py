@@ -23,8 +23,9 @@ from app.models import User
 from app.events import init_producer, shutdown_producer
 from app.services.autosync import autosync_loop
 from app.services.langfuse_client import get_langfuse, shutdown_langfuse
+from app.services.push_notifications import push_dispatch_loop
 from app.services.storage import storage, LocalStorage
-from app.routers import auth, channels, customers, inventory, locations, orders, picking, product_attributes, receiving, skus, suppliers
+from app.routers import auth, channels, customers, inventory, locations, orders, picking, product_attributes, push, receiving, skus, suppliers
 from app.routers.skus import sweep_stale_reference_images
 
 logging.basicConfig(level=logging.INFO)
@@ -141,6 +142,12 @@ async def lifespan(app: FastAPI):
             autosync_loop(settings.shopify_autosync_interval_seconds)
         )
 
+    push_task = None
+    if settings.push_enabled:
+        push_task = asyncio.create_task(
+            push_dispatch_loop(settings.push_dispatch_interval_seconds)
+        )
+
     yield
 
     # --- shutdown ---
@@ -148,6 +155,12 @@ async def lifespan(app: FastAPI):
         autosync_task.cancel()
         try:
             await autosync_task
+        except asyncio.CancelledError:
+            pass
+    if push_task is not None:
+        push_task.cancel()
+        try:
+            await push_task
         except asyncio.CancelledError:
             pass
     shutdown_producer()
@@ -184,6 +197,7 @@ app.include_router(inventory.router, prefix="/api")
 app.include_router(product_attributes.router, prefix="/api")
 app.include_router(suppliers.router, prefix="/api")
 app.include_router(locations.router, prefix="/api")
+app.include_router(push.router, prefix="/api")
 
 
 @app.get("/api/health")

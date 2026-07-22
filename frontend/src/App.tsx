@@ -13,6 +13,7 @@ import { InboundPage } from "@/components/inbound";
 import { LocationsPage } from "@/components/locations";
 import { WeeklySummaryPage } from "@/components/weekly-summary";
 import { MonthlyBoxesPage } from "@/components/monthly-boxes";
+import { NotificationBell } from "@/components/notification-bell";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { LogOut } from "lucide-react";
 
@@ -29,6 +30,7 @@ function Main() {
   // clears the query (inactive Radix tabs aren't mounted).
   const shopifyReturn =
     new URLSearchParams(window.location.search).get("shopify") === "connected";
+  const requestedPage = new URLSearchParams(window.location.search).get("page") as Page | null;
   const defaultPage: Page = user?.is_platform_admin
     ? shopifyReturn
       ? "channels"
@@ -113,9 +115,12 @@ function Main() {
   ];
 
   const visibleTabs = tabs.filter((t) => t.show);
+  const initialPage = requestedPage && visibleTabs.some((tab) => tab.id === requestedPage)
+    ? requestedPage
+    : defaultPage;
 
   return (
-    <Tabs defaultValue={defaultPage} className="min-h-screen flex flex-col">
+    <Tabs defaultValue={initialPage} className="min-h-screen flex flex-col">
       <header className="sticky top-0 z-50 bg-background border-b border-border px-4 pt-3 pb-0">
         <div className="flex justify-between items-center mb-2 h-12">
           {user.role === "customer" && user.organization_slug === JURJEN_ORG_SLUG ? (
@@ -123,13 +128,16 @@ function Main() {
           ) : (
             <h1 className="text-lg font-bold">{user.custom_label || "Magazijn"}</h1>
           )}
-          <button
-            onClick={logout}
-            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <span>{user.username}</span>
-            <LogOut className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            <NotificationBell />
+            <button
+              onClick={logout}
+              className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <span>{user.username}</span>
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
         </div>
         <TabsList>
           {visibleTabs.map((t) => (

@@ -53,6 +53,10 @@ from app.schemas import (
 )
 from app.services.booking import recompute_order_status
 from app.services.pricing import calc_effective_price
+from app.services.push_notifications import (
+    enqueue_approved_order_ready,
+    enqueue_customer_order_created,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -445,6 +449,14 @@ def create_order(
 
     # Auto-populate customer_skus catalog
     _upsert_customer_skus(db, customer_sku_pairs)
+
+    customer_name = next(iter(customer_cache.values())).name
+    enqueue_customer_order_created(
+        db,
+        order,
+        creator=user,
+        customer_name=customer_name,
+    )
 
     db.commit()
     db.refresh(order)
@@ -1308,6 +1320,8 @@ def approve_order(
     if order.status not in ("pending_approval", "pending_images"):
         raise HTTPException(400, f"Order kan niet goedgekeurd worden (status: {order.status})")
 
+    previous_status = order.status
+
     week = body.week if body else None
     if week:
         _parse_iso_week(week)  # validates the format, raises 400 otherwise
@@ -1346,6 +1360,9 @@ def approve_order(
         order.status = "active" if all_have_images else "pending_images"
     else:
         order.status = "active"
+
+    if previous_status != "active" and order.status == "active":
+        enqueue_approved_order_ready(db, order)
 
     db.commit()
     db.refresh(order)
