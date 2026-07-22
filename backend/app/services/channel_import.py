@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from app.models import ChannelConnection, ChannelSyncLog, Order, OrderLine, SKU
+from app.services.push_notifications import enqueue_ean_order_ready
 from app.services.stock import adjust_reservation, apply_stock_movement
 
 
@@ -578,6 +579,13 @@ def import_channel_order(
     log.synced_at = datetime.datetime.utcnow()
     connection.last_synced_at = datetime.datetime.utcnow()
     db.flush()
+
+    # Notify only for a genuinely new live order, or when a new order that was
+    # blocked by an unknown EAN becomes pickable. Observe → live cutovers may
+    # promote many historical rows at once and deliberately do not fan out a
+    # notification storm.
+    if final_status == "active" and (created or old_status == "pending_product"):
+        enqueue_ean_order_ready(db, db_order)
 
     return ImportResult(
         order_id=db_order.id,

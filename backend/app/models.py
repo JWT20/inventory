@@ -102,6 +102,9 @@ class User(Base):
 
     organization: Mapped["Organization | None"] = relationship(back_populates="users")
     customer: Mapped["Customer | None"] = relationship()
+    push_subscriptions: Mapped[list["PushSubscription"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
     @property
     def is_admin(self) -> bool:
@@ -110,6 +113,74 @@ class User(Base):
     @property
     def can_manage_products(self) -> bool:
         return self.is_platform_admin or self.role in ("owner", "member")
+
+
+class PushSubscription(Base):
+    """One browser/device that opted in to Web Push for a user."""
+
+    __tablename__ = "push_subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Browser push endpoints are opaque capability URLs and can be fairly long.
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    p256dh: Mapped[str] = mapped_column(Text, nullable=False)
+    auth: Mapped[str] = mapped_column(Text, nullable=False)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    user: Mapped["User"] = relationship(back_populates="push_subscriptions")
+    deliveries: Mapped[list["PushDelivery"]] = relationship(
+        back_populates="subscription", cascade="all, delete-orphan"
+    )
+
+
+class PushDelivery(Base):
+    """Transactional outbox row for one event sent to one subscription."""
+
+    __tablename__ = "push_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "event_key", "subscription_id", name="uq_push_delivery_event_subscription"
+        ),
+        Index(
+            "ix_push_deliveries_pending",
+            "sent_at",
+            "failed_at",
+            "next_attempt_at",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(
+        ForeignKey("push_subscriptions.id", ondelete="CASCADE"), nullable=False
+    )
+    event_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    body: Mapped[str] = mapped_column(String(500), nullable=False)
+    url: Mapped[str] = mapped_column(String(500), nullable=False, default="/")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    next_attempt_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    sent_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    failed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    subscription: Mapped["PushSubscription"] = relationship(
+        back_populates="deliveries"
+    )
 
 
 class Supplier(Base):

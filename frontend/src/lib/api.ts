@@ -170,6 +170,15 @@ export const api = {
   logout: (refreshToken: string) =>
     json("/auth/logout", "POST", { refresh_token: refreshToken }),
 
+  // Web Push (one subscription per browser/device).
+  pushConfig: () => request("/push/config"),
+  pushSubscribe: (data: {
+    endpoint: string;
+    keys: { p256dh: string; auth: string };
+  }) => json("/push/subscriptions", "POST", data),
+  pushUnsubscribe: (endpoint: string) =>
+    json("/push/subscriptions", "DELETE", { endpoint }),
+
   // Organizations
   getModuleCatalog: () => request("/auth/modules/catalog"),
   listOrganizations: () => request("/auth/organizations"),
