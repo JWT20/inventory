@@ -58,6 +58,7 @@ def advice_stock(
         .filter(
             SKU.organization_id == organization_id,
             SKU.is_bottle.is_(True),
+            SKU.active.is_(True),
         )
         .order_by(SKU.sku_code)
         .all()

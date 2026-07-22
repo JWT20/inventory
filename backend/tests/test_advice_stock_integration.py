@@ -73,6 +73,14 @@ def test_stock_endpoint_returns_only_configured_organization_bottles(
         is_bottle=False,
         product_type="vision",
     )
+    inactive_bottle = SKU(
+        sku_code="WIJN-004",
+        name="Uitgefaseerde wijn",
+        organization_id=sample_org.id,
+        is_bottle=True,
+        active=False,
+        product_type="vision",
+    )
     other_bottle = SKU(
         sku_code="ANDER-001",
         name="Wijn van andere organisatie",
@@ -80,7 +88,9 @@ def test_stock_endpoint_returns_only_configured_organization_bottles(
         is_bottle=True,
         product_type="vision",
     )
-    db.add_all([available_bottle, zero_bottle, reserved_bottle, box, other_bottle])
+    db.add_all(
+        [available_bottle, zero_bottle, reserved_bottle, box, inactive_bottle, other_bottle]
+    )
     db.flush()
     db.add_all(
         [
@@ -89,6 +99,12 @@ def test_stock_endpoint_returns_only_configured_organization_bottles(
                 organization_id=sample_org.id,
                 quantity_on_hand=12,
                 quantity_reserved=4,
+            ),
+            InventoryBalance(
+                sku_id=inactive_bottle.id,
+                organization_id=sample_org.id,
+                quantity_on_hand=7,
+                quantity_reserved=0,
             ),
             InventoryBalance(
                 sku_id=reserved_bottle.id,
