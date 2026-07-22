@@ -172,6 +172,9 @@ app = FastAPI(
     description="Vision-based product identification for warehouse receiving and labeling",
     version="2.0.0",
     lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 cors_origins = ["http://localhost:5173"]  # Vite dev server
