@@ -1,6 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#09090b"/>
-  <path d="M147 352h218c-31-29-38-67-38-116 0-45-28-84-71-84s-71 39-71 84c0 49-7 87-38 116Z" fill="none" stroke="#f4f4f5" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M219 392c8 18 20 27 37 27s29-9 37-27" fill="none" stroke="#f4f4f5" stroke-width="28" stroke-linecap="round"/>
-  <path d="M256 116v36" fill="none" stroke="#f4f4f5" stroke-width="28" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Wijndoos met wijnfles</title>
+  <rect width="512" height="512" rx="112" fill="#6f1d36"/>
+  <path d="M111 260 256 198l145 62-145 67z" fill="#d7a657"/>
+  <path d="m111 260 145 67v117l-145-70z" fill="#bc8138"/>
+  <path d="m401 260-145 67v117l145-70z" fill="#9a632f"/>
+  <path d="m111 260 68-91 77 29-72 97z" fill="#edc477"/>
+  <path d="m401 260-68-91-77 29 72 97z" fill="#e1b468"/>
+  <path d="M221 258v-17c0-17 8-33 22-43l9-7v-78h47v78l9 7c14 10 22 26 22 43v17l-54 25z" fill="#173e32"/>
+  <path d="M252 113h47v35h-47z" fill="#efe1bd"/>
+  <path d="M239 222h74v34l-37 17-37-17z" fill="#f4e6bf"/>
+  <path d="M256 327v117" fill="none" stroke="#d7a657" stroke-width="8" opacity=".55"/>
 </svg>
