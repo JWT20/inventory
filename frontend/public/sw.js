@@ -8,8 +8,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(message.title || "Nieuwe melding", {
       body: message.body || "Er staat een nieuwe order klaar.",
-      icon: "/app-icon-monochrome.svg",
-      badge: "/app-icon-monochrome.svg",
+      icon: "/app-icon-monochrome-v2.svg",
+      badge: "/app-icon-monochrome-v2.svg",
       tag: message.tag,
       data: { url: message.url || "/" },
     }),
