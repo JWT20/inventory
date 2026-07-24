@@ -5,8 +5,8 @@
   "start_url": "/",
   "display": "standalone",
   "description": "Magazijnapp voor wijnvoorraad en orderpicking",
-  "background_color": "#171717",
-  "theme_color": "#6f1d36",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
   "lang": "nl",
   "icons": [
     {
