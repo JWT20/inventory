@@ -1,17 +1,30 @@
 {
   "id": "/",
-  "name": "WijnPick",
+  "name": "WijnPick Magazijn",
   "short_name": "WijnPick",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#09090b",
-  "theme_color": "#09090b",
+  "description": "Magazijnapp voor wijnvoorraad en orderpicking",
+  "background_color": "#171717",
+  "theme_color": "#6f1d36",
   "lang": "nl",
   "icons": [
     {
       "src": "/app-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/wijnpick-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/wijnpick-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ]
