@@ -14,10 +14,10 @@ export function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (ord
     friday: 4,
   };
   days.sort((a, b) => (dayOrderMap[a] ?? 9) - (dayOrderMap[b] ?? 9));
-  const incoming = new Date(o.ordered_at || o.created_at).toLocaleDateString("nl-NL", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
+  const incoming = new Date(o.ordered_at || o.created_at).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
   });
 
   return (

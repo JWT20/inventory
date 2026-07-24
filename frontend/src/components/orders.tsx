@@ -218,10 +218,10 @@ const orderIncomingDate = (order: Order): string =>
   order.ordered_at || order.created_at;
 
 const formatOrderIncomingDate = (order: Order): string =>
-  new Date(orderIncomingDate(order)).toLocaleDateString("nl-NL", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
+  new Date(orderIncomingDate(order)).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
   });
 
 interface CustomerSkuLine {
