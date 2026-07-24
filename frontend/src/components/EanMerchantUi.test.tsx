@@ -97,7 +97,7 @@ describe("EAN merchant UI", () => {
 
     render(<OrderCard order={order} onSelect={() => {}} />);
 
-    expect(screen.getByText(/Binnengekomen di 21 jul/i)).toBeTruthy();
+    expect(screen.getByText("21/07/2026")).toBeTruthy();
     expect(screen.getByText(/2\/4 items geboekt/i)).toBeTruthy();
     expect(screen.queryByText("Do")).toBeNull();
   });
