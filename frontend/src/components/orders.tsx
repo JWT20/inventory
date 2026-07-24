@@ -620,7 +620,7 @@ export function OrdersPage() {
         <span className="ml-auto flex gap-1">
           {o.pick_method === "barcode" ? (
             <Badge variant="secondary" className="text-xs px-1.5 py-0">
-              Binnengekomen {formatOrderIncomingDate(o)}
+              {formatOrderIncomingDate(o)}
             </Badge>
           ) : (
             getOrderDeliveryDays(o).map((day) => (
@@ -1751,7 +1751,7 @@ function OrderDetailDialog({
           </p>
           {order.pick_method === "barcode" && (
             <p className="text-sm text-muted-foreground">
-              Binnengekomen {formatOrderIncomingDate(order)}
+              {formatOrderIncomingDate(order)}
             </p>
           )}
           {!isCustomer && (

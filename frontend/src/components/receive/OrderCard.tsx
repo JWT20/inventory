@@ -41,7 +41,7 @@ export function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (ord
           </Badge>
           {o.pick_method === "barcode" ? (
             <Badge variant="secondary" className="text-xs">
-              Binnengekomen {incoming}
+              {incoming}
             </Badge>
           ) : (
             days.map((d) => (
