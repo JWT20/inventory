@@ -396,6 +396,17 @@ def test_sync_bol_live_reconciles_cancellation_and_reservation(db):
     assert balance.quantity_reserved == 3
     assert summary.reserved_sku_ids == {sku.id}
 
+    payload["orderItems"][0]["cancellationRequest"] = True
+    requested = sync_bol(db, connection, _FakeBolClient([payload]))
+    db.commit()
+    db.refresh(order)
+    db.refresh(balance)
+
+    assert order.status == "active"
+    assert order.channel_fulfillment_status == "cancellation_requested"
+    assert balance.quantity_reserved == 3
+    assert requested.updated == 1
+
     payload["orderItems"][0]["quantityCancelled"] = 3
     cancelled = sync_bol(db, connection, _FakeBolClient([payload]))
     db.commit()

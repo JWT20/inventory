@@ -26,7 +26,11 @@ export function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (ord
       onClick={() => onSelect(o)}
     >
       <div className="flex justify-between items-center mb-1">
-        <span className="font-semibold">{o.reference}</span>
+        <span
+          className={`font-semibold${o.cancellation_requested ? " text-red-600" : ""}`}
+        >
+          {o.reference}
+        </span>
         <div className="flex gap-1 items-center">
           {o.status === "completed" && (
             <Badge variant="active" className="text-xs">

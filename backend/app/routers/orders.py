@@ -221,6 +221,10 @@ def _order_to_response(
         reference=order.reference,
         status=order.status,
         channel=order.channel,
+        cancellation_requested=(
+            order.channel == "bol"
+            and order.channel_fulfillment_status == "cancellation_requested"
+        ),
         pick_method=pick_method,
         remarks=order.remarks or "",
         delivery_week=order.delivery_week,

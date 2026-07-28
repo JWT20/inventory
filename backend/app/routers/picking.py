@@ -76,11 +76,20 @@ def _is_barcode_order(order: Order) -> bool:
     )
 
 
+def _assert_no_bol_cancellation_request(order: Order) -> None:
+    if (
+        order.channel == "bol"
+        and order.channel_fulfillment_status == "cancellation_requested"
+    ):
+        raise HTTPException(409, "Order heeft een annuleringsverzoek in bol")
+
+
 def _assert_openable_label_order(order: Order, user: User) -> None:
     if not _can_access_order(user, order):
         raise HTTPException(403, "Geen toegang tot deze organisatie")
     if order.status not in ("active", "completed"):
         raise HTTPException(409, f"Order kan niet worden geopend (status: {order.status})")
+    _assert_no_bol_cancellation_request(order)
     if order.channel == "manual" or not order.channel_reference:
         raise HTTPException(409, "Label hoort niet bij een kanaalorder")
     if not _is_barcode_order(order):
@@ -242,6 +251,7 @@ def scan_ean(
         raise HTTPException(403, "Geen toegang tot deze organisatie")
     if order.status != "active":
         raise HTTPException(400, f"Order is niet actief (status: {order.status})")
+    _assert_no_bol_cancellation_request(order)
     assert_order_module(order, "barcode_picking", user)
 
     ean = body.ean.strip()
@@ -425,6 +435,7 @@ def scan_location(
         raise HTTPException(403, "Geen toegang tot deze organisatie")
     if order.status != "active":
         raise HTTPException(400, f"Order is niet actief (status: {order.status})")
+    _assert_no_bol_cancellation_request(order)
     assert_order_module(order, "barcode_picking", user)
 
     code = body.location_code.strip()
@@ -501,6 +512,7 @@ def scan_label(
     # reopen the order between the check and the ``shipped`` write, shipping an
     # order that is no longer fully picked.
     db.refresh(order, with_for_update=True)
+    _assert_no_bol_cancellation_request(order)
 
     if order.status == "shipped":
         raise HTTPException(409, "Order is al verzonden")

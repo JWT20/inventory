@@ -444,6 +444,7 @@ def to_normalized(
     shipped_total = 0
     current_total = 0
     cancelled_total = 0
+    cancellation_requested = False
     latest_change: str | None = None
     for item in payload.get("orderItems") or []:
         product = item.get("product") or {}
@@ -455,6 +456,9 @@ def to_normalized(
         shipped_total += shipped
         cancelled_total += cancelled
         current_total += current
+        cancellation_requested = cancellation_requested or bool(
+            item.get("cancellationRequest")
+        )
         changed = item.get("latestChangedDateTime")
         if changed and (latest_change is None or changed > latest_change):
             latest_change = changed
@@ -475,7 +479,9 @@ def to_normalized(
     else:
         financial_status = "paid"
         cancelled_at = None
-        if current_total > 0 and shipped_total >= current_total:
+        if cancellation_requested:
+            fulfillment_status = "cancellation_requested"
+        elif current_total > 0 and shipped_total >= current_total:
             fulfillment_status = "fulfilled"
         elif shipped_total > 0:
             fulfillment_status = "partially_fulfilled"

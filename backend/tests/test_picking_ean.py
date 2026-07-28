@@ -121,6 +121,22 @@ def test_scan_completes_order_on_last_unit(client, db, courier_token):
     assert resp.json()["order_completed"] is True
 
 
+def test_bol_cancellation_request_blocks_scan(client, db, courier_token):
+    org = _barcode_org(db, "socks-cancel-request")
+    sku = _make_barcode_sku(db, org, "SOK-CANCEL", "8722222222223")
+    order, line = _make_active_order(db, org, sku, quantity=1)
+    order.channel = "bol"
+    order.channel_fulfillment_status = "cancellation_requested"
+    db.commit()
+
+    resp = _scan(client, courier_token, order.id, sku.ean)
+
+    assert resp.status_code == 409
+    assert "annuleringsverzoek" in resp.json()["detail"]
+    db.refresh(line)
+    assert line.booked_count == 0
+
+
 def test_unknown_ean_returns_404(client, db, courier_token):
     org = _barcode_org(db, "socks-unknown")
     sku = _make_barcode_sku(db, org, "SOK-3", "8733333333333")

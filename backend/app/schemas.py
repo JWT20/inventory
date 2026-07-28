@@ -506,6 +506,7 @@ class OrderResponse(BaseModel):
     status: str
     # Order provenance: "manual" (in-app/customer), "shopify" or "bol".
     channel: str = "manual"
+    cancellation_requested: bool = False
     # How this order is picked: "vision" (camera + AI) or "barcode" (handscanner
     # EAN scan). Derived from the order's products so the courier UI can route to
     # the right scanner.

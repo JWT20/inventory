@@ -102,6 +102,30 @@ describe("EAN merchant UI", () => {
     expect(screen.queryByText("Do")).toBeNull();
   });
 
+  it("shows a bol order number in red for a cancellation request", () => {
+    const order = {
+      id: 2,
+      reference: "BOL-CANCEL",
+      status: "active",
+      channel: "bol",
+      cancellation_requested: true,
+      pick_method: "barcode",
+      created_at: "2026-07-28T08:00:00Z",
+      customer_name: "Webklant",
+      total_boxes: 0,
+      booked_boxes: 0,
+      total_bottles: 0,
+      booked_bottles: 0,
+      total_items: 1,
+      booked_items: 0,
+      lines: [],
+    } satisfies Order;
+
+    render(<OrderCard order={order} onSelect={() => {}} />);
+
+    expect(screen.getByText("BOL-CANCEL").className).toContain("text-red-600");
+  });
+
   it("keeps zero-total channel orders labeled as items", async () => {
     mocks.listOrders.mockResolvedValue([
       {
