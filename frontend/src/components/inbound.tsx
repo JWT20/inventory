@@ -281,34 +281,11 @@ export interface InboundBookedSKU {
   is_bottle: boolean;
 }
 
-interface ShipmentLine {
-  sku_id: number;
-  sku_code: string;
-  sku_name: string;
-  quantity: number;
-  is_bottle: boolean;
-}
-
 export function bookedQuantityLabel(line: InboundBookedSKU): string {
   if (line.is_bottle) {
     return `${line.quantity} ${line.quantity === 1 ? "fles" : "flessen"}`;
   }
   return `${line.quantity} ${line.quantity === 1 ? "doos" : "dozen"}`;
-}
-
-export function aggregateBookedSkus(lines: ShipmentLine[]): InboundBookedSKU[] {
-  const bySku = new Map<number, InboundBookedSKU>();
-  for (const line of lines) {
-    const existing = bySku.get(line.sku_id);
-    if (existing) {
-      existing.quantity += line.quantity;
-    } else {
-      bySku.set(line.sku_id, { ...line });
-    }
-  }
-  return [...bySku.values()].sort(
-    (a, b) => a.sku_name.localeCompare(b.sku_name, "nl") || a.sku_code.localeCompare(b.sku_code, "nl"),
-  );
 }
 
 function BookedSkuRows({ skus }: { skus: InboundBookedSKU[] }) {
@@ -515,6 +492,7 @@ export function InboundPage() {
   }
 
   async function extractFromFile(file: File) {
+    setLastBookedInbound(null);
     setLoading(true);
     try {
       const data = await api.extractShipmentPreview(
@@ -538,6 +516,7 @@ export function InboundPage() {
       toast.error("Plak eerst de besteltekst.");
       return;
     }
+    setLastBookedInbound(null);
     setLoading(true);
     try {
       const data = await api.extractShipmentPreviewText(text, supplierName, documentType);
@@ -636,10 +615,12 @@ export function InboundPage() {
           throw err;
         }
       }
-      const booked = await api.bookShipment(created.id) as { lines: ShipmentLine[] };
+      const booked = await api.bookShipment(created.id) as {
+        booked_skus: InboundBookedSKU[];
+      };
       setLastBookedInbound({
         shipmentId: created.id,
-        skus: aggregateBookedSkus(booked.lines || []),
+        skus: booked.booked_skus || [],
       });
       toast.success(`Inbound geboekt (pakbon #${created.id})`);
       setPreview(null);

@@ -215,6 +215,22 @@ def test_upload_history_groups_booked_lines_and_preserves_units(
         False,
         True,
     ]
+    assert booked.json()["booked_skus"] == [
+        {
+            "sku_id": box_sku.id,
+            "sku_code": "HISTORY-BOX",
+            "sku_name": "Case wine",
+            "quantity": 5,
+            "is_bottle": False,
+        },
+        {
+            "sku_id": bottle_sku.id,
+            "sku_code": "HISTORY-BOTTLE",
+            "sku_name": "Loose bottle",
+            "quantity": 4,
+            "is_bottle": True,
+        },
+    ]
 
     history = client.get(
         "/api/inbound-uploads",

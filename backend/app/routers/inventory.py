@@ -154,6 +154,32 @@ def _resolve_inbound_quantity(row: dict, is_bottle: bool = False) -> tuple[int, 
 # Shipment endpoints (pakbon)
 # ---------------------------------------------------------------------------
 
+def _booked_skus_for_shipment(
+    shipment: InboundShipment,
+) -> list[InboundBookedSKUResponse]:
+    booked_by_sku: dict[int, InboundBookedSKUResponse] = {}
+    for line in shipment.lines:
+        sku = line.sku
+        if not sku:
+            continue
+        booked = booked_by_sku.get(line.sku_id)
+        if booked:
+            booked.quantity += line.quantity
+            continue
+        booked_by_sku[line.sku_id] = InboundBookedSKUResponse(
+            sku_id=line.sku_id,
+            sku_code=sku.sku_code,
+            sku_name=sku.name,
+            quantity=line.quantity,
+            is_bottle=sku.is_bottle,
+        )
+
+    return sorted(
+        booked_by_sku.values(),
+        key=lambda line: (line.sku_name.casefold(), line.sku_code.casefold()),
+    )
+
+
 def _shipment_to_response(shipment: InboundShipment) -> ShipmentResponse:
     return ShipmentResponse(
         id=shipment.id,
@@ -176,36 +202,24 @@ def _shipment_to_response(shipment: InboundShipment) -> ShipmentResponse:
             )
             for line in shipment.lines
         ],
+        booked_skus=(
+            _booked_skus_for_shipment(shipment)
+            if shipment.status == "booked"
+            else []
+        ),
     )
 
 
 def _inbound_upload_to_response(
     attempt: InboundUploadAttempt,
 ) -> InboundUploadAttemptResponse:
-    booked_by_sku: dict[int, InboundBookedSKUResponse] = {}
-    if attempt.status == "booked" and attempt.shipment:
-        for line in attempt.shipment.lines:
-            sku = line.sku
-            if not sku:
-                continue
-            booked = booked_by_sku.get(line.sku_id)
-            if booked:
-                booked.quantity += line.quantity
-                continue
-            booked_by_sku[line.sku_id] = InboundBookedSKUResponse(
-                sku_id=line.sku_id,
-                sku_code=sku.sku_code,
-                sku_name=sku.name,
-                quantity=line.quantity,
-                is_bottle=sku.is_bottle,
-            )
-
     response = InboundUploadAttemptResponse.model_validate(attempt)
     return response.model_copy(
         update={
-            "booked_skus": sorted(
-                booked_by_sku.values(),
-                key=lambda line: (line.sku_name.casefold(), line.sku_code.casefold()),
+            "booked_skus": (
+                _booked_skus_for_shipment(attempt.shipment)
+                if attempt.status == "booked" and attempt.shipment
+                else []
             )
         }
     )

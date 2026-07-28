@@ -850,6 +850,14 @@ class ShipmentTextExtractRequest(BaseModel):
     document_type: Literal["pakbon", "invoice", "unknown"] = "unknown"
 
 
+class InboundBookedSKUResponse(BaseModel):
+    sku_id: int
+    sku_code: str = ""
+    sku_name: str = ""
+    quantity: int
+    is_bottle: bool = False
+
+
 class ShipmentLineResponse(BaseModel):
     id: int
     sku_id: int
@@ -872,6 +880,7 @@ class ShipmentResponse(BaseModel):
     booked_at: datetime | None
     booked_by: int | None
     lines: list[ShipmentLineResponse] = []
+    booked_skus: list[InboundBookedSKUResponse] = []
 
     model_config = {"from_attributes": True}
 
@@ -913,14 +922,6 @@ class ShipmentExtractPreviewResponse(BaseModel):
     document_sha256: str | None = None
     duplicate_of_shipment_id: int | None = None
     duplicate_of_status: str | None = None
-
-
-class InboundBookedSKUResponse(BaseModel):
-    sku_id: int
-    sku_code: str = ""
-    sku_name: str = ""
-    quantity: int
-    is_bottle: bool = False
 
 
 class InboundUploadAttemptResponse(BaseModel):
