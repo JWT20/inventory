@@ -373,13 +373,16 @@ class BolClient:
     def fetch_order_updates(
         self, *, shipped_since: datetime.datetime | None = None
     ) -> BolOrderBatch:
-        """Fetch open orders plus new/recent shipment history as one order set."""
+        """Fetch recent orders plus new/recent shipment history as one order set."""
         shipment_dates, newest_shipment_at = self._fetch_recent_shipments(
             since=shipped_since
         )
         ordered_ids: list[str] = []
         seen: set[str] = set()
-        for order_id in self._fetch_order_ids(status="OPEN"):
+        # ALL includes open orders and orders shipped or cancelled in the last
+        # 48 hours. OPEN alone drops a fully cancelled order before we can
+        # release its local reservation and remove it from the pick list.
+        for order_id in self._fetch_order_ids(status="ALL"):
             if order_id not in seen:
                 seen.add(order_id)
                 ordered_ids.append(order_id)
@@ -495,7 +498,7 @@ def to_normalized(
 def sync_bol(
     db: Session, connection: ChannelConnection, client: BolClient | None = None
 ) -> BolSyncSummary:
-    """Import open orders and recent FBR/VVB shipment history idempotently."""
+    """Import recent orders and FBR/VVB shipment history idempotently."""
     db.flush()
     connection = (
         db.query(ChannelConnection)
