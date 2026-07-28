@@ -50,6 +50,7 @@ from app.schemas import (
     InventoryBalanceResponse,
     InventoryCountRequest,
     InventoryOverviewItem,
+    InboundBookedSKUResponse,
     InboundUploadAttemptResponse,
     SupplierMappingResponse,
     ShipmentCreate,
@@ -153,6 +154,32 @@ def _resolve_inbound_quantity(row: dict, is_bottle: bool = False) -> tuple[int, 
 # Shipment endpoints (pakbon)
 # ---------------------------------------------------------------------------
 
+def _booked_skus_for_shipment(
+    shipment: InboundShipment,
+) -> list[InboundBookedSKUResponse]:
+    booked_by_sku: dict[int, InboundBookedSKUResponse] = {}
+    for line in shipment.lines:
+        sku = line.sku
+        if not sku:
+            continue
+        booked = booked_by_sku.get(line.sku_id)
+        if booked:
+            booked.quantity += line.quantity
+            continue
+        booked_by_sku[line.sku_id] = InboundBookedSKUResponse(
+            sku_id=line.sku_id,
+            sku_code=sku.sku_code,
+            sku_name=sku.name,
+            quantity=line.quantity,
+            is_bottle=sku.is_bottle,
+        )
+
+    return sorted(
+        booked_by_sku.values(),
+        key=lambda line: (line.sku_name.casefold(), line.sku_code.casefold()),
+    )
+
+
 def _shipment_to_response(shipment: InboundShipment) -> ShipmentResponse:
     return ShipmentResponse(
         id=shipment.id,
@@ -171,9 +198,30 @@ def _shipment_to_response(shipment: InboundShipment) -> ShipmentResponse:
                 sku_name=line.sku.name if line.sku else "",
                 supplier_code=line.supplier_code,
                 quantity=line.quantity,
+                is_bottle=line.sku.is_bottle if line.sku else False,
             )
             for line in shipment.lines
         ],
+        booked_skus=(
+            _booked_skus_for_shipment(shipment)
+            if shipment.status == "booked"
+            else []
+        ),
+    )
+
+
+def _inbound_upload_to_response(
+    attempt: InboundUploadAttempt,
+) -> InboundUploadAttemptResponse:
+    response = InboundUploadAttemptResponse.model_validate(attempt)
+    return response.model_copy(
+        update={
+            "booked_skus": (
+                _booked_skus_for_shipment(attempt.shipment)
+                if attempt.status == "booked" and attempt.shipment
+                else []
+            )
+        }
     )
 
 
@@ -495,15 +543,20 @@ def list_inbound_uploads(
     user: User = Depends(require_merchant_inbound),
 ):
     """Return the current merchant's most recent inbound upload attempts."""
-    query = db.query(InboundUploadAttempt)
+    query = db.query(InboundUploadAttempt).options(
+        joinedload(InboundUploadAttempt.shipment)
+        .joinedload(InboundShipment.lines)
+        .joinedload(InboundShipmentLine.sku)
+    )
     if not user.is_platform_admin:
         query = query.filter(InboundUploadAttempt.organization_id == user.organization_id)
-    return (
+    attempts = (
         query.order_by(InboundUploadAttempt.created_at.desc(), InboundUploadAttempt.id.desc())
         .offset(offset)
         .limit(limit)
         .all()
     )
+    return [_inbound_upload_to_response(attempt) for attempt in attempts]
 
 
 @router.post("/shipments/extract-preview", response_model=ShipmentExtractPreviewResponse)

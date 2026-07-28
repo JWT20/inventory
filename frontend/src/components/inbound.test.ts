@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { bottleRemainderForBoxSku, resolveQuantityForUnit } from "./inbound";
+import {
+  bookedQuantityLabel,
+  bottleRemainderForBoxSku,
+  resolveQuantityForUnit,
+} from "./inbound";
 
 
 describe("inbound quantity units", () => {
@@ -27,5 +31,24 @@ describe("inbound quantity units", () => {
       matched_sku_name: "Rioja",
       is_bottle: false,
     })).toBe(2);
+  });
+});
+
+describe("booked inbound stock details", () => {
+  it("labels boxes and bottles separately", () => {
+    expect(bookedQuantityLabel({
+      sku_id: 1,
+      sku_code: "BOX-1",
+      sku_name: "Rioja",
+      quantity: 2,
+      is_bottle: false,
+    })).toBe("2 dozen");
+    expect(bookedQuantityLabel({
+      sku_id: 2,
+      sku_code: "BOTTLE-1",
+      sku_name: "Proeffles",
+      quantity: 1,
+      is_bottle: true,
+    })).toBe("1 fles");
   });
 });
