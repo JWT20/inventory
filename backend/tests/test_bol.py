@@ -255,7 +255,7 @@ def test_open_order_pagination_has_a_safety_limit(monkeypatch):
         list(client.fetch_open_orders())
 
 
-def test_fetch_order_updates_combines_open_and_shipped_orders_once(monkeypatch):
+def test_fetch_order_updates_combines_recent_and_shipped_orders_once(monkeypatch):
     client = BolClient(
         client_id="client-id",
         client_secret="client-secret",
@@ -284,8 +284,10 @@ def test_fetch_order_updates_combines_open_and_shipped_orders_once(monkeypatch):
         if path == "/shipments":
             return {"shipments": []}
         if path == "/orders" and params["page"] == 1:
-            return {"orders": [{"orderId": "OPEN-1"}]}
+            assert params["status"] == "ALL"
+            return {"orders": [{"orderId": "RECENT-1"}]}
         if path == "/orders":
+            assert params["status"] == "ALL"
             return {"orders": []}
         return _payload(path.rsplit("/", 1)[-1])
 
@@ -294,14 +296,14 @@ def test_fetch_order_updates_combines_open_and_shipped_orders_once(monkeypatch):
     batch = client.fetch_order_updates()
 
     assert [update.payload["orderId"] for update in batch.orders] == [
-        "OPEN-1",
+        "RECENT-1",
         "SHIPPED-1",
     ]
     assert batch.orders[0].shipped_at is None
     assert batch.orders[1].shipped_at == shipped_at.astimezone(datetime.timezone.utc)
     assert batch.newest_shipment_at == shipped_at.astimezone(datetime.timezone.utc)
     detail_calls = [path for path, _ in calls if path.startswith("/orders/")]
-    assert detail_calls == ["/orders/OPEN-1", "/orders/SHIPPED-1"]
+    assert detail_calls == ["/orders/RECENT-1", "/orders/SHIPPED-1"]
 
 
 def test_bol_status_checks_settings_without_constructing_client(monkeypatch):
@@ -361,7 +363,7 @@ def test_sync_bol_imports_idempotently_in_observe_mode(db):
     assert connection.last_synced_at is not None
 
 
-def test_sync_bol_live_makes_open_order_pickable_and_reserves(db):
+def test_sync_bol_live_reconciles_cancellation_and_reservation(db):
     org = _org(db, "bol-live-sync")
     sku = SKU(
         sku_code="BOL-LIVE",
@@ -393,6 +395,17 @@ def test_sync_bol_live_makes_open_order_pickable_and_reserves(db):
     assert order.status == "active"
     assert balance.quantity_reserved == 3
     assert summary.reserved_sku_ids == {sku.id}
+
+    payload["orderItems"][0]["quantityCancelled"] = 3
+    cancelled = sync_bol(db, connection, _FakeBolClient([payload]))
+    db.commit()
+    db.refresh(order)
+    db.refresh(balance)
+
+    assert order.status == "cancelled"
+    assert balance.quantity_reserved == 0
+    assert cancelled.updated == 1
+    assert cancelled.reserved_sku_ids == {sku.id}
 
 
 def test_sync_bol_persists_shipped_order_in_same_observe_list(db):
