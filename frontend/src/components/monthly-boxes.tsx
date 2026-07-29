@@ -31,6 +31,8 @@ interface MonthRow {
   boxes: number;
   bottles: number;
   items: number;
+  item_order_count: number;
+  item_line_count: number;
 }
 
 interface OrgReport {
@@ -39,6 +41,8 @@ interface OrgReport {
   total_boxes: number;
   total_bottles: number;
   total_items: number;
+  total_item_orders: number;
+  total_item_lines: number;
   months: MonthRow[];
 }
 
@@ -114,6 +118,10 @@ export function MonthlyBoxesPage() {
     load();
   }, [load]);
 
+  // Decided per merchant, not per month row: the table has one set of headers,
+  // so a month without barcode orders keeps the columns and shows 0.
+  const showItemCounts = (report?.total_item_lines ?? 0) > 0;
+
   return (
     <>
       <div className="flex justify-between items-center mb-4">
@@ -121,8 +129,9 @@ export function MonthlyBoxesPage() {
       </div>
 
       <p className="text-sm text-muted-foreground mb-4">
-        Aantal verwerkte dozen, flessen en items voor voltooide en gesloten orders,
-        per maand waarin de order is afgerond.
+        Verwerkte hoeveelheden voor voltooide en gesloten orders, per maand waarin
+        de order is afgerond. Voor barcode-producten tellen we ook het aantal orders
+        en orderregels.
       </p>
 
       <div className="mb-4">
@@ -163,6 +172,12 @@ export function MonthlyBoxesPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Maand</TableHead>
+                {showItemCounts && (
+                  <>
+                    <TableHead className="text-right">Orders</TableHead>
+                    <TableHead className="text-right">Regels</TableHead>
+                  </>
+                )}
                 <TableHead className="text-right">Geboekt</TableHead>
                 <TableHead className="text-right">Status</TableHead>
               </TableRow>
@@ -173,6 +188,16 @@ export function MonthlyBoxesPage() {
                 return (
                   <TableRow key={m.month}>
                     <TableCell>{formatMonth(m.month)}</TableCell>
+                    {showItemCounts && (
+                      <>
+                        <TableCell className="text-right tabular-nums">
+                          {m.item_order_count}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {m.item_line_count}
+                        </TableCell>
+                      </>
+                    )}
                     <TableCell className="text-right tabular-nums">
                       {formatBoxesBottles(m.boxes, m.bottles, m.items)}
                     </TableCell>

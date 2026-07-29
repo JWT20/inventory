@@ -33,6 +33,18 @@ def _make_line(db, order, sku, customer, quantity, booked_count):
     return line
 
 
+def _month(month, *, boxes=0, bottles=0, items=0, item_orders=0, item_lines=0):
+    """One expected month row, so tests only spell out what they care about."""
+    return {
+        "month": month,
+        "boxes": boxes,
+        "bottles": bottles,
+        "items": items,
+        "item_order_count": item_orders,
+        "item_line_count": item_lines,
+    }
+
+
 def _seed(
     db,
     org,
@@ -81,9 +93,7 @@ def test_closed_partial_counts_booked_only(client, db, courier_token, sample_org
     org = orgs[0]
     assert org["organization_id"] == sample_org.id
     assert org["total_boxes"] == 10
-    assert org["months"] == [
-        {"month": "2026-03", "boxes": 10, "bottles": 0, "items": 0}
-    ]
+    assert org["months"] == [_month("2026-03", boxes=10)]
 
 
 def test_groups_by_finalized_month(client, db, courier_token, sample_org):
@@ -101,8 +111,8 @@ def test_groups_by_finalized_month(client, db, courier_token, sample_org):
     org = resp.json()["organizations"][0]
     # Months sorted newest first.
     assert org["months"] == [
-        {"month": "2026-04", "boxes": 7, "bottles": 0, "items": 0},
-        {"month": "2026-03", "boxes": 17, "bottles": 0, "items": 0},
+        _month("2026-04", boxes=7),
+        _month("2026-03", boxes=17),
     ]
     assert org["total_boxes"] == 24
 
@@ -136,9 +146,10 @@ def test_bottles_counted_separately(client, db, courier_token, sample_org):
     org = resp.json()["organizations"][0]
     assert org["total_boxes"] == 4
     assert org["total_bottles"] == 2
-    assert org["months"] == [
-        {"month": "2026-03", "boxes": 4, "bottles": 2, "items": 0}
-    ]
+    assert org["months"] == [_month("2026-03", boxes=4, bottles=2)]
+    # Wine-only merchant: no order/line counts at all.
+    assert org["total_item_orders"] == 0
+    assert org["total_item_lines"] == 0
 
 
 def test_barcode_products_counted_as_items(client, db, courier_token, sample_org):
@@ -162,7 +173,112 @@ def test_barcode_products_counted_as_items(client, db, courier_token, sample_org
     assert org["total_boxes"] == 0
     assert org["total_items"] == 6
     assert org["months"] == [
-        {"month": "2026-04", "boxes": 0, "bottles": 0, "items": 6}
+        _month("2026-04", items=6, item_orders=1, item_lines=1)
+    ]
+
+
+def test_barcode_counts_orders_and_lines(client, db, courier_token, sample_org):
+    # One order, two barcode lines, five items: 1 order / 2 lines / 5 items.
+    sku_a = SKU(sku_code="SKU-SOK-A", name="Racesok zwart", product_type="barcode")
+    sku_b = SKU(sku_code="SKU-SOK-B", name="Racesok wit", product_type="barcode")
+    db.add_all([sku_a, sku_b])
+    db.flush()
+    customer = Customer(name="Cust EAN", organization_id=sample_org.id)
+    db.add(customer)
+    db.flush()
+    order = _make_order(
+        db, sample_org, "EAN-MULTI", status="shipped",
+        finalized_at=datetime.datetime(2026, 4, 5),
+    )
+    _make_line(db, order, sku_a, customer, quantity=3, booked_count=3)
+    _make_line(db, order, sku_b, customer, quantity=2, booked_count=2)
+    db.commit()
+
+    resp = client.get(
+        "/api/orders/reports/monthly-boxes",
+        headers=auth_header(courier_token),
+    )
+    org = resp.json()["organizations"][0]
+    assert org["total_item_orders"] == 1
+    assert org["total_item_lines"] == 2
+    assert org["total_items"] == 5
+    assert org["months"] == [
+        _month("2026-04", items=5, item_orders=1, item_lines=2)
+    ]
+
+
+def test_barcode_orders_counted_per_month(client, db, courier_token, sample_org):
+    _seed(db, sample_org, "EAN-1", "shipped", booked=2, quantity=2,
+          finalized_at=datetime.datetime(2026, 4, 3), product_type="barcode")
+    _seed(db, sample_org, "EAN-2", "shipped", booked=1, quantity=1,
+          finalized_at=datetime.datetime(2026, 4, 20), product_type="barcode")
+    _seed(db, sample_org, "EAN-3", "closed", booked=4, quantity=4,
+          finalized_at=datetime.datetime(2026, 5, 1), product_type="barcode")
+
+    resp = client.get(
+        "/api/orders/reports/monthly-boxes",
+        headers=auth_header(courier_token),
+    )
+    org = resp.json()["organizations"][0]
+    assert org["months"] == [
+        _month("2026-05", items=4, item_orders=1, item_lines=1),
+        _month("2026-04", items=3, item_orders=2, item_lines=2),
+    ]
+    assert org["total_item_orders"] == 3
+    assert org["total_item_lines"] == 3
+
+
+def test_mixed_order_counts_only_barcode_lines(client, db, courier_token, sample_org):
+    # A wine line on the same order must not inflate the item order/line counts.
+    box_sku = SKU(sku_code="SKU-MIXB-BOX", name="Doos Wijn", product_type="vision")
+    ean_sku = SKU(sku_code="SKU-MIXB-EAN", name="Racesok", product_type="barcode")
+    db.add_all([box_sku, ean_sku])
+    db.flush()
+    customer = Customer(name="Cust MixB", organization_id=sample_org.id)
+    db.add(customer)
+    db.flush()
+    order = _make_order(
+        db, sample_org, "MIXB", status="completed",
+        finalized_at=datetime.datetime(2026, 3, 12),
+    )
+    _make_line(db, order, box_sku, customer, quantity=6, booked_count=6)
+    _make_line(db, order, ean_sku, customer, quantity=2, booked_count=2)
+    db.commit()
+
+    resp = client.get(
+        "/api/orders/reports/monthly-boxes",
+        headers=auth_header(courier_token),
+    )
+    org = resp.json()["organizations"][0]
+    assert org["months"] == [
+        _month("2026-03", boxes=6, items=2, item_orders=1, item_lines=1)
+    ]
+
+
+def test_unbooked_barcode_line_not_counted(client, db, courier_token, sample_org):
+    # Nothing booked on the second line, so it was not shipped: 1 line, not 2.
+    sku_a = SKU(sku_code="SKU-ZERO-A", name="Racesok A", product_type="barcode")
+    sku_b = SKU(sku_code="SKU-ZERO-B", name="Racesok B", product_type="barcode")
+    db.add_all([sku_a, sku_b])
+    db.flush()
+    customer = Customer(name="Cust Zero", organization_id=sample_org.id)
+    db.add(customer)
+    db.flush()
+    order = _make_order(
+        db, sample_org, "EAN-ZERO", status="shipped",
+        finalized_at=datetime.datetime(2026, 4, 8),
+    )
+    _make_line(db, order, sku_a, customer, quantity=2, booked_count=2)
+    _make_line(db, order, sku_b, customer, quantity=1, booked_count=0)
+    db.commit()
+
+    resp = client.get(
+        "/api/orders/reports/monthly-boxes",
+        headers=auth_header(courier_token),
+    )
+    org = resp.json()["organizations"][0]
+    assert org["months"] == [
+        _month("2026-04", items=2, item_orders=1, item_lines=1)
     ]
 
 

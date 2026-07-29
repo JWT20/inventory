@@ -1188,6 +1188,9 @@ class MonthlyBoxesMonth(BaseModel):
     boxes: int
     bottles: int = 0
     items: int = 0
+    # Orders/lines are counted for barcode products only — hence the item_ prefix.
+    item_order_count: int = 0
+    item_line_count: int = 0
 
 
 class MonthlyBoxesOrganization(BaseModel):
@@ -1196,6 +1199,8 @@ class MonthlyBoxesOrganization(BaseModel):
     total_boxes: int
     total_bottles: int = 0
     total_items: int = 0
+    total_item_orders: int = 0
+    total_item_lines: int = 0
     months: list[MonthlyBoxesMonth] = []
 
 
