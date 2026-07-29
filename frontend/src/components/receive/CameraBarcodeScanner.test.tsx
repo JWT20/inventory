@@ -7,14 +7,17 @@ const zxing = vi.hoisted(() => ({
   callback: undefined as undefined | ((result: unknown, error: unknown, controls: { stop: () => void }) => void),
   controls: { stop: vi.fn() },
   decode: vi.fn(),
-  readers: [] as Array<{ possibleFormats: unknown[] }>,
+  readers: [] as Array<{
+    hints: Map<unknown, unknown>;
+    possibleFormats: unknown[];
+  }>,
 }));
 
 vi.mock("@zxing/browser", () => {
   class BrowserMultiFormatReader {
     possibleFormats: unknown[] = [];
 
-    constructor() {
+    constructor(public hints: Map<unknown, unknown>) {
       zxing.readers.push(this);
     }
 
@@ -31,12 +34,24 @@ vi.mock("@zxing/browser", () => {
   return {
     BarcodeFormat: {
       CODE_128: "CODE_128",
+      CODE_39: "CODE_39",
+      CODE_93: "CODE_93",
+      DATA_MATRIX: "DATA_MATRIX",
+      EAN_8: "EAN_8",
       EAN_13: "EAN_13",
+      ITF: "ITF",
+      PDF_417: "PDF_417",
       QR_CODE: "QR_CODE",
     },
     BrowserMultiFormatReader,
   };
 });
+
+vi.mock("@zxing/library", () => ({
+  DecodeHintType: {
+    TRY_HARDER: "TRY_HARDER",
+  },
+}));
 
 function createMediaStream() {
   const track = { stop: vi.fn() };
@@ -86,7 +101,7 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("CameraBarcodeScanner", () => {
-  it("uses the rear camera and only accepts EAN-13 in product mode", async () => {
+  it("uses the rear camera and robust one-dimensional decoding in product mode", async () => {
     render(
       <CameraBarcodeScanner
         open
@@ -105,10 +120,11 @@ describe("CameraBarcodeScanner", () => {
       audio: false,
       video: expect.objectContaining({ facingMode: { ideal: "environment" } }),
     }));
-    expect(zxing.readers[0].possibleFormats).toEqual(["EAN_13"]);
+    expect(zxing.readers[0].hints.get("TRY_HARDER")).toBe(true);
+    expect(zxing.readers[0].possibleFormats).toEqual(["EAN_13", "EAN_8"]);
   });
 
-  it("accepts Code 128 and QR for labels and emits one scan only", async () => {
+  it("accepts common shipping-label formats and emits one scan only", async () => {
     const onScan = vi.fn();
     render(
       <CameraBarcodeScanner
@@ -121,7 +137,16 @@ describe("CameraBarcodeScanner", () => {
     );
 
     await waitFor(() => expect(zxing.callback).toBeDefined());
-    expect(zxing.readers[0].possibleFormats).toEqual(["CODE_128", "QR_CODE"]);
+    expect(zxing.readers[0].hints.get("TRY_HARDER")).toBe(true);
+    expect(zxing.readers[0].possibleFormats).toEqual([
+      "CODE_128",
+      "CODE_39",
+      "CODE_93",
+      "ITF",
+      "QR_CODE",
+      "DATA_MATRIX",
+      "PDF_417",
+    ]);
 
     const result = { getText: () => "  V-123  " };
     await act(async () => {
