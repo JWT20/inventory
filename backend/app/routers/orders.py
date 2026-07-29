@@ -7,7 +7,7 @@ from collections import defaultdict
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth import (
@@ -780,17 +780,27 @@ def monthly_booked_boxes(
     en worden uitgesplitst als dozen, flessen of items. Het aantal is het werkelijk
     geboekte aantal. Gegroepeerd per handelaar (organisatie).
 
+    Voor barcode-producten tellen we daarnaast het aantal orders en orderregels:
+    daar zegt het aantal stuks weinig over de verwerkte hoeveelheid werk. Dozen en
+    flessen blijven puur op eenheden geteld.
+
     Zichtbaar voor de koerier en platform-admin (alle handelaren) en voor een
     owner/member (alleen de eigen handelaar).
     """
     # Per finalized order: its organization, finalize moment and booked boxes.
     query = (
         db.query(
+            Order.id.label("order_id"),
             Order.organization_id.label("org_id"),
             Order.finalized_at.label("finalized_at"),
             SKU.is_bottle.label("is_bottle"),
             SKU.product_type.label("product_type"),
             func.coalesce(func.sum(OrderLine.booked_count), 0).label("units"),
+            # Only lines that actually went out. A line booked at 0 was not
+            # shipped, so it should not show up as a processed order line.
+            func.count(case((OrderLine.booked_count > 0, OrderLine.id))).label(
+                "lines"
+            ),
         )
         .join(OrderLine, OrderLine.order_id == Order.id)
         .join(SKU, OrderLine.sku_id == SKU.id)
@@ -815,10 +825,16 @@ def monthly_booked_boxes(
     else:
         raise HTTPException(403, "Geen toegang tot dit overzicht")
 
-    # Bucket booked units into (organization, "YYYY-MM") by handling unit.
+    # Bucket booked units into (organization, "YYYY-MM") by handling unit. Orders
+    # and lines are tracked separately, and only for barcode rows: a mixed order
+    # must not inflate the item counts of a wine-only merchant.
     buckets: dict[int | None, dict[str, dict[str, int]]] = defaultdict(
         lambda: defaultdict(lambda: {"boxes": 0, "bottles": 0, "items": 0})
     )
+    item_orders: dict[int | None, dict[str, set[int]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
+    item_lines: dict[int | None, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for row in query.all():
         if not row.units or row.finalized_at is None:
             continue
@@ -831,6 +847,9 @@ def monthly_booked_boxes(
             else "boxes"
         )
         buckets[row.org_id][month][unit] += int(row.units)
+        if unit == "items":
+            item_orders[row.org_id][month].add(row.order_id)
+            item_lines[row.org_id][month] += int(row.lines)
 
     if not buckets:
         return MonthlyBoxesResponse(organizations=[])
@@ -851,12 +870,16 @@ def monthly_booked_boxes(
             if org_id is not None
             else "Zonder handelaar"
         )
+        orders_by_month = item_orders[org_id]
+        lines_by_month = item_lines[org_id]
         month_rows = [
             MonthlyBoxesMonth(
                 month=m,
                 boxes=v["boxes"],
                 bottles=v["bottles"],
                 items=v["items"],
+                item_order_count=len(orders_by_month[m]),
+                item_line_count=lines_by_month[m],
             )
             for m, v in sorted(months.items(), reverse=True)
         ]
@@ -867,6 +890,10 @@ def monthly_booked_boxes(
                 total_boxes=sum(v["boxes"] for v in months.values()),
                 total_bottles=sum(v["bottles"] for v in months.values()),
                 total_items=sum(v["items"] for v in months.values()),
+                # An order is finalized once, so it lands in exactly one month:
+                # summing per-month counts cannot double-count it.
+                total_item_orders=sum(len(o) for o in orders_by_month.values()),
+                total_item_lines=sum(lines_by_month.values()),
                 months=month_rows,
             )
         )
