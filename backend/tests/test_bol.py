@@ -408,6 +408,69 @@ def test_sync_bol_live_reconciles_cancellation_and_reservation(db):
     assert cancelled.reserved_sku_ids == {sku.id}
 
 
+def test_sync_bol_preserves_local_pick_when_veloyd_reports_shipped(db):
+    org = _org(db, "bol-veloyd-pick")
+    sku = SKU(
+        sku_code="BOL-VELO",
+        name="Veloyd bol-sok",
+        organization_id=org.id,
+        product_type="barcode",
+        ean="8710000000001",
+    )
+    connection = ChannelConnection(
+        organization_id=org.id,
+        channel="bol",
+        mode="live",
+        status="active",
+        inventory_authority_started_at=datetime.datetime(2026, 7, 17),
+    )
+    db.add_all([sku, connection])
+    db.commit()
+
+    payload = _payload("VELOYD-PICK")
+    payload["orderItems"][0]["quantityShipped"] = 0
+    payload["orderItems"][0]["quantityCancelled"] = 0
+    sync_bol(db, connection, _FakeBolClient([payload]))
+    db.commit()
+
+    order = db.query(Order).filter_by(channel="bol", external_id="VELOYD-PICK").one()
+    line = order.lines[0]
+    balance = db.query(InventoryBalance).filter_by(
+        organization_id=org.id, sku_id=sku.id
+    ).one()
+    assert order.status == "active"
+    assert line.quantity == 3
+    assert balance.quantity_reserved == 3
+
+    payload["orderItems"][0]["quantityShipped"] = 3
+    shipped_at = datetime.datetime.fromisoformat("2026-07-18T10:01:00+02:00")
+    sync_bol(
+        db,
+        connection,
+        _FakeBolClient(
+            [payload],
+            shipped_at_by_order={"VELOYD-PICK": shipped_at},
+            newest_shipment_at=shipped_at,
+        ),
+    )
+    db.commit()
+    db.refresh(order)
+    db.refresh(line)
+    db.refresh(balance)
+
+    assert order.status == "active"
+    assert order.channel_fulfillment_status == "fulfilled"
+    stored_shipped_at = order.channel_shipped_at
+    if stored_shipped_at.tzinfo is None:
+        stored_shipped_at = stored_shipped_at.replace(tzinfo=shipped_at.tzinfo)
+    assert stored_shipped_at == shipped_at
+    assert line.quantity == 3
+    assert line.booked_count == 0
+    assert line.channel_unfulfilled_quantity == 0
+    assert line.channel_fulfilled_seen == 0
+    assert balance.quantity_reserved == 3
+
+
 def test_sync_bol_persists_shipped_order_in_same_observe_list(db):
     org = _org(db, "bol-shipped")
     db.add(

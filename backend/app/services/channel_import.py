@@ -394,6 +394,26 @@ def import_channel_order(
 
     old_status = existing.status if existing is not None else None
     old_reason = existing.review_reason if existing is not None else None
+    # Veloyd confirms RETAILER shipments to bol as soon as it creates the
+    # shipment/label. That external "fulfilled" event can therefore arrive
+    # while the warehouse still has to scan the location, EAN and final label.
+    # Preserve an unchanged local bol pick until that final label scan marks it
+    # shipped. Shopify fulfillments remain authoritative as before.
+    preserve_bol_pick = (
+        channel == "bol"
+        and connection.mode == "live"
+        and old_status in ("active", "completed")
+        and already_shipped
+        and fully_fulfilled_exact
+        and len(plans) == len(existing_lines)
+        and not removed_lines
+        and all(
+            plan.existing is not None
+            and plan.existing.sku_id == plan.sku.id
+            and plan.existing.quantity == plan.source.quantity
+            for plan in plans
+        )
+    )
     final_status = target_status
     review_reason: str | None = (
         REVIEW_PARTIALLY_FULFILLED
@@ -431,6 +451,8 @@ def import_channel_order(
     elif unsafe_picked_edit and has_bookings:
         final_status = "needs_review"
         review_reason = REVIEW_ORDER_CHANGED_AFTER_PICK
+    elif preserve_bol_pick:
+        final_status = old_status
     elif old_status == "active" and already_shipped and not exact_lines:
         final_status = "needs_review"
         review_reason = REVIEW_FULFILLED_ELSEWHERE
@@ -451,6 +473,19 @@ def import_channel_order(
         final_status = "completed"
     elif old_status == "shipped":
         final_status = "shipped"
+
+    if preserve_bol_pick and final_status == old_status:
+        # Do not consume the local order line or apply an "external" stock
+        # movement. Once the final label scan changes the order to shipped, the
+        # next sync can safely match bol's fulfillment to the booked units.
+        for plan in plans:
+            local = plan.existing
+            assert local is not None
+            plan.desired_quantity = local.quantity
+            plan.fulfilled_seen = local.channel_fulfilled_seen
+            plan.fulfilled_from_app = local.channel_fulfilled_from_app
+            plan.fulfilled_external = local.channel_fulfilled_external
+            plan.external_delta = 0
 
     if created:
         db_order = Order(
