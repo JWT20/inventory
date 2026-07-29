@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { CameraOff, Loader2 } from "lucide-react";
+import type { DecodeHintType as DecodeHint } from "@zxing/library";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -121,17 +122,41 @@ export function CameraBarcodeScanner({
 
         // Keep ZXing out of the initial bundle; load it only after the user opens
         // the camera scanner.
-        const { BarcodeFormat, BrowserMultiFormatReader } = await import("@zxing/browser");
+        const [
+          { BarcodeFormat, BrowserMultiFormatReader },
+          { DecodeHintType },
+        ] = await Promise.all([
+          import("@zxing/browser"),
+          import("@zxing/library"),
+        ]);
         if (cancelled || !videoRef.current) return;
 
-        const reader = new BrowserMultiFormatReader(undefined, {
+        // One-dimensional barcodes are much less forgiving than QR codes in a
+        // handheld camera frame. TRY_HARDER makes ZXing inspect the full frame
+        // and retry after a 90-degree rotation instead of sampling only a few
+        // horizontal rows around the centre.
+        const hints = new Map<DecodeHint, unknown>([
+          [DecodeHintType.TRY_HARDER, true],
+        ]);
+        const reader = new BrowserMultiFormatReader(hints, {
           delayBetweenScanAttempts: 120,
           delayBetweenScanSuccess: 500,
         });
         reader.possibleFormats =
           mode === "ean"
-            ? [BarcodeFormat.EAN_13]
-            : [BarcodeFormat.CODE_128, BarcodeFormat.QR_CODE];
+            ? [
+                BarcodeFormat.EAN_13,
+                BarcodeFormat.EAN_8,
+              ]
+            : [
+                BarcodeFormat.CODE_128,
+                BarcodeFormat.CODE_39,
+                BarcodeFormat.CODE_93,
+                BarcodeFormat.ITF,
+                BarcodeFormat.QR_CODE,
+                BarcodeFormat.DATA_MATRIX,
+                BarcodeFormat.PDF_417,
+              ];
 
         const constraints: MediaStreamConstraints = {
           audio: false,
