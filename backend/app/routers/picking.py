@@ -88,6 +88,51 @@ def _assert_openable_label_order(order: Order, user: User) -> None:
     assert_order_module(order, "barcode_picking", user)
 
 
+def _find_open_orders_by_channel_reference(
+    db: Session,
+    user: User,
+    channel_reference: str,
+    *,
+    require_unlinked: bool,
+) -> list[Order]:
+    reference = channel_reference.strip().lstrip("#").strip()
+    if not reference:
+        return []
+
+    query = (
+        db.query(Order)
+        .options(
+            joinedload(Order.organization),
+            joinedload(Order.lines).joinedload(OrderLine.sku),
+        )
+        .filter(
+            Order.channel_reference == reference,
+            Order.status.in_(("active", "completed")),
+            Order.channel != "manual",
+        )
+    )
+    if not user.is_platform_admin and user.role in ("owner", "member"):
+        query = query.filter(Order.organization_id == user.organization_id)
+
+    return [
+        order
+        for order in query.all()
+        if (not require_unlinked or order.veloyd_tracking_code is None)
+        and _is_barcode_order(order)
+        and order.organization
+        and "barcode_picking" in order.organization.modules
+    ]
+
+
+def _require_unambiguous_label_order(candidates: list[Order]) -> Order | None:
+    if len(candidates) > 1:
+        raise HTTPException(
+            409,
+            "Meerdere open orders hebben dit ordernummer; kies de order handmatig",
+        )
+    return candidates[0] if candidates else None
+
+
 @router.post("/open-by-label", response_model=LabelOrderOpenResponse)
 def open_order_by_label(
     body: LabelOrderOpenRequest,
@@ -96,9 +141,10 @@ def open_order_by_label(
 ):
     """Open an EAN order by scanning its loose Veloyd shipping label.
 
-    A known tracking code resolves locally. On its first scan we ask Veloyd for
-    the visible channel order number, safely match one open barcode order, and
-    persist the unique tracking code for every subsequent lookup and final scan.
+    Veloyd labels may encode either the visible channel order number or a
+    track-and-trace value. A unique channel number resolves locally. Known
+    tracking codes also resolve locally; new tracking codes are resolved through
+    Veloyd and persisted for subsequent scans.
     """
     scanned_code = body.label_reference.strip()
     normalized_scanned = _normalize_tracking_code(scanned_code)
@@ -115,6 +161,20 @@ def open_order_by_label(
         return LabelOrderOpenResponse(
             order_id=known.id,
             tracking_code=known.veloyd_tracking_code,
+        )
+
+    direct_match = _require_unambiguous_label_order(
+        _find_open_orders_by_channel_reference(
+            db,
+            user,
+            scanned_code,
+            require_unlinked=False,
+        )
+    )
+    if direct_match:
+        return LabelOrderOpenResponse(
+            order_id=direct_match.id,
+            tracking_code=normalized_scanned,
         )
 
     try:
@@ -138,44 +198,20 @@ def open_order_by_label(
         _assert_openable_label_order(known, user)
         return LabelOrderOpenResponse(order_id=known.id, tracking_code=tracking_code)
 
-    query = (
-        db.query(Order)
-        .options(
-            joinedload(Order.organization),
-            joinedload(Order.lines).joinedload(OrderLine.sku),
-        )
-        .filter(
-            Order.channel_reference == veloyd_label.reference,
-            Order.status.in_(("active", "completed")),
-            Order.channel != "manual",
-        )
-    )
-    if (
-        not user.is_platform_admin
-        and user.role in ("owner", "member")
-    ):
-        query = query.filter(Order.organization_id == user.organization_id)
-
     # An order already linked to a different physical label cannot be the match.
     # This also disambiguates equal Shopify order numbers after either label has
     # been learned once.
-    candidates = [
-        order
-        for order in query.all()
-        if order.veloyd_tracking_code is None
-        and _is_barcode_order(order)
-        and order.organization
-        and "barcode_picking" in order.organization.modules
-    ]
-    if not candidates:
-        raise HTTPException(404, "Geen actieve EAN-order gevonden voor dit label")
-    if len(candidates) > 1:
-        raise HTTPException(
-            409,
-            "Meerdere open orders hebben dit ordernummer; kies de order handmatig",
+    order = _require_unambiguous_label_order(
+        _find_open_orders_by_channel_reference(
+            db,
+            user,
+            veloyd_label.reference,
+            require_unlinked=True,
         )
+    )
+    if not order:
+        raise HTTPException(404, "Geen actieve EAN-order gevonden voor dit label")
 
-    order = candidates[0]
     order.veloyd_tracking_code = tracking_code
     try:
         # Flush first so the unique index is checked before we report success.
