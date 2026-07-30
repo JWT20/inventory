@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
+import { useAuth, hasModule } from "@/lib/auth";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import {
@@ -36,6 +36,7 @@ interface InventoryItem {
   sku_name: string;
   active: boolean;
   attributes: Record<string, string>;
+  ean: string | null;
   default_price: number | null;
   quantity_on_hand: number;
   quantity_reserved: number;
@@ -83,9 +84,19 @@ export function InventoryPage() {
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<InventoryItem | null>(null);
   const needsOrganizationSelection = !!user && (user.is_platform_admin || user.role === "courier");
   const canViewPrices = !!user && user.role !== "courier";
+  // EAN orgs scan a barcode into the search box, so advertise it in the hint.
+  const canBarcode = hasModule(user, "barcode_picking");
+
+  // Debounce the search box so a scanner burst (or each keystroke) doesn't hit
+  // the server once per character.
+  useEffect(() => {
+    const t = window.setTimeout(() => setQuery(search.trim()), 300);
+    return () => window.clearTimeout(t);
+  }, [search]);
 
   const load = useCallback(async () => {
     if (needsOrganizationSelection && !selectedOrganizationId) {
@@ -96,7 +107,7 @@ export function InventoryPage() {
     try {
       setLoading(true);
       const params = new URLSearchParams();
-      if (search) params.set("search", search);
+      if (query) params.set("search", query);
       if (selectedOrganizationId) {
         params.set("organization_id", selectedOrganizationId);
       }
@@ -107,7 +118,7 @@ export function InventoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [needsOrganizationSelection, search, selectedOrganizationId]);
+  }, [needsOrganizationSelection, query, selectedOrganizationId]);
 
   useEffect(() => {
     load();
@@ -144,7 +155,11 @@ export function InventoryPage() {
       )}
 
       <Input
-        placeholder="Zoek op naam of leverancier..."
+        placeholder={
+          canBarcode
+            ? "Zoek op naam, EAN of leverancier..."
+            : "Zoek op naam of leverancier..."
+        }
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         className="mb-4"
@@ -199,6 +214,9 @@ export function InventoryPage() {
                         {item.attributes.wijntype ? `\u00B7 ${item.attributes.wijntype}` : ""}
                         {item.attributes.volume ? ` \u00B7 ${item.attributes.volume}ml` : ""}
                       </p>
+                      {item.ean && (
+                        <p className="text-sm text-muted-foreground">EAN {item.ean}</p>
+                      )}
                     </div>
                     <div className="text-right flex-shrink-0 ml-2">
                       <p

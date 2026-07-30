@@ -1260,10 +1260,13 @@ def inventory_overview(
             (InventoryBalance.quantity_on_hand - InventoryBalance.quantity_reserved) > 0
         )
 
-    if search:
-        like = f"%{search}%"
-        # Match on product name OR the name of the supplier (leverancier) the
-        # wine is sourced from, so typing a supplier name lists all its wines.
+    if search and search.strip():
+        # Strip so a handscanner that appends whitespace to the EAN still matches.
+        like = f"%{search.strip()}%"
+        # Match on product name, EAN, OR the name of the supplier (leverancier)
+        # the wine is sourced from, so typing a supplier name lists all its
+        # wines. Vision (wine) products have a NULL ean, so the EAN term is a
+        # no-op for them and needs no module gate.
         supplier_subq = (
             db.query(Supplier.id)
             .filter(
@@ -1274,6 +1277,7 @@ def inventory_overview(
         query = query.filter(
             or_(
                 SKU.name.ilike(like),
+                SKU.ean.ilike(like),
                 SKU.supplier_id.in_(supplier_subq),
             )
         )
@@ -1361,6 +1365,7 @@ def inventory_overview(
                 sku_name=sku.name,
                 active=sku.active,
                 attributes=sku.attributes_dict,
+                ean=sku.ean,
                 default_price=(
                     float(sku.default_price)
                     if can_view_prices and sku.default_price is not None
@@ -1411,6 +1416,7 @@ def update_default_price(
         sku_name=sku.name,
         active=sku.active,
         attributes=sku.attributes_dict,
+        ean=sku.ean,
         default_price=float(sku.default_price) if sku.default_price is not None else None,
         quantity_on_hand=balance.quantity_on_hand if balance else 0,
         quantity_reserved=balance.quantity_reserved if balance else 0,

@@ -998,6 +998,8 @@ class InventoryOverviewItem(BaseModel):
     sku_name: str = ""
     active: bool = True
     attributes: dict[str, str] = {}
+    # EAN-13 barcode; NULL for vision (wine) products.
+    ean: str | None = None
     default_price: float | None = None
     quantity_on_hand: int = 0
     quantity_reserved: int = 0

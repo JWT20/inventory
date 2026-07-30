@@ -4,6 +4,7 @@ from app.models import (
     Customer,
     CustomerSKU,
     InventoryBalance,
+    Organization,
     ReferenceImage,
     SKU,
     Supplier,
@@ -232,6 +233,111 @@ class TestInventoryScope:
         assert resp.status_code == 200
         codes = {row["sku_code"] for row in resp.json()}
         assert codes == {"WINE-NAME", "WINE-LINK"}
+
+
+class TestInventoryOverviewEanSearch:
+    """Barcode orgs look products up by scanning/typing the EAN."""
+
+    def _make_barcode_sku(self, db, org, *, code, name, ean):
+        sku = SKU(
+            sku_code=code,
+            name=name,
+            organization_id=org.id,
+            product_type="barcode",
+            ean=ean,
+        )
+        db.add(sku)
+        db.commit()
+        return sku
+
+    def test_search_by_full_ean(self, client, db, admin_token, sample_org):
+        self._make_barcode_sku(
+            db, sample_org, code="SOK-ZW-M", name="Wielersok zwart M",
+            ean="8712345678906",
+        )
+        self._make_barcode_sku(
+            db, sample_org, code="SOK-WI-M", name="Wielersok wit M",
+            ean="4006381333931",
+        )
+
+        resp = client.get(
+            f"/api/inventory/overview?organization_id={sample_org.id}"
+            "&search=8712345678906",
+            headers=auth_header(admin_token),
+        )
+
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert [row["sku_code"] for row in rows] == ["SOK-ZW-M"]
+        assert rows[0]["ean"] == "8712345678906"
+
+    def test_search_by_partial_ean(self, client, db, admin_token, sample_org):
+        self._make_barcode_sku(
+            db, sample_org, code="SOK-ZW-M", name="Wielersok zwart M",
+            ean="8712345678906",
+        )
+
+        resp = client.get(
+            f"/api/inventory/overview?organization_id={sample_org.id}&search=456789",
+            headers=auth_header(admin_token),
+        )
+
+        assert resp.status_code == 200
+        assert [row["sku_code"] for row in resp.json()] == ["SOK-ZW-M"]
+
+    def test_scanner_whitespace_is_trimmed(self, client, db, admin_token, sample_org):
+        self._make_barcode_sku(
+            db, sample_org, code="SOK-ZW-M", name="Wielersok zwart M",
+            ean="8712345678906",
+        )
+
+        resp = client.get(
+            f"/api/inventory/overview?organization_id={sample_org.id}"
+            "&search=%208712345678906%20",
+            headers=auth_header(admin_token),
+        )
+
+        assert resp.status_code == 200
+        assert [row["sku_code"] for row in resp.json()] == ["SOK-ZW-M"]
+
+    def test_ean_search_stays_within_organization(
+        self, client, db, admin_token, sample_org
+    ):
+        """The same EAN may exist at another merchant; it must not leak."""
+        other_org = Organization(name="Andere Handel", slug="andere-handel")
+        db.add(other_org)
+        db.commit()
+        db.refresh(other_org)
+        self._make_barcode_sku(
+            db, sample_org, code="SOK-MINE", name="Eigen sok",
+            ean="8712345678906",
+        )
+        self._make_barcode_sku(
+            db, other_org, code="SOK-THEIRS", name="Andermans sok",
+            ean="8712345678906",
+        )
+
+        resp = client.get(
+            f"/api/inventory/overview?organization_id={sample_org.id}"
+            "&search=8712345678906",
+            headers=auth_header(admin_token),
+        )
+
+        assert resp.status_code == 200
+        assert [row["sku_code"] for row in resp.json()] == ["SOK-MINE"]
+
+    def test_vision_products_keep_null_ean(self, client, db, admin_token, sample_org):
+        """Wines have no EAN, so the extra term can never match them."""
+        db.add(SKU(sku_code="WINE-1", name="Wijntje", organization_id=sample_org.id))
+        db.commit()
+
+        resp = client.get(
+            f"/api/inventory/overview?organization_id={sample_org.id}&search=871234",
+            headers=auth_header(admin_token),
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == []
 
 
 class TestReservedInventory:
