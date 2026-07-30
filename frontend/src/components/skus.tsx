@@ -85,6 +85,8 @@ const PAGE_SIZE = 50;
 export function SKUsPage() {
   const { user } = useAuth();
   const isCourier = user?.role === "courier";
+  // EAN orgs scan a barcode into the search box, so advertise it in the hint.
+  const canBarcode = hasModule(user, "barcode_picking");
   const [skus, setSkus] = useState<SKU[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -215,7 +217,11 @@ export function SKUsPage() {
 
       {!courierNeedsOrg && (
         <Input
-          placeholder="Zoek op naam, code, producent..."
+          placeholder={
+            canBarcode
+              ? "Zoek op naam, code, EAN, producent..."
+              : "Zoek op naam, code, producent..."
+          }
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="mb-4"
@@ -247,6 +253,11 @@ export function SKUsPage() {
                 </Badge>
               </div>
               <p className="text-sm text-muted-foreground">{s.sku_code}</p>
+              {s.product_type === "barcode" && s.ean && (
+                <p className="text-sm text-muted-foreground mt-1">
+                  EAN {s.ean}
+                </p>
+              )}
               {s.product_type !== "barcode" && (
                 <p className="text-sm text-muted-foreground mt-1">
                   {s.image_count} referentiebeeld
