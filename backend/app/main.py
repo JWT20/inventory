@@ -25,7 +25,21 @@ from app.services.autosync import autosync_loop
 from app.services.langfuse_client import get_langfuse, shutdown_langfuse
 from app.services.push_notifications import push_dispatch_loop
 from app.services.storage import storage, LocalStorage
-from app.routers import auth, channels, customers, inventory, locations, orders, picking, product_attributes, push, receiving, skus, suppliers
+from app.routers import (
+    auth,
+    channels,
+    customers,
+    integrations,
+    inventory,
+    locations,
+    orders,
+    picking,
+    product_attributes,
+    push,
+    receiving,
+    skus,
+    suppliers,
+)
 from app.routers.skus import sweep_stale_reference_images
 
 logging.basicConfig(level=logging.INFO)
@@ -206,6 +220,7 @@ app.include_router(product_attributes.router, prefix="/api")
 app.include_router(suppliers.router, prefix="/api")
 app.include_router(locations.router, prefix="/api")
 app.include_router(push.router, prefix="/api")
+app.include_router(integrations.router, prefix="/api")
 
 
 @app.get("/api/health")

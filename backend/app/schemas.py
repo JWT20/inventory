@@ -992,6 +992,15 @@ class InventoryBalanceResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AdviceStockItem(BaseModel):
+    sku_code: str = Field(..., min_length=1)
+    quantity_available: int = Field(..., ge=0)
+
+
+class AdviceStockResponse(BaseModel):
+    items: list[AdviceStockItem]
+
+
 class InventoryOverviewItem(BaseModel):
     sku_id: int
     sku_code: str = ""
