@@ -363,8 +363,9 @@ def list_skus(
     if search and search.strip():
         like = f"%{search.strip()}%"
         # Search server-side so wines beyond the current page are still found.
-        # Match name, SKU code, category, the producent attribute, or the
-        # supplier (leverancier) name.
+        # Match name, SKU code, EAN, category, the producent attribute, or the
+        # supplier (leverancier) name. Vision (wine) products have a NULL ean,
+        # so the EAN term is a no-op for them and needs no module gate.
         producent_subq = db.query(SKUAttribute.sku_id).filter(
             SKUAttribute.key == "producent",
             SKUAttribute.value.ilike(like),
@@ -374,6 +375,7 @@ def list_skus(
             or_(
                 SKU.name.ilike(like),
                 SKU.sku_code.ilike(like),
+                SKU.ean.ilike(like),
                 SKU.category.ilike(like),
                 SKU.id.in_(producent_subq),
                 SKU.supplier_id.in_(supplier_subq),

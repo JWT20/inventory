@@ -218,10 +218,10 @@ const orderIncomingDate = (order: Order): string =>
   order.ordered_at || order.created_at;
 
 const formatOrderIncomingDate = (order: Order): string =>
-  new Date(orderIncomingDate(order)).toLocaleDateString("nl-NL", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
+  new Date(orderIncomingDate(order)).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
   });
 
 interface CustomerSkuLine {
@@ -620,7 +620,7 @@ export function OrdersPage() {
         <span className="ml-auto flex gap-1">
           {o.pick_method === "barcode" ? (
             <Badge variant="secondary" className="text-xs px-1.5 py-0">
-              Binnengekomen {formatOrderIncomingDate(o)}
+              {formatOrderIncomingDate(o)}
             </Badge>
           ) : (
             getOrderDeliveryDays(o).map((day) => (
@@ -1751,7 +1751,7 @@ function OrderDetailDialog({
           </p>
           {order.pick_method === "barcode" && (
             <p className="text-sm text-muted-foreground">
-              Binnengekomen {formatOrderIncomingDate(order)}
+              {formatOrderIncomingDate(order)}
             </p>
           )}
           {!isCustomer && (

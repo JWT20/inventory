@@ -850,6 +850,14 @@ class ShipmentTextExtractRequest(BaseModel):
     document_type: Literal["pakbon", "invoice", "unknown"] = "unknown"
 
 
+class InboundBookedSKUResponse(BaseModel):
+    sku_id: int
+    sku_code: str = ""
+    sku_name: str = ""
+    quantity: int
+    is_bottle: bool = False
+
+
 class ShipmentLineResponse(BaseModel):
     id: int
     sku_id: int
@@ -857,6 +865,7 @@ class ShipmentLineResponse(BaseModel):
     sku_name: str = ""
     supplier_code: str | None = None
     quantity: int
+    is_bottle: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -871,6 +880,7 @@ class ShipmentResponse(BaseModel):
     booked_at: datetime | None
     booked_by: int | None
     lines: list[ShipmentLineResponse] = []
+    booked_skus: list[InboundBookedSKUResponse] = []
 
     model_config = {"from_attributes": True}
 
@@ -928,6 +938,7 @@ class InboundUploadAttemptResponse(BaseModel):
     bookable_line_count: int = 0
     booked_line_count: int = 0
     booked_quantity: int = 0
+    booked_skus: list[InboundBookedSKUResponse] = []
     created_at: datetime
     updated_at: datetime
 
@@ -996,6 +1007,8 @@ class InventoryOverviewItem(BaseModel):
     sku_name: str = ""
     active: bool = True
     attributes: dict[str, str] = {}
+    # EAN-13 barcode; NULL for vision (wine) products.
+    ean: str | None = None
     default_price: float | None = None
     quantity_on_hand: int = 0
     quantity_reserved: int = 0
@@ -1186,6 +1199,9 @@ class MonthlyBoxesMonth(BaseModel):
     boxes: int
     bottles: int = 0
     items: int = 0
+    # Orders/lines are counted for barcode products only — hence the item_ prefix.
+    item_order_count: int = 0
+    item_line_count: int = 0
 
 
 class MonthlyBoxesOrganization(BaseModel):
@@ -1194,6 +1210,8 @@ class MonthlyBoxesOrganization(BaseModel):
     total_boxes: int
     total_bottles: int = 0
     total_items: int = 0
+    total_item_orders: int = 0
+    total_item_lines: int = 0
     months: list[MonthlyBoxesMonth] = []
 
 

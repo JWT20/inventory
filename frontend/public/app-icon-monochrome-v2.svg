@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Wijndoos met wijnfles</title>
+  <rect width="512" height="512" rx="112" fill="#09090b"/>
+  <g fill="none" stroke="#f4f4f5" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M225 286v-54c0-20 10-37 27-48l8-5v-73h44v73l8 5c17 11 27 28 27 48v54"/>
+    <path d="M260 145h44"/>
+  </g>
+  <path d="m104 270 152 67 152-67v108l-152 68-152-68z" fill="#09090b" stroke="#f4f4f5" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="none" stroke="#f4f4f5" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M256 337v109"/>
+    <path d="m104 270 152-61 152 61"/>
+  </g>
+</svg>

@@ -59,8 +59,11 @@ class VeloydClient:
 
         if response.status_code == 401:
             raise VeloydError("Veloyd API-sleutel is ongeldig of nog niet geactiveerd")
-        if response.status_code == 404:
-            raise VeloydLabelMismatch("Label hoort bij een andere order")
+        if response.status_code == 404 or (
+            response.status_code == 400
+            and _is_missing_parcel_response(response)
+        ):
+            raise VeloydLabelMismatch("Label is niet bekend bij Veloyd")
         try:
             response.raise_for_status()
         except httpx.HTTPError as exc:
@@ -78,6 +81,20 @@ class VeloydClient:
             tracking_url=parcel.get("trackTraceLink") or None,
             carrier=parcel.get("carrier") or None,
         )
+
+
+def _is_missing_parcel_response(response: httpx.Response) -> bool:
+    """Recognize Veloyd's undocumented status for an unknown tracking code."""
+    try:
+        payload = response.json() or {}
+    except (TypeError, ValueError):
+        return False
+    description = str(payload.get("description") or "")
+    normalized_description = description.lower()
+    return (
+        "parcel with tracktrace:" in normalized_description
+        and "not found" in normalized_description
+    )
 
 
 def verify_veloyd_label(

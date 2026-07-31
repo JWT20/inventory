@@ -223,3 +223,65 @@ class TestEanRaceTranslatedTo400:
         )
         assert resp.status_code == 400
         assert "EAN" in resp.json()["detail"]
+
+
+class TestSearchByEan:
+    """The product list search box also matches the EAN, so barcode orgs can
+    scan a product to find it."""
+
+    def _create(self, client, token, **overrides):
+        resp = client.post(
+            "/api/skus", json=_barcode_payload(**overrides),
+            headers=auth_header(token),
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()
+
+    def test_search_by_full_ean(self, client, merchant_token):
+        sok = self._create(client, merchant_token)
+        self._create(
+            client, merchant_token,
+            sku_code="SOK-WI-M", name="Wielersok wit M", ean="4006381333931",
+        )
+
+        resp = client.get(
+            "/api/skus?search=8712345678906", headers=auth_header(merchant_token)
+        )
+
+        assert resp.status_code == 200
+        assert [s["id"] for s in resp.json()] == [sok["id"]]
+
+    def test_search_by_partial_ean(self, client, merchant_token):
+        sok = self._create(client, merchant_token)
+
+        resp = client.get(
+            "/api/skus?search=456789", headers=auth_header(merchant_token)
+        )
+
+        assert resp.status_code == 200
+        assert [s["id"] for s in resp.json()] == [sok["id"]]
+
+    def test_scanner_whitespace_is_trimmed(self, client, merchant_token):
+        sok = self._create(client, merchant_token)
+
+        resp = client.get(
+            "/api/skus?search=%208712345678906%20",
+            headers=auth_header(merchant_token),
+        )
+
+        assert resp.status_code == 200
+        assert [s["id"] for s in resp.json()] == [sok["id"]]
+
+    def test_ean_term_never_matches_wine(self, client, merchant_token):
+        """Vision products have a NULL ean, so an EAN term excludes them."""
+        wine = client.post(
+            "/api/skus", json=WINE_DATA, headers=auth_header(merchant_token)
+        )
+        assert wine.status_code == 201, wine.text
+
+        resp = client.get(
+            "/api/skus?search=871234", headers=auth_header(merchant_token)
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == []

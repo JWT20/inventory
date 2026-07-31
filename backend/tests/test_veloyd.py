@@ -78,3 +78,47 @@ def test_veloyd_unauthorized_key_has_actionable_error(monkeypatch):
 
     with pytest.raises(VeloydError, match="ongeldig of nog niet geactiveerd"):
         VeloydClient(api_key="test-key").parcel_by_tracking_number("VTEST")
+
+
+@pytest.mark.parametrize(
+    ("status_code", "payload"),
+    [
+        (
+            400,
+            {
+                "error": "UserError",
+                "description": "Parcel with trackTrace: VUNKNOWN not found",
+            },
+        ),
+        (404, {"error": "NotFound"}),
+    ],
+)
+def test_veloyd_unknown_tracking_is_label_mismatch(
+    monkeypatch, status_code, payload
+):
+    monkeypatch.setattr(
+        "app.services.veloyd.httpx.get",
+        lambda *args, **kwargs: FakeResponse(status_code, payload),
+    )
+
+    with pytest.raises(VeloydLabelMismatch, match="niet bekend bij Veloyd"):
+        VeloydClient(api_key="test-key").parcel_by_tracking_number("VUNKNOWN")
+
+
+@pytest.mark.parametrize(
+    ("status_code", "payload"),
+    [
+        (400, {"error": "UserError", "description": "Invalid request"}),
+        (500, {"error": "InternalServerError"}),
+    ],
+)
+def test_veloyd_other_upstream_errors_remain_service_errors(
+    monkeypatch, status_code, payload
+):
+    monkeypatch.setattr(
+        "app.services.veloyd.httpx.get",
+        lambda *args, **kwargs: FakeResponse(status_code, payload),
+    )
+
+    with pytest.raises(VeloydError, match="kon het label niet controleren"):
+        VeloydClient(api_key="test-key").parcel_by_tracking_number("VTEST")

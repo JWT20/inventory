@@ -148,6 +148,111 @@ def test_upload_attempt_tracks_draft_and_successful_stock_booking(
         reference_id=shipment_id,
     ).one()
     assert movement.quantity == 4
+    history = client.get(
+        "/api/inbound-uploads",
+        headers=auth_header(owner_token),
+    )
+    assert history.status_code == 200, history.text
+    assert history.json()[0]["booked_skus"] == [
+        {
+            "sku_id": sku.id,
+            "sku_code": "HISTORY-SKU",
+            "sku_name": "History wine",
+            "quantity": 4,
+            "is_bottle": False,
+        }
+    ]
+
+
+def test_upload_history_groups_booked_lines_and_preserves_units(
+    client, db, owner_token, owner_user
+):
+    box_sku = SKU(
+        sku_code="HISTORY-BOX",
+        name="Case wine",
+        organization_id=owner_user.organization_id,
+    )
+    bottle_sku = SKU(
+        sku_code="HISTORY-BOTTLE",
+        name="Loose bottle",
+        organization_id=owner_user.organization_id,
+        is_bottle=True,
+    )
+    db.add_all([box_sku, bottle_sku])
+    db.flush()
+    attempt = InboundUploadAttempt(
+        organization_id=owner_user.organization_id,
+        uploaded_by=owner_user.id,
+        source_type="text",
+        status="needs_action",
+        line_count=3,
+        bookable_line_count=3,
+    )
+    db.add(attempt)
+    db.commit()
+
+    created = client.post(
+        "/api/shipments",
+        headers=auth_header(owner_token),
+        json={
+            "upload_attempt_id": attempt.id,
+            "lines": [
+                {"sku_id": box_sku.id, "quantity": 2},
+                {"sku_id": box_sku.id, "quantity": 3},
+                {"sku_id": bottle_sku.id, "quantity": 4},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    booked = client.post(
+        f'/api/shipments/{created.json()["id"]}/book',
+        headers=auth_header(owner_token),
+    )
+    assert booked.status_code == 200, booked.text
+    assert [line["is_bottle"] for line in booked.json()["lines"]] == [
+        False,
+        False,
+        True,
+    ]
+    assert booked.json()["booked_skus"] == [
+        {
+            "sku_id": box_sku.id,
+            "sku_code": "HISTORY-BOX",
+            "sku_name": "Case wine",
+            "quantity": 5,
+            "is_bottle": False,
+        },
+        {
+            "sku_id": bottle_sku.id,
+            "sku_code": "HISTORY-BOTTLE",
+            "sku_name": "Loose bottle",
+            "quantity": 4,
+            "is_bottle": True,
+        },
+    ]
+
+    history = client.get(
+        "/api/inbound-uploads",
+        headers=auth_header(owner_token),
+    )
+    assert history.status_code == 200, history.text
+    assert history.json()[0]["booked_skus"] == [
+        {
+            "sku_id": box_sku.id,
+            "sku_code": "HISTORY-BOX",
+            "sku_name": "Case wine",
+            "quantity": 5,
+            "is_bottle": False,
+        },
+        {
+            "sku_id": bottle_sku.id,
+            "sku_code": "HISTORY-BOTTLE",
+            "sku_name": "Loose bottle",
+            "quantity": 4,
+            "is_bottle": True,
+        },
+    ]
 
 
 def test_missing_upload_attempt_id_recovers_unique_recent_hash_match(

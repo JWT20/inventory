@@ -268,8 +268,45 @@ interface InboundUploadAttempt {
   bookable_line_count: number;
   booked_line_count: number;
   booked_quantity: number;
+  booked_skus: InboundBookedSKU[];
   created_at: string;
   updated_at: string;
+}
+
+export interface InboundBookedSKU {
+  sku_id: number;
+  sku_code: string;
+  sku_name: string;
+  quantity: number;
+  is_bottle: boolean;
+}
+
+export function bookedQuantityLabel(line: InboundBookedSKU): string {
+  if (line.is_bottle) {
+    return `${line.quantity} ${line.quantity === 1 ? "fles" : "flessen"}`;
+  }
+  return `${line.quantity} ${line.quantity === 1 ? "doos" : "dozen"}`;
+}
+
+function BookedSkuRows({ skus }: { skus: InboundBookedSKU[] }) {
+  return (
+    <div className="mt-2 space-y-1 rounded-md border border-emerald-200 bg-emerald-50/60 p-2">
+      {skus.map((line) => (
+        <div
+          key={line.sku_id}
+          className="flex items-start justify-between gap-3 text-xs"
+        >
+          <div className="min-w-0">
+            <p className="font-medium text-foreground">{line.sku_code}</p>
+            <p className="truncate text-muted-foreground">{line.sku_name}</p>
+          </div>
+          <p className="shrink-0 font-semibold tabular-nums text-emerald-700">
+            +{bookedQuantityLabel(line)}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 const uploadStatus: Record<
@@ -316,6 +353,10 @@ export function InboundPage() {
   const [acceptedRemainderLines, setAcceptedRemainderLines] = useState<Set<number>>(new Set());
   const [uploadHistory, setUploadHistory] = useState<InboundUploadAttempt[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [lastBookedInbound, setLastBookedInbound] = useState<{
+    shipmentId: number;
+    skus: InboundBookedSKU[];
+  } | null>(null);
 
   const loadUploadHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -451,6 +492,7 @@ export function InboundPage() {
   }
 
   async function extractFromFile(file: File) {
+    setLastBookedInbound(null);
     setLoading(true);
     try {
       const data = await api.extractShipmentPreview(
@@ -474,6 +516,7 @@ export function InboundPage() {
       toast.error("Plak eerst de besteltekst.");
       return;
     }
+    setLastBookedInbound(null);
     setLoading(true);
     try {
       const data = await api.extractShipmentPreviewText(text, supplierName, documentType);
@@ -572,7 +615,13 @@ export function InboundPage() {
           throw err;
         }
       }
-      await api.bookShipment(created.id);
+      const booked = await api.bookShipment(created.id) as {
+        booked_skus: InboundBookedSKU[];
+      };
+      setLastBookedInbound({
+        shipmentId: created.id,
+        skus: booked.booked_skus || [],
+      });
       toast.success(`Inbound geboekt (pakbon #${created.id})`);
       setPreview(null);
       setSelectedLineIndex(null);
@@ -1090,6 +1139,17 @@ export function InboundPage() {
         </div>
       )}
 
+      {lastBookedInbound && (
+        <Card className="border-emerald-300 bg-emerald-50 p-3">
+          <p className="font-semibold text-emerald-900">
+            Voorraad bijgeboekt · Pakbon #{lastBookedInbound.shipmentId}
+          </p>
+          {lastBookedInbound.skus.length > 0 && (
+            <BookedSkuRows skus={lastBookedInbound.skus} />
+          )}
+        </Card>
+      )}
+
       <Card className="p-3">
         <div className="mb-3">
           <p className="font-semibold">Uploadhistorie</p>
@@ -1108,8 +1168,10 @@ export function InboundPage() {
                 attempt.reference ||
                 attempt.original_filename ||
                 (attempt.source_type === "text" ? "Geplakte tekst" : `Upload #${attempt.id}`);
-              const countText = attempt.status === "booked"
-                ? `${attempt.booked_line_count} regels · ${attempt.booked_quantity} eenheden`
+              const countText = attempt.status === "booked" && attempt.booked_skus.length > 0
+                ? `${attempt.booked_skus.length} ${attempt.booked_skus.length === 1 ? "SKU" : "SKU's"}`
+                : attempt.status === "booked"
+                  ? `${attempt.booked_line_count} regels · ${attempt.booked_quantity} eenheden`
                 : attempt.line_count > 0
                   ? `${attempt.line_count} regels · geen voorraad geboekt`
                   : "Geen voorraad geboekt";
@@ -1143,6 +1205,9 @@ export function InboundPage() {
                   </div>
                   {failureMessage && (
                     <p className="mt-1 text-xs text-red-700">{failureMessage}</p>
+                  )}
+                  {attempt.status === "booked" && attempt.booked_skus.length > 0 && (
+                    <BookedSkuRows skus={attempt.booked_skus} />
                   )}
                 </div>
               );

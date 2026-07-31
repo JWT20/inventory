@@ -346,6 +346,56 @@ def test_known_loose_label_opens_locally_without_veloyd(
     assert resp.json()["order_id"] == order.id
 
 
+def test_channel_reference_barcode_opens_order_without_veloyd(
+    client, db, courier_token, monkeypatch
+):
+    org = _barcode_org(db, "socks-open-reference")
+    sku = _make_barcode_sku(db, org, "SOK-OR", "8700000001906")
+    order, _ = _make_active_order(db, org, sku)
+    order.channel_reference = "1280"
+    db.commit()
+
+    def _unexpected(*_args, **_kwargs):
+        raise AssertionError("channel reference must resolve without Veloyd")
+
+    monkeypatch.setattr(
+        "app.routers.picking.VeloydClient.parcel_by_tracking_number", _unexpected
+    )
+
+    resp = _open_by_label(client, courier_token, "#1280")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"order_id": order.id, "tracking_code": "1280"}
+    db.refresh(order)
+    assert order.veloyd_tracking_code is None
+
+
+def test_channel_reference_barcode_blocks_ambiguous_orders(
+    client, db, courier_token, monkeypatch
+):
+    org_a = _barcode_org(db, "socks-open-reference-duplicate-a")
+    org_b = _barcode_org(db, "socks-open-reference-duplicate-b")
+    sku_a = _make_barcode_sku(db, org_a, "SOK-ORA", "8700000001907")
+    sku_b = _make_barcode_sku(db, org_b, "SOK-ORB", "8700000001908")
+    order_a, _ = _make_active_order(db, org_a, sku_a)
+    order_b, _ = _make_active_order(db, org_b, sku_b)
+    order_a.channel_reference = "1281"
+    order_b.channel_reference = "1281"
+    db.commit()
+
+    def _unexpected(*_args, **_kwargs):
+        raise AssertionError("ambiguous reference must not call Veloyd")
+
+    monkeypatch.setattr(
+        "app.routers.picking.VeloydClient.parcel_by_tracking_number", _unexpected
+    )
+
+    resp = _open_by_label(client, courier_token, "1281")
+
+    assert resp.status_code == 409
+    assert "Meerdere open orders" in resp.json()["detail"]
+
+
 def test_unknown_loose_veloyd_label_returns_404(
     client, db, courier_token, monkeypatch
 ):
