@@ -475,6 +475,22 @@ ssh deploy@<new-ip> "GEMINI_API_KEY='...' ADMIN_PASSWORD='...' DOMAIN='dockscan.
 resources (the running VPS is currently bootstrapped manually). See the
 comments in that file to enable `tofu apply`-based provisioning.
 
+### Enabling the advice stock feed on an existing VPS
+
+`deploy/create-env.sh` is intentionally only for a fresh server and refuses to
+overwrite an existing `/opt/wijnpick/.env`. On the running server, add or update
+these two lines in that existing file instead:
+
+```dotenv
+ADVICE_STOCK_API_KEY=<strong-new-shared-secret>
+ADVICE_STOCK_ORGANIZATION_ID=<numeric-organization-id>
+```
+
+Then restart only the backend from `/opt/wijnpick` with
+`docker compose up -d backend`. Do not run `create-env.sh` with `FORCE=1` merely
+to enable this integration, because replacing the full file also requires all
+existing production secrets to be supplied again.
+
 ## Testing
 
 ```bash

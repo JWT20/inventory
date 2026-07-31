@@ -43,6 +43,24 @@ def test_stock_endpoint_rejects_missing_or_invalid_key(
     assert wrong_scheme.status_code == 401
 
 
+def test_stock_endpoint_accepts_bearer_whitespace_variants(
+    client, sample_org, monkeypatch
+):
+    _configure(monkeypatch, sample_org.id)
+
+    double_space = client.get(
+        "/api/integrations/advice/stock",
+        headers={"Authorization": f"Bearer  {API_KEY}"},
+    )
+    tab = client.get(
+        "/api/integrations/advice/stock",
+        headers={"Authorization": f"Bearer\t{API_KEY}"},
+    )
+
+    assert double_space.status_code == 200
+    assert tab.status_code == 200
+
+
 def test_stock_endpoint_returns_only_configured_organization_bottles(
     client, db, sample_org, monkeypatch
 ):

@@ -22,8 +22,10 @@ def _authenticate_advice_stock_request(
     if not expected_key or organization_id is None:
         raise HTTPException(503, "Advice stock integration is not configured")
 
-    scheme, _, credentials = (authorization or "").partition(" ")
-    provided_key = credentials if scheme.lower() == "bearer" else ""
+    parts = (authorization or "").split(maxsplit=1)
+    provided_key = (
+        parts[1] if len(parts) == 2 and parts[0].lower() == "bearer" else ""
+    )
     provided_key = provided_key.encode("utf-8")
     if not secrets.compare_digest(provided_key, expected_key.encode("utf-8")):
         raise HTTPException(401, "Invalid inventory key")
