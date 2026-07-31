@@ -11,7 +11,7 @@ def _configure(monkeypatch, organization_id: int) -> None:
 
 
 def _headers(key: str = API_KEY) -> dict[str, str]:
-    return {"X-Inventory-Key": key}
+    return {"Authorization": f"Bearer {key}"}
 
 
 def test_stock_endpoint_requires_configuration(client, monkeypatch):
@@ -33,9 +33,14 @@ def test_stock_endpoint_rejects_missing_or_invalid_key(
         "/api/integrations/advice/stock",
         headers=_headers("wrong-key"),
     )
+    wrong_scheme = client.get(
+        "/api/integrations/advice/stock",
+        headers={"Authorization": f"Basic {API_KEY}"},
+    )
 
     assert missing.status_code == 401
     assert invalid.status_code == 401
+    assert wrong_scheme.status_code == 401
 
 
 def test_stock_endpoint_returns_only_configured_organization_bottles(
@@ -142,6 +147,59 @@ def test_stock_endpoint_returns_only_configured_organization_bottles(
             {"sku_code": "WIJN-001", "quantity_available": 8},
             {"sku_code": "WIJN-002", "quantity_available": 0},
             {"sku_code": "WIJN-003", "quantity_available": 0},
+            {"sku_code": "WIJN-004", "quantity_available": 0},
+        ]
+    }
+
+
+def test_stock_endpoint_keeps_case_distinct_skus(
+    client, db, sample_org, monkeypatch
+):
+    lower = SKU(
+        sku_code="wijn-case",
+        name="Wijn met kleine letters",
+        organization_id=sample_org.id,
+        is_bottle=True,
+        product_type="vision",
+    )
+    upper = SKU(
+        sku_code="WIJN-CASE",
+        name="Wijn met hoofdletters",
+        organization_id=sample_org.id,
+        is_bottle=True,
+        product_type="vision",
+    )
+    db.add_all([lower, upper])
+    db.flush()
+    db.add_all(
+        [
+            InventoryBalance(
+                sku_id=lower.id,
+                organization_id=sample_org.id,
+                quantity_on_hand=2,
+                quantity_reserved=0,
+            ),
+            InventoryBalance(
+                sku_id=upper.id,
+                organization_id=sample_org.id,
+                quantity_on_hand=3,
+                quantity_reserved=0,
+            ),
+        ]
+    )
+    db.commit()
+    _configure(monkeypatch, sample_org.id)
+
+    response = client.get(
+        "/api/integrations/advice/stock",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {"sku_code": "WIJN-CASE", "quantity_available": 3},
+            {"sku_code": "wijn-case", "quantity_available": 2},
         ]
     }
 

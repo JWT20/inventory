@@ -15,14 +15,16 @@ router = APIRouter(prefix="/integrations/advice", tags=["integrations"])
 
 
 def _authenticate_advice_stock_request(
-    x_inventory_key: str | None = Header(default=None, alias="X-Inventory-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> int:
     expected_key = settings.advice_stock_api_key
     organization_id = settings.advice_stock_organization_id
     if not expected_key or organization_id is None:
         raise HTTPException(503, "Advice stock integration is not configured")
 
-    provided_key = (x_inventory_key or "").encode("utf-8")
+    scheme, _, credentials = (authorization or "").partition(" ")
+    provided_key = credentials if scheme.lower() == "bearer" else ""
+    provided_key = provided_key.encode("utf-8")
     if not secrets.compare_digest(provided_key, expected_key.encode("utf-8")):
         raise HTTPException(401, "Invalid inventory key")
 
@@ -45,6 +47,7 @@ def advice_stock(
     rows = (
         db.query(
             SKU.sku_code,
+            SKU.active,
             InventoryBalance.quantity_on_hand,
             InventoryBalance.quantity_reserved,
         )
@@ -58,7 +61,6 @@ def advice_stock(
         .filter(
             SKU.organization_id == organization_id,
             SKU.is_bottle.is_(True),
-            SKU.active.is_(True),
         )
         .order_by(SKU.sku_code)
         .all()
@@ -69,11 +71,15 @@ def advice_stock(
         items=[
             AdviceStockItem(
                 sku_code=sku_code,
-                quantity_available=max(
-                    (quantity_on_hand or 0) - (quantity_reserved or 0),
-                    0,
+                quantity_available=(
+                    max(
+                        (quantity_on_hand or 0) - (quantity_reserved or 0),
+                        0,
+                    )
+                    if active
+                    else 0
                 ),
             )
-            for sku_code, quantity_on_hand, quantity_reserved in rows
+            for sku_code, active, quantity_on_hand, quantity_reserved in rows
         ]
     )
