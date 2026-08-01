@@ -158,12 +158,21 @@ export function CameraBarcodeScanner({
                 BarcodeFormat.PDF_417,
               ];
 
+        // A long Code 128 shipping label is roughly 195 modules wide, so 720p
+        // leaves about three pixels per module once the phone is held portrait
+        // — too little to survive motion blur. 1080p doubles that budget, and
+        // continuous focus stops the camera from locking on infinity in front
+        // of a plain white label. Both are best-effort: "ideal" degrades
+        // silently and an unsupported advanced constraint set is skipped
+        // instead of rejecting getUserMedia.
         const constraints: MediaStreamConstraints = {
           audio: false,
           video: {
             facingMode: { ideal: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            // @ts-expect-error focusMode lives in Image Capture, not lib.dom.
+            advanced: [{ focusMode: "continuous" }],
           },
         };
         stream = await navigator.mediaDevices.getUserMedia(constraints);
