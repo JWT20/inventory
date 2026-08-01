@@ -118,7 +118,14 @@ describe("CameraBarcodeScanner", () => {
     expect(dialog.className).not.toContain("sm:h-auto");
     expect(getUserMedia).toHaveBeenCalledWith(expect.objectContaining({
       audio: false,
-      video: expect.objectContaining({ facingMode: { ideal: "environment" } }),
+      video: expect.objectContaining({
+        facingMode: { ideal: "environment" },
+        // 1080p and continuous focus are what make long Code 128 labels
+        // decodable; keep them asserted so a cleanup cannot drop them.
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        advanced: [{ focusMode: "continuous" }],
+      }),
     }));
     expect(zxing.readers[0].hints.get("TRY_HARDER")).toBe(true);
     expect(zxing.readers[0].possibleFormats).toEqual(["EAN_13", "EAN_8"]);
