@@ -333,41 +333,6 @@ class SKUResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class AdviceProductLinkMapping(BaseModel):
-    sku_code: str = Field(..., min_length=1, max_length=50)
-    source_product_id: str = Field(..., min_length=1, max_length=100)
-
-    @field_validator("sku_code", "source_product_id")
-    @classmethod
-    def strip_link_value(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("Waarde mag niet leeg zijn")
-        return normalized
-
-
-class AdviceProductLinkImportRequest(BaseModel):
-    mappings: list[AdviceProductLinkMapping] = Field(..., min_length=1, max_length=5000)
-    dry_run: bool = True
-
-
-class AdviceProductLinkIssue(BaseModel):
-    code: str
-    message: str
-    sku_code: str | None = None
-    source_product_id: str | None = None
-
-
-class AdviceProductLinkImportResponse(BaseModel):
-    dry_run: bool
-    total: int
-    ready: bool
-    would_link: int
-    already_linked: int
-    applied: int
-    issues: list[AdviceProductLinkIssue]
-
-
 class SKUOption(BaseModel):
     """Lightweight SKU projection for pickers (no attributes/images).
 

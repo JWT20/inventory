@@ -95,6 +95,12 @@ Bestaande fles-SKU's kunnen via het normale SKU-update-endpoint een
 `source_product_id` krijgen. Dockscan weigert een koppeling aan een doos-SKU en
 weigert een ID dat binnen dezelfde organisatie al aan een andere fles hangt.
 
+In de interface: open **Producten**, bewerk de bestaande fles, plak het ID uit
+wijnadvies1 bij **Adviesproduct-ID** en sla op. De bestaande Dockscan-SKU-code
+blijft ongewijzigd. Herhaal dit voor alle bestaande flessen voordat de
+productfeed wordt ingeschakeld, zodat de eerste synchronisatie geen dubbele
+fles-SKU's kan aanmaken.
+
 ## Configuratie
 
 ```dotenv
