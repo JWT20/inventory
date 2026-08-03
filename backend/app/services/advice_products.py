@@ -8,6 +8,7 @@ idempotent snapshot for one configured organization and never touches box SKUs.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -194,10 +195,20 @@ def _wine_attributes(product: AdviceProduct) -> dict[str, str]:
     }
 
 
-def _new_bottle_sku_code(product: AdviceProduct) -> str:
+def _new_bottle_sku_code(
+    product: AdviceProduct,
+    *,
+    disambiguate: bool = False,
+) -> str:
     # Unit suffix is Dockscan's own human-readable convention. Identity and
     # idempotency never depend on it; source_product_id does that work.
-    return f"{generate_wine_sku_code(_wine_attributes(product))}-FLES"
+    base_code = generate_wine_sku_code(_wine_attributes(product))
+    if not disambiguate:
+        return f"{base_code}-FLES"
+    suffix = (
+        hashlib.sha256(product.source_product_id.encode()).hexdigest()[:8].upper()
+    )
+    return f"{base_code}-{suffix}-FLES"
 
 
 def _update_sku_from_product(
@@ -297,10 +308,15 @@ def sync_advice_products(
             else:
                 sku_code = _new_bottle_sku_code(product)
                 if db.query(SKU).filter(SKU.sku_code == sku_code).first() is not None:
-                    summary.conflicts.append(
-                        f"{product.source_product_id}: SKU-code {sku_code} bestaat al"
-                    )
-                    continue
+                    sku_code = _new_bottle_sku_code(product, disambiguate=True)
+                    if (
+                        db.query(SKU).filter(SKU.sku_code == sku_code).first()
+                        is not None
+                    ):
+                        summary.conflicts.append(
+                            f"{product.source_product_id}: SKU-code {sku_code} bestaat al"
+                        )
+                        continue
                 attrs = _wine_attributes(product)
                 sku = SKU(
                     sku_code=sku_code,

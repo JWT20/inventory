@@ -43,9 +43,12 @@ lege lijst, dubbele ID's, een contractfout of een HTTP-fout wordt geweigerd
 zonder bestaande producten te wijzigen.
 
 Een onbekend ID maakt een vision-wijn-SKU met `is_bottle=true`. Dockscan maakt
-daarvoor zelf een deterministische flescode. Een codeconflict wordt gemeld en
-niet samengevoegd. Een bekend ID werkt alleen naam, kenmerken en actieve status
-bij; de bestaande code en handmatig beheerde referentiebeelden blijven staan.
+daarvoor zelf een deterministische flescode. Als de korte leesbare code al
+bestaat, krijgt de nieuwe fles een stabiele suffix op basis van het product-ID.
+Ook die alternatieve code wordt op conflicten gecontroleerd; Dockscan voegt
+nooit automatisch twee producten samen. Een bekend ID werkt alleen naam,
+kenmerken en actieve status bij; de bestaande code en handmatig beheerde
+referentiebeelden blijven staan.
 Een gekoppeld ID dat in een geldig volledig snapshot ontbreekt, wordt inactief,
 maar nooit verwijderd.
 
