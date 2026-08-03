@@ -93,7 +93,7 @@ def test_product_sync_accepts_missing_producer_and_builds_a_clean_sku(
     }
 
 
-def test_missing_producer_still_uses_the_existing_code_conflict_guard(
+def test_code_collision_uses_a_stable_suffix_without_linking_the_existing_sku(
     db, sample_org
 ):
     existing = SKU(
@@ -113,12 +113,69 @@ def test_missing_producer_still_uses_the_existing_code_conflict_guard(
         import_images=False,
     )
 
+    created = db.query(SKU).filter(SKU.source_product_id == "prd-1").one()
+    assert summary.created == 1
+    assert summary.conflicts == []
+    assert created.sku_code == "GRAN-ROO-750-904C23D0-FLES"
+    assert db.query(SKU).count() == 2
+    assert db.get(SKU, existing.id).source_product_id is None
+
+
+def test_stable_suffix_keeps_the_existing_conflict_guard(db, sample_org):
+    db.add_all(
+        [
+            SKU(
+                sku_code="GRAN-ROO-750-FLES",
+                name="Bestaande basiscode",
+                organization_id=sample_org.id,
+                is_bottle=True,
+                product_type="vision",
+            ),
+            SKU(
+                sku_code="GRAN-ROO-750-904C23D0-FLES",
+                name="Bestaande alternatieve code",
+                organization_id=sample_org.id,
+                is_bottle=True,
+                product_type="vision",
+            ),
+        ]
+    )
+    db.commit()
+
+    summary = sync_advice_products(
+        db,
+        organization_id=sample_org.id,
+        client=FakeAdviceProductsClient([_product(producer=None)]),
+        import_images=False,
+    )
+
     assert summary.created == 0
     assert summary.conflicts == [
-        "prd-1: SKU-code GRAN-ROO-750-FLES bestaat al"
+        "prd-1: SKU-code GRAN-ROO-750-904C23D0-FLES bestaat al"
     ]
-    assert db.query(SKU).count() == 1
-    assert db.get(SKU, existing.id).source_product_id is None
+    assert db.query(SKU).count() == 2
+
+
+def test_same_snapshot_code_collision_creates_two_separate_skus(db, sample_org):
+    summary = sync_advice_products(
+        db,
+        organization_id=sample_org.id,
+        client=FakeAdviceProductsClient(
+            [_product("prd-1"), _product("prd-2")]
+        ),
+        import_images=False,
+    )
+
+    skus = {
+        sku.source_product_id: sku.sku_code
+        for sku in db.query(SKU).order_by(SKU.source_product_id).all()
+    }
+    assert summary.created == 2
+    assert summary.conflicts == []
+    assert skus == {
+        "prd-1": "CHAT-GRAN-ROO-750-FLES",
+        "prd-2": "CHAT-GRAN-ROO-750-23E83A12-FLES",
+    }
 
 
 def test_product_sync_is_idempotent_and_keeps_the_sku_code(db, sample_org):
@@ -244,7 +301,7 @@ def test_product_sync_deactivates_missing_linked_bottles(db, sample_org):
     assert db.get(SKU, unrelated_box.id).active is True
 
 
-def test_product_sync_reports_code_conflict_without_merging(db, sample_org):
+def test_product_sync_uses_suffix_without_merging_a_box(db, sample_org):
     box = SKU(
         sku_code="CHAT-GRAN-ROO-750-FLES",
         name="Bestaande andere SKU",
@@ -262,11 +319,12 @@ def test_product_sync_reports_code_conflict_without_merging(db, sample_org):
         import_images=False,
     )
 
-    assert summary.created == 0
-    assert summary.conflicts == [
-        "prd-1: SKU-code CHAT-GRAN-ROO-750-FLES bestaat al"
-    ]
-    assert db.query(SKU).count() == 1
+    bottle = db.query(SKU).filter(SKU.source_product_id == "prd-1").one()
+    assert summary.created == 1
+    assert summary.conflicts == []
+    assert bottle.sku_code == "CHAT-GRAN-ROO-750-904C23D0-FLES"
+    assert bottle.is_bottle is True
+    assert db.query(SKU).count() == 2
     assert db.get(SKU, box.id).source_product_id is None
 
 
