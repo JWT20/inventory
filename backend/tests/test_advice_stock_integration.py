@@ -73,6 +73,7 @@ def test_stock_endpoint_returns_only_configured_organization_bottles(
         name="Beschikbare wijn",
         organization_id=sample_org.id,
         is_bottle=True,
+        source_product_id="prd-wijn-001",
         product_type="vision",
     )
     zero_bottle = SKU(
@@ -162,10 +163,30 @@ def test_stock_endpoint_returns_only_configured_organization_bottles(
     assert response.headers["cache-control"] == "no-store"
     assert response.json() == {
         "items": [
-            {"sku_code": "WIJN-001", "quantity_available": 8},
-            {"sku_code": "WIJN-002", "quantity_available": 0},
-            {"sku_code": "WIJN-003", "quantity_available": 0},
-            {"sku_code": "WIJN-004", "quantity_available": 0},
+            {
+                "source_product_id": "prd-wijn-001",
+                "sku_code": "WIJN-001",
+                "is_bottle": True,
+                "quantity_available": 8,
+            },
+            {
+                "source_product_id": None,
+                "sku_code": "WIJN-002",
+                "is_bottle": True,
+                "quantity_available": 0,
+            },
+            {
+                "source_product_id": None,
+                "sku_code": "WIJN-003",
+                "is_bottle": True,
+                "quantity_available": 0,
+            },
+            {
+                "source_product_id": None,
+                "sku_code": "WIJN-004",
+                "is_bottle": True,
+                "quantity_available": 0,
+            },
         ]
     }
 
@@ -216,8 +237,18 @@ def test_stock_endpoint_keeps_case_distinct_skus(
     assert response.status_code == 200
     assert response.json() == {
         "items": [
-            {"sku_code": "WIJN-CASE", "quantity_available": 3},
-            {"sku_code": "wijn-case", "quantity_available": 2},
+            {
+                "source_product_id": None,
+                "sku_code": "WIJN-CASE",
+                "is_bottle": True,
+                "quantity_available": 3,
+            },
+            {
+                "source_product_id": None,
+                "sku_code": "wijn-case",
+                "is_bottle": True,
+                "quantity_available": 2,
+            },
         ]
     }
 

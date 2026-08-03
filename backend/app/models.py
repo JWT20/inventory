@@ -4,6 +4,7 @@ import json
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -203,6 +204,10 @@ class Supplier(Base):
 class SKU(Base):
     __tablename__ = "skus"
     __table_args__ = (
+        CheckConstraint(
+            "source_product_id IS NULL OR is_bottle = true",
+            name="ck_skus_advice_product_is_bottle",
+        ),
         Index("ix_skus_org_active_name", "organization_id", "active", "name"),
         # An EAN identifies one product within a merchant. Uniqueness is scoped
         # per organization (not global like sku_code) because the courier serves
@@ -216,6 +221,17 @@ class SKU(Base):
             unique=True,
             postgresql_where=text("ean IS NOT NULL"),
             sqlite_where=text("ean IS NOT NULL"),
+        ),
+        # The advice app owns this stable product-family id. Only bottle SKUs
+        # use it; uniqueness per merchant makes repeated product-feed imports
+        # idempotent without coupling unrelated organizations.
+        Index(
+            "uq_skus_org_source_product_id",
+            "organization_id",
+            "source_product_id",
+            unique=True,
+            postgresql_where=text("source_product_id IS NOT NULL"),
+            sqlite_where=text("source_product_id IS NOT NULL"),
         ),
     )
 
@@ -237,6 +253,9 @@ class SKU(Base):
     # True = ordered/scanned/booked per single bottle; False = per box.
     is_bottle: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false"), nullable=False
+    )
+    source_product_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
     )
     # How the product is identified. New products default to "barcode"; the
     # existing wine catalogue is backfilled to "vision" by the migration.

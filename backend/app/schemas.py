@@ -252,6 +252,7 @@ class SKUCreate(BaseModel):
     active: bool = True
     supplier_id: int | None = None
     is_bottle: bool = False
+    source_product_id: str | None = Field(default=None, max_length=100)
     # When omitted, the type is derived from the category below: wine → vision,
     # everything else → barcode (the new default, matching the model/migration).
     product_type: Literal["barcode", "vision"] | None = None
@@ -296,6 +297,7 @@ class SKUUpdate(BaseModel):
     active: bool | None = None
     supplier_id: int | None = None
     is_bottle: bool | None = None
+    source_product_id: str | None = Field(default=None, max_length=100)
     product_type: Literal["barcode", "vision"] | None = None
     # EAN format/uniqueness is validated in the endpoint, where the SKU's
     # product_type (existing or just-changed) and organization are known.
@@ -313,6 +315,7 @@ class SKUResponse(BaseModel):
     supplier_id: int | None = None
     supplier_name: str | None = None
     is_bottle: bool = False
+    source_product_id: str | None = None
     product_type: str = "vision"
     ean: str | None = None
     created_at: datetime
@@ -993,7 +996,9 @@ class InventoryBalanceResponse(BaseModel):
 
 
 class AdviceStockItem(BaseModel):
+    source_product_id: str | None = Field(default=None, min_length=1, max_length=100)
     sku_code: str = Field(..., min_length=1)
+    is_bottle: bool = True
     quantity_available: int = Field(..., ge=0)
 
 

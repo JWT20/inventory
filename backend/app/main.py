@@ -22,6 +22,7 @@ from app.database import Base, SessionLocal, engine
 from app.models import User
 from app.events import init_producer, shutdown_producer
 from app.services.autosync import autosync_loop
+from app.services.advice_products import advice_product_sync_loop
 from app.services.langfuse_client import get_langfuse, shutdown_langfuse
 from app.services.push_notifications import push_dispatch_loop
 from app.services.storage import storage, LocalStorage
@@ -162,6 +163,14 @@ async def lifespan(app: FastAPI):
             push_dispatch_loop(settings.push_dispatch_interval_seconds)
         )
 
+    advice_products_task = None
+    if settings.advice_products_sync_enabled:
+        advice_products_task = asyncio.create_task(
+            advice_product_sync_loop(
+                settings.advice_products_sync_interval_seconds
+            )
+        )
+
     yield
 
     # --- shutdown ---
@@ -175,6 +184,12 @@ async def lifespan(app: FastAPI):
         push_task.cancel()
         try:
             await push_task
+        except asyncio.CancelledError:
+            pass
+    if advice_products_task is not None:
+        advice_products_task.cancel()
+        try:
+            await advice_products_task
         except asyncio.CancelledError:
             pass
     shutdown_producer()

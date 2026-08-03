@@ -48,6 +48,7 @@ def advice_stock(
 
     rows = (
         db.query(
+            SKU.source_product_id,
             SKU.sku_code,
             SKU.active,
             InventoryBalance.quantity_on_hand,
@@ -72,7 +73,9 @@ def advice_stock(
     return AdviceStockResponse(
         items=[
             AdviceStockItem(
+                source_product_id=source_product_id,
                 sku_code=sku_code,
+                is_bottle=True,
                 quantity_available=(
                     max(
                         (quantity_on_hand or 0) - (quantity_reserved or 0),
@@ -82,6 +85,12 @@ def advice_stock(
                     else 0
                 ),
             )
-            for sku_code, active, quantity_on_hand, quantity_reserved in rows
+            for (
+                source_product_id,
+                sku_code,
+                active,
+                quantity_on_hand,
+                quantity_reserved,
+            ) in rows
         ]
     )

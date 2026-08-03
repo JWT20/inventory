@@ -210,6 +210,30 @@ class TestCreateSKU:
         assert resp.status_code == 201
         assert resp.json()["is_bottle"] is True
 
+    def test_advice_product_id_requires_bottle(self, client, merchant_token):
+        resp = client.post(
+            "/api/skus",
+            json={**WINE_DATA, "source_product_id": "prd-1"},
+            headers=auth_header(merchant_token),
+        )
+
+        assert resp.status_code == 400
+        assert "alleen aan een fles-SKU" in resp.json()["detail"]
+
+    def test_create_linked_bottle_sku(self, client, merchant_token):
+        resp = client.post(
+            "/api/skus",
+            json={
+                **WINE_DATA,
+                "is_bottle": True,
+                "source_product_id": "  prd-1  ",
+            },
+            headers=auth_header(merchant_token),
+        )
+
+        assert resp.status_code == 201
+        assert resp.json()["source_product_id"] == "prd-1"
+
 
 # ---------------------------------------------------------------------------
 # GET /api/skus/{id}
@@ -280,6 +304,28 @@ class TestUpdateSKU:
         )
         assert resp.status_code == 200
         assert resp.json()["is_bottle"] is False
+
+    def test_link_existing_bottle_and_prevent_box_conversion(
+        self, client, db, merchant_token, merchant_user, sample_sku
+    ):
+        sample_sku.organization_id = merchant_user.organization_id
+        sample_sku.is_bottle = True
+        db.commit()
+
+        linked = client.patch(
+            f"/api/skus/{sample_sku.id}",
+            json={"source_product_id": "prd-existing"},
+            headers=auth_header(merchant_token),
+        )
+        assert linked.status_code == 200
+        assert linked.json()["source_product_id"] == "prd-existing"
+
+        converted = client.patch(
+            f"/api/skus/{sample_sku.id}",
+            json={"is_bottle": False},
+            headers=auth_header(merchant_token),
+        )
+        assert converted.status_code == 400
 
     def test_update_nonexistent_sku(self, client, merchant_token):
         resp = client.patch(

@@ -48,6 +48,7 @@ interface SKU {
   supplier_id: number | null;
   supplier_name: string | null;
   is_bottle: boolean;
+  source_product_id: string | null;
   product_type: string;
   ean: string | null;
   image_count: number;
@@ -335,6 +336,7 @@ function SKUDialog({
   const [supplierId, setSupplierId] = useState<number | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [isBottle, setIsBottle] = useState(false);
+  const [sourceProductId, setSourceProductId] = useState("");
   // "vision" = wine (photo + AI); "barcode" = identified by its EAN scan.
   const [productType, setProductType] = useState<"vision" | "barcode">("vision");
   const [naam, setNaam] = useState("");
@@ -373,6 +375,7 @@ function SKUDialog({
       setVolume(a.volume || "");
       setSupplierId(sku.supplier_id ?? null);
       setIsBottle(sku.is_bottle ?? false);
+      setSourceProductId(sku.source_product_id ?? "");
       setProductType(sku.product_type === "barcode" ? "barcode" : "vision");
       setNaam(sku.name ?? "");
       setSkuCode(sku.sku_code ?? "");
@@ -386,6 +389,7 @@ function SKUDialog({
       setVolume("");
       setSupplierId(null);
       setIsBottle(false);
+      setSourceProductId("");
       setProductType(defaultProductType);
       setNaam("");
       setSkuCode("");
@@ -466,6 +470,7 @@ function SKUDialog({
           attributes: getAttributes(),
           supplier_id: supplierId,
           is_bottle: isBottle,
+          source_product_id: sourceProductId.trim() || null,
         });
         toast.success("SKU bijgewerkt");
       } else {
@@ -474,6 +479,7 @@ function SKUDialog({
           attributes: getAttributes(),
           supplier_id: supplierId,
           is_bottle: isBottle,
+          source_product_id: sourceProductId.trim() || null,
         });
         skuId = created.id;
         setCurrentId(skuId);
@@ -768,10 +774,24 @@ function SKUDialog({
                 <Switch
                   checked={isBottle}
                   onCheckedChange={setIsBottle}
-                  disabled={isCourier}
+                  disabled={isCourier || Boolean(sourceProductId)}
                 />
                 <Label className="text-xs">Dit product is een losse fles</Label>
               </div>
+              {isBottle && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Adviesproduct-ID</Label>
+                  <Input
+                    value={sourceProductId}
+                    onChange={(e) => setSourceProductId(e.target.value)}
+                    placeholder="prd_01H8..."
+                    disabled={isCourier}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Stabiele koppeling met de advies-app; leeg laten voor niet-gekoppelde flessen.
+                  </p>
+                </div>
+              )}
             </>
           )}
           {!isCourier && (

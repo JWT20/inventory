@@ -282,6 +282,7 @@ export const api = {
     active?: boolean;
     supplier_id?: number | null;
     is_bottle?: boolean;
+    source_product_id?: string | null;
     product_type?: "barcode" | "vision";
     ean?: string;
   }) => json("/skus", "POST", data),

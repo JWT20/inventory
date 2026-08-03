@@ -106,6 +106,21 @@ class Settings(BaseSettings):
     # server-side so callers can never select a different merchant.
     advice_stock_api_key: str = ""
     advice_stock_organization_id: int | None = None
+    # Hourly pull of the advice app's complete bottle-product snapshot. A
+    # separate outbound key keeps read access in each direction independently
+    # revocable. Empty base URL/key or interval 0 disables the puller.
+    advice_products_base_url: str = ""
+    advice_products_api_key: str = ""
+    advice_products_sync_interval_seconds: int = 3600
+
+    @property
+    def advice_products_sync_enabled(self) -> bool:
+        return bool(
+            self.advice_products_base_url.strip()
+            and self.advice_products_api_key
+            and self.advice_stock_organization_id is not None
+            and self.advice_products_sync_interval_seconds > 0
+        )
 
     @property
     def push_enabled(self) -> bool:
