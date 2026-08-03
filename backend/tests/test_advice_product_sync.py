@@ -302,6 +302,86 @@ def test_existing_reference_images_are_never_replaced(db, sample_org):
     assert db.query(ReferenceImage).filter(ReferenceImage.sku_id == sku.id).count() == 1
 
 
+def test_initial_feed_image_is_copied_and_activates_the_linked_bottle(
+    db, sample_org, monkeypatch
+):
+    sample_org.auto_inactivate_no_images = True
+    db.commit()
+
+    class ImageClient(FakeAdviceProductsClient):
+        def __init__(self):
+            super().__init__([
+                _product(image_url="https://advies.example/wijn.jpg")
+            ])
+            self.downloaded_urls = []
+
+        def download_image(self, url: str):
+            self.downloaded_urls.append(url)
+            return b"raw-image"
+
+    saved = {}
+
+    class FakeStorage:
+        def save(self, key: str, data: bytes):
+            saved[key] = data
+            return key
+
+    async def finish_processing(image_id, **kwargs):
+        image = db.get(ReferenceImage, image_id)
+        image.processing_status = "done"
+        recompute_active(db.get(SKU, image.sku_id), db)
+        db.commit()
+
+    client = ImageClient()
+    monkeypatch.setattr(
+        "app.services.advice_products.normalize_upload_to_jpeg",
+        lambda raw: b"normalized-jpeg",
+    )
+    monkeypatch.setattr("app.services.advice_products.storage", FakeStorage())
+    monkeypatch.setattr(
+        "app.routers.skus._process_reference_image", finish_processing
+    )
+
+    summary = sync_advice_products(
+        db,
+        organization_id=sample_org.id,
+        client=client,
+        import_images=True,
+    )
+
+    sku = db.query(SKU).filter(SKU.source_product_id == "prd-1").one()
+    image = db.query(ReferenceImage).filter(ReferenceImage.sku_id == sku.id).one()
+    assert summary.images_imported == 1
+    assert summary.image_errors == []
+    assert client.downloaded_urls == ["https://advies.example/wijn.jpg"]
+    assert saved == {image.image_path: b"normalized-jpeg"}
+    assert image.processing_status == "done"
+    assert sku.active is True
+
+
+def test_failed_initial_image_keeps_the_product_but_not_sellable(
+    db, sample_org
+):
+    sample_org.auto_inactivate_no_images = True
+    db.commit()
+
+    summary = sync_advice_products(
+        db,
+        organization_id=sample_org.id,
+        client=FakeAdviceProductsClient(
+            [_product(image_url="https://advies.example/wijn.jpg")]
+        ),
+        import_images=True,
+    )
+
+    sku = db.query(SKU).filter(SKU.source_product_id == "prd-1").one()
+    assert summary.created == 1
+    assert summary.images_imported == 0
+    assert summary.image_errors == ["prd-1: AssertionError"]
+    assert sku.source_active is True
+    assert sku.active is False
+
+
 def test_client_rejects_empty_or_duplicate_snapshots():
     responses = [
         {"products": []},
