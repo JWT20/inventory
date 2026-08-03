@@ -140,6 +140,7 @@ dev files are ever deployed to production.
 | `ADVICE_STOCK_ORGANIZATION_ID` | Organization exposed by the wine advice stock endpoint | `` (integration disabled) |
 | `ADVICE_PRODUCTS_BASE_URL` | Advice app origin used for the hourly bottle-product pull | `` (integration disabled) |
 | `ADVICE_PRODUCTS_API_KEY` | Outbound bearer key for the advice product feed | `` (integration disabled) |
+| `ADVICE_PRODUCTS_VERCEL_BYPASS_SECRET` | Only for a protected Vercel Preview base URL | `` (not sent) |
 | `ADVICE_PRODUCTS_SYNC_INTERVAL_SECONDS` | Product-feed polling interval; `0` disables polling | `3600` |
 | `DOMAIN` | Production domain (used for CORS) | `` (empty = dev mode) |
 

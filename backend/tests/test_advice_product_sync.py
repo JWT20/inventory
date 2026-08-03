@@ -2,6 +2,7 @@ import httpx
 import pytest
 
 from app.models import ReferenceImage, SKU
+from app.services.product_status import recompute_active
 from app.services.advice_products import (
     AdviceProduct,
     AdviceProductSnapshot,
@@ -98,10 +99,8 @@ def test_product_sync_is_idempotent_and_keeps_the_sku_code(db, sample_org):
     assert linked[0].attributes_dict["wijnaam"] == "Grand Vin Nieuwe Naam"
 
 
-def test_product_feed_owns_active_state_for_auto_inactivate_org(db, sample_org):
-    sample_org.auto_inactivate_no_images = True
-    db.commit()
-
+def test_product_feed_owns_active_state(db, sample_org):
+    """Without the image rule the feed's flag is written through verbatim."""
     sync_advice_products(
         db,
         organization_id=sample_org.id,
@@ -119,6 +118,44 @@ def test_product_feed_owns_active_state_for_auto_inactivate_org(db, sample_org):
     )
     assert summary.updated == 1
     assert db.get(SKU, sku.id).active is True
+
+
+def test_photoless_bottle_stays_inactive_for_auto_inactivate_org(db, sample_org):
+    """No usable image means not pickable and not sellable, feed or no feed."""
+    sample_org.auto_inactivate_no_images = True
+    db.commit()
+
+    sync_advice_products(
+        db,
+        organization_id=sample_org.id,
+        client=FakeAdviceProductsClient([_product(active=True)]),
+        import_images=False,
+    )
+
+    sku = db.query(SKU).filter(SKU.source_product_id == "prd-1").one()
+    assert sku.source_active is True
+    assert sku.active is False
+
+    db.add(
+        ReferenceImage(
+            sku_id=sku.id,
+            image_path="reference_images/laat-binnengekomen.jpg",
+            processing_status="done",
+        )
+    )
+    db.commit()
+    recompute_active(sku, db)
+    db.commit()
+    assert sku.active is True
+
+    # A feed deactivation still wins over a perfectly good photo.
+    sync_advice_products(
+        db,
+        organization_id=sample_org.id,
+        client=FakeAdviceProductsClient([_product(active=False)]),
+        import_images=False,
+    )
+    assert db.get(SKU, sku.id).active is False
 
 
 def test_product_sync_deactivates_missing_linked_bottles(db, sample_org):

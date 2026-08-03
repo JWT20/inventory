@@ -508,38 +508,45 @@ def import_advice_product_links(
     issues: list[AdviceProductLinkIssue] = []
     seen_skus: set[str] = set()
     seen_products: set[str] = set()
-    normalized: list[tuple[str, str, str]] = []
+    normalized: list[tuple[str, str]] = []
 
     for mapping in data.mappings:
-        sku_key = mapping.sku_code.casefold()
+        sku_code = mapping.sku_code
         product_id = mapping.source_product_id
-        if sku_key in seen_skus:
+        if sku_code in seen_skus:
             issues.append(AdviceProductLinkIssue(
                 code="duplicate_sku_code",
                 message="De SKU-code staat meer dan één keer in het bestand",
-                sku_code=mapping.sku_code,
+                sku_code=sku_code,
                 source_product_id=product_id,
             ))
         if product_id in seen_products:
             issues.append(AdviceProductLinkIssue(
                 code="duplicate_product_id",
                 message="Het adviesproduct-ID staat meer dan één keer in het bestand",
-                sku_code=mapping.sku_code,
+                sku_code=sku_code,
                 source_product_id=product_id,
             ))
-        seen_skus.add(sku_key)
+        seen_skus.add(sku_code)
         seen_products.add(product_id)
-        normalized.append((sku_key, mapping.sku_code, product_id))
+        normalized.append((sku_code, product_id))
 
+    # One organization may hold two SKUs whose codes differ only in case, so
+    # matching case-insensitively would link an arbitrary one of them. Fetch
+    # every case variant, then prefer the exact code; the loose match is only
+    # used when it is unambiguous.
     sku_rows = (
         db.query(SKU)
         .filter(
             SKU.organization_id == user.organization_id,
-            func.lower(SKU.sku_code).in_(list(seen_skus)),
+            func.lower(SKU.sku_code).in_([code.lower() for code in seen_skus]),
         )
         .all()
     )
-    skus_by_code = {sku.sku_code.casefold(): sku for sku in sku_rows}
+    skus_by_exact_code = {sku.sku_code: sku for sku in sku_rows}
+    skus_by_lower_code: dict[str, list[SKU]] = {}
+    for sku in sku_rows:
+        skus_by_lower_code.setdefault(sku.sku_code.lower(), []).append(sku)
 
     product_rows = (
         db.query(SKU)
@@ -552,9 +559,24 @@ def import_advice_product_links(
     skus_by_product = {sku.source_product_id: sku for sku in product_rows}
 
     candidates: list[tuple[SKU, str]] = []
+    claimed_sku_ids: dict[int, str] = {}
     already_linked = 0
-    for sku_key, sku_code, product_id in normalized:
-        sku = skus_by_code.get(sku_key)
+    for sku_code, product_id in normalized:
+        sku = skus_by_exact_code.get(sku_code)
+        if sku is None:
+            variants = skus_by_lower_code.get(sku_code.lower(), [])
+            if len(variants) > 1:
+                issues.append(AdviceProductLinkIssue(
+                    code="ambiguous_sku_code",
+                    message=(
+                        "Meerdere SKU's verschillen alleen in hoofdletters; "
+                        "neem de code exact over"
+                    ),
+                    sku_code=sku_code,
+                    source_product_id=product_id,
+                ))
+                continue
+            sku = variants[0] if variants else None
         if sku is None:
             issues.append(AdviceProductLinkIssue(
                 code="sku_not_found",
@@ -563,6 +585,18 @@ def import_advice_product_links(
                 source_product_id=product_id,
             ))
             continue
+        # Two differently-cased rows in the file can still resolve to the same
+        # SKU via the loose match; that is a conflict, not two links.
+        claimed_by = claimed_sku_ids.get(sku.id)
+        if claimed_by is not None and claimed_by != product_id:
+            issues.append(AdviceProductLinkIssue(
+                code="duplicate_sku_code",
+                message="Deze SKU krijgt meer dan één adviesproduct-ID toegewezen",
+                sku_code=sku.sku_code,
+                source_product_id=product_id,
+            ))
+            continue
+        claimed_sku_ids[sku.id] = product_id
         if not sku.is_bottle:
             issues.append(AdviceProductLinkIssue(
                 code="not_a_bottle",
@@ -607,6 +641,10 @@ def import_advice_product_links(
 
     for sku, product_id in candidates:
         sku.source_product_id = product_id
+        # Seed the feed flag from what the merchant already had, so linking a
+        # live bottle does not deactivate it in the window before the first
+        # snapshot arrives.
+        sku.source_active = sku.active
 
     try:
         db.commit()
@@ -707,6 +745,7 @@ def create_sku(
         supplier_id=data.supplier_id,
         is_bottle=data.is_bottle,
         source_product_id=source_product_id,
+        source_active=data.active if source_product_id else None,
         product_type=data.product_type,
         ean=data.ean,
     )
@@ -798,6 +837,9 @@ def update_sku(
 
     if "source_product_id" in changed_fields:
         sku.source_product_id = resulting_source_product_id
+        # Linking keeps the merchant's current availability until the first
+        # snapshot overwrites it; unlinking hands control back to them.
+        sku.source_active = sku.active if resulting_source_product_id else None
 
     product_type_changed = "product_type" in changed_fields and data.product_type is not None
     if product_type_changed:

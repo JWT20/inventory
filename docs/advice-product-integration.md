@@ -47,6 +47,14 @@ bij; de bestaande code en handmatig beheerde referentiebeelden blijven staan.
 Een gekoppeld ID dat in een geldig volledig snapshot ontbreekt, wordt inactief,
 maar nooit verwijderd.
 
+De advies-app bepaalt of een product commercieel beschikbaar is; Dockscan
+bewaart dat als `source_active`. Bij handelaren die de regel
+"zonder bruikbaar beeld inactief" aan hebben staan geldt een strengere eis: een
+gekoppelde fles is pas actief als de advies-app hem actief noemt **en** er een
+bruikbaar referentiebeeld is. Zonder beeld is de fles namelijk niet te scannen
+bij het picken en niet verkoopbaar in de webshop. Zodra een beeld alsnog binnen
+is en de analyse slaagt, gaat de fles vanzelf actief.
+
 Als een product nog geen referentiebeeld heeft en `image_url` aanwezig is,
 downloadt Dockscan één startbeeld, bewaart daarvan zelf een kopie en verwerkt
 het via de bestaande beeldanalyse. Daarna blijft Dockscan eigenaar van de

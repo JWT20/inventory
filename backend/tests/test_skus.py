@@ -333,6 +333,59 @@ class TestImportAdviceProductLinks:
         db.refresh(other)
         assert other.source_product_id is None
 
+    def test_linking_keeps_a_live_bottle_available(
+        self, client, db, merchant_token, merchant_user, sample_org
+    ):
+        """Linking must not deactivate a bottle before the first snapshot."""
+        sample_org.auto_inactivate_no_images = True
+        sku = self._bottle(db, merchant_user)
+        sku.active = True
+        db.commit()
+
+        resp = client.post(
+            "/api/skus/advice-product-links/import",
+            json={
+                "dry_run": False,
+                "mappings": [{"sku_code": "BOTTLE-1", "source_product_id": "prd-1"}],
+            },
+            headers=auth_header(merchant_token),
+        )
+
+        assert resp.status_code == 200
+        db.refresh(sku)
+        assert sku.source_active is True
+        assert sku.active is True
+
+    def test_case_variant_codes_are_never_guessed(
+        self, client, db, merchant_token, merchant_user
+    ):
+        upper = self._bottle(db, merchant_user, "WIJN-CASE")
+        lower = self._bottle(db, merchant_user, "wijn-case")
+
+        ambiguous = client.post(
+            "/api/skus/advice-product-links/import",
+            json={"mappings": [{"sku_code": "Wijn-Case", "source_product_id": "prd-1"}]},
+            headers=auth_header(merchant_token),
+        )
+        assert ambiguous.status_code == 200
+        assert ambiguous.json()["ready"] is False
+        assert ambiguous.json()["issues"][0]["code"] == "ambiguous_sku_code"
+
+        exact = client.post(
+            "/api/skus/advice-product-links/import",
+            json={
+                "dry_run": False,
+                "mappings": [{"sku_code": "wijn-case", "source_product_id": "prd-1"}],
+            },
+            headers=auth_header(merchant_token),
+        )
+        assert exact.status_code == 200
+        assert exact.json()["applied"] == 1
+        db.refresh(upper)
+        db.refresh(lower)
+        assert lower.source_product_id == "prd-1"
+        assert upper.source_product_id is None
+
     def test_courier_cannot_import(self, client, courier_token):
         resp = client.post(
             "/api/skus/advice-product-links/import",

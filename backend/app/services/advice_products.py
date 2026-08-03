@@ -211,9 +211,11 @@ def _update_sku_from_product(
         part for part in [product.producer, product.name, product.vintage] if part
     )
     sku.set_attributes(attrs)
+    sku.source_active = product.active
     sku.active = product.active
-    if product.active:
-        recompute_active(sku, db)
+    # Organizations that auto-inactivate lower this again when the bottle has
+    # no usable reference image; for everyone else the feed value stands.
+    recompute_active(sku, db)
 
 
 def _copy_initial_reference_image(
@@ -313,6 +315,7 @@ def sync_advice_products(
                     organization_id=organization_id,
                     is_bottle=True,
                     source_product_id=product.source_product_id,
+                    source_active=product.active,
                     product_type="vision",
                 )
                 sku.set_attributes(attrs)

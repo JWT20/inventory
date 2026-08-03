@@ -257,6 +257,10 @@ class SKU(Base):
     source_product_id: Mapped[str | None] = mapped_column(
         String(100), nullable=True
     )
+    # What the advice app last said about commercial availability. NULL for
+    # unlinked SKUs. Kept separate from `active` because a linked bottle is only
+    # sellable when the feed wants it *and* it has a usable reference image.
+    source_active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # How the product is identified. New products default to "barcode"; the
     # existing wine catalogue is backfilled to "vision" by the migration.
     product_type: Mapped[str] = mapped_column(

@@ -158,17 +158,51 @@ class TestRecomputeActive:
         db.commit()
         assert sku.active is True
 
-    def test_advice_linked_sku_keeps_feed_status(self, db):
+    def _linked_sku(self, db, code: str, *, source_active: bool):
         org = _make_org(db, auto_inactivate=True)
-        sku = _make_sku(db, org, "S-FEED", active=False, complete=True)
+        # complete=True so the ordinary "complete is enough" branch would
+        # activate it — linked bottles must not take that shortcut.
+        sku = _make_sku(db, org, code, active=False, complete=True)
         sku.is_bottle = True
-        sku.source_product_id = "prd-feed"
+        sku.source_product_id = f"prd-{code.lower()}"
+        sku.source_active = source_active
         db.commit()
+        return sku
+
+    def test_advice_linked_sku_stays_inactive_when_feed_says_so(self, db):
+        sku = self._linked_sku(db, "S-FEED-OFF", source_active=False)
+        _add_image(db, sku, status="done")
 
         recompute_active(sku, db)
         db.commit()
 
         assert sku.active is False
+
+    def test_advice_linked_sku_needs_an_image_to_go_active(self, db):
+        sku = self._linked_sku(db, "S-FEED-ON", source_active=True)
+
+        recompute_active(sku, db)
+        db.commit()
+        assert sku.active is False
+
+        _add_image(db, sku, status="done")
+        recompute_active(sku, db)
+        db.commit()
+        assert sku.active is True
+
+    def test_advice_linked_sku_is_left_alone_without_the_rule(self, db):
+        org = _make_org(db, auto_inactivate=False)
+        sku = _make_sku(db, org, "S-FEED-MANUAL", active=True, complete=True)
+        sku.is_bottle = True
+        sku.source_product_id = "prd-manual"
+        sku.source_active = True
+        db.commit()
+
+        recompute_active(sku, db)
+        db.commit()
+
+        # No image, but the rule does not apply → the feed's value stands.
+        assert sku.active is True
 
 
 # ---------------------------------------------------------------------------
