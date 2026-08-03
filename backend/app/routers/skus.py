@@ -4,7 +4,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
-from sqlalchemy import or_, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -31,6 +31,9 @@ from app.schemas import (
     WINE_ATTRIBUTE_KEYS,
     ReferenceImageResponse,
     ReferenceImageStatusResponse,
+    AdviceProductLinkImportRequest,
+    AdviceProductLinkImportResponse,
+    AdviceProductLinkIssue,
     SKUCreate,
     SKUOption,
     SKUResponse,
@@ -484,6 +487,153 @@ def list_sku_options(
         )
         for r in rows
     ]
+
+
+@router.post(
+    "/advice-product-links/import",
+    response_model=AdviceProductLinkImportResponse,
+)
+def import_advice_product_links(
+    data: AdviceProductLinkImportRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    """Preview or atomically apply links to existing bottle SKUs only."""
+    if user.organization_id is None:
+        raise HTTPException(
+            400,
+            "Kies een organisatie-account om adviesproducten te koppelen",
+        )
+
+    issues: list[AdviceProductLinkIssue] = []
+    seen_skus: set[str] = set()
+    seen_products: set[str] = set()
+    normalized: list[tuple[str, str, str]] = []
+
+    for mapping in data.mappings:
+        sku_key = mapping.sku_code.casefold()
+        product_id = mapping.source_product_id
+        if sku_key in seen_skus:
+            issues.append(AdviceProductLinkIssue(
+                code="duplicate_sku_code",
+                message="De SKU-code staat meer dan één keer in het bestand",
+                sku_code=mapping.sku_code,
+                source_product_id=product_id,
+            ))
+        if product_id in seen_products:
+            issues.append(AdviceProductLinkIssue(
+                code="duplicate_product_id",
+                message="Het adviesproduct-ID staat meer dan één keer in het bestand",
+                sku_code=mapping.sku_code,
+                source_product_id=product_id,
+            ))
+        seen_skus.add(sku_key)
+        seen_products.add(product_id)
+        normalized.append((sku_key, mapping.sku_code, product_id))
+
+    sku_rows = (
+        db.query(SKU)
+        .filter(
+            SKU.organization_id == user.organization_id,
+            func.lower(SKU.sku_code).in_(list(seen_skus)),
+        )
+        .all()
+    )
+    skus_by_code = {sku.sku_code.casefold(): sku for sku in sku_rows}
+
+    product_rows = (
+        db.query(SKU)
+        .filter(
+            SKU.organization_id == user.organization_id,
+            SKU.source_product_id.in_(list(seen_products)),
+        )
+        .all()
+    )
+    skus_by_product = {sku.source_product_id: sku for sku in product_rows}
+
+    candidates: list[tuple[SKU, str]] = []
+    already_linked = 0
+    for sku_key, sku_code, product_id in normalized:
+        sku = skus_by_code.get(sku_key)
+        if sku is None:
+            issues.append(AdviceProductLinkIssue(
+                code="sku_not_found",
+                message="Deze SKU bestaat niet binnen jouw organisatie",
+                sku_code=sku_code,
+                source_product_id=product_id,
+            ))
+            continue
+        if not sku.is_bottle:
+            issues.append(AdviceProductLinkIssue(
+                code="not_a_bottle",
+                message="Deze SKU is geen losse fles",
+                sku_code=sku.sku_code,
+                source_product_id=product_id,
+            ))
+            continue
+        if sku.source_product_id == product_id:
+            already_linked += 1
+            continue
+        if sku.source_product_id is not None:
+            issues.append(AdviceProductLinkIssue(
+                code="sku_already_linked",
+                message="Deze SKU is al aan een ander adviesproduct gekoppeld",
+                sku_code=sku.sku_code,
+                source_product_id=product_id,
+            ))
+            continue
+        linked_sku = skus_by_product.get(product_id)
+        if linked_sku is not None and linked_sku.id != sku.id:
+            issues.append(AdviceProductLinkIssue(
+                code="product_already_linked",
+                message=f"Dit adviesproduct is al gekoppeld aan {linked_sku.sku_code}",
+                sku_code=sku.sku_code,
+                source_product_id=product_id,
+            ))
+            continue
+        candidates.append((sku, product_id))
+
+    ready = len(issues) == 0
+    if data.dry_run or not ready:
+        return AdviceProductLinkImportResponse(
+            dry_run=data.dry_run,
+            total=len(data.mappings),
+            ready=ready,
+            would_link=len(candidates),
+            already_linked=already_linked,
+            applied=0,
+            issues=issues,
+        )
+
+    for sku, product_id in candidates:
+        sku.source_product_id = product_id
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if _is_source_product_unique_violation(exc):
+            raise HTTPException(
+                409,
+                "Een adviesproduct is intussen al gekoppeld; voer de controle opnieuw uit",
+            )
+        raise
+
+    publish_event(
+        "advice_product_links_imported",
+        details={"count": len(candidates), "already_linked": already_linked},
+        user=user,
+        resource_type="sku",
+    )
+    return AdviceProductLinkImportResponse(
+        dry_run=False,
+        total=len(data.mappings),
+        ready=True,
+        would_link=0,
+        already_linked=already_linked,
+        applied=len(candidates),
+        issues=[],
+    )
 
 
 def _assert_org_supports_product_type(

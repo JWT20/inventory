@@ -10,6 +10,28 @@ export class ApiError extends Error {
   }
 }
 
+export type AdviceProductLinkMapping = {
+  sku_code: string;
+  source_product_id: string;
+};
+
+export type AdviceProductLinkIssue = {
+  code: string;
+  message: string;
+  sku_code: string | null;
+  source_product_id: string | null;
+};
+
+export type AdviceProductLinkImportResult = {
+  dry_run: boolean;
+  total: number;
+  ready: boolean;
+  would_link: number;
+  already_linked: number;
+  applied: number;
+  issues: AdviceProductLinkIssue[];
+};
+
 function getToken(): string | null {
   return localStorage.getItem("token");
 }
@@ -291,6 +313,14 @@ export const api = {
     json(`/skus/${id}`, "PATCH", data),
   deleteSKU: (id: number, force = false) =>
     request(`/skus/${id}${force ? "?force=true" : ""}`, { method: "DELETE" }),
+  importAdviceProductLinks: (
+    mappings: AdviceProductLinkMapping[],
+    dryRun: boolean,
+  ): Promise<AdviceProductLinkImportResult> =>
+    json("/skus/advice-product-links/import", "POST", {
+      mappings,
+      dry_run: dryRun,
+    }),
 
   // Reference images
   listImages: (skuId: number) => request(`/skus/${skuId}/images`),

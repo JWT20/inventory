@@ -236,6 +236,121 @@ class TestCreateSKU:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/skus/advice-product-links/import
+# ---------------------------------------------------------------------------
+
+class TestImportAdviceProductLinks:
+    @staticmethod
+    def _bottle(db, merchant_user, code="BOTTLE-1", source_product_id=None):
+        from app.models import SKU
+        sku = SKU(
+            sku_code=code,
+            name=code,
+            organization_id=merchant_user.organization_id,
+            is_bottle=True,
+            source_product_id=source_product_id,
+            product_type="vision",
+        )
+        db.add(sku)
+        db.commit()
+        db.refresh(sku)
+        return sku
+
+    def test_preview_does_not_write(self, client, db, merchant_token, merchant_user):
+        sku = self._bottle(db, merchant_user)
+        resp = client.post(
+            "/api/skus/advice-product-links/import",
+            json={"dry_run": True, "mappings": [{"sku_code": "BOTTLE-1", "source_product_id": "prd-1"}]},
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ready"] is True
+        assert resp.json()["would_link"] == 1
+        db.refresh(sku)
+        assert sku.source_product_id is None
+
+    def test_apply_links_existing_bottle(self, client, db, merchant_token, merchant_user):
+        sku = self._bottle(db, merchant_user)
+        resp = client.post(
+            "/api/skus/advice-product-links/import",
+            json={"dry_run": False, "mappings": [{"sku_code": "bottle-1", "source_product_id": "prd-1"}]},
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["applied"] == 1
+        db.refresh(sku)
+        assert sku.source_product_id == "prd-1"
+
+    def test_one_problem_prevents_every_write(self, client, db, merchant_token, merchant_user):
+        sku = self._bottle(db, merchant_user)
+        resp = client.post(
+            "/api/skus/advice-product-links/import",
+            json={
+                "dry_run": False,
+                "mappings": [
+                    {"sku_code": "BOTTLE-1", "source_product_id": "prd-1"},
+                    {"sku_code": "DOES-NOT-EXIST", "source_product_id": "prd-2"},
+                ],
+            },
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ready"] is False
+        assert resp.json()["applied"] == 0
+        assert resp.json()["issues"][0]["code"] == "sku_not_found"
+        db.refresh(sku)
+        assert sku.source_product_id is None
+
+    def test_rejects_box_and_duplicate_product(self, client, db, merchant_token, merchant_user):
+        from app.models import SKU
+        linked = self._bottle(db, merchant_user, "BOTTLE-1", "prd-1")
+        box = SKU(
+            sku_code="BOX-1",
+            name="Box",
+            organization_id=merchant_user.organization_id,
+            is_bottle=False,
+            product_type="vision",
+        )
+        other = self._bottle(db, merchant_user, "BOTTLE-2")
+        db.add(box)
+        db.commit()
+
+        resp = client.post(
+            "/api/skus/advice-product-links/import",
+            json={
+                "mappings": [
+                    {"sku_code": "BOX-1", "source_product_id": "prd-box"},
+                    {"sku_code": "BOTTLE-2", "source_product_id": "prd-1"},
+                ],
+            },
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 200
+        assert {issue["code"] for issue in resp.json()["issues"]} == {
+            "not_a_bottle", "product_already_linked"
+        }
+        db.refresh(linked)
+        db.refresh(other)
+        assert other.source_product_id is None
+
+    def test_courier_cannot_import(self, client, courier_token):
+        resp = client.post(
+            "/api/skus/advice-product-links/import",
+            json={"mappings": [{"sku_code": "BOTTLE-1", "source_product_id": "prd-1"}]},
+            headers=auth_header(courier_token),
+        )
+        assert resp.status_code == 403
+
+    def test_blank_values_are_rejected(self, client, merchant_token):
+        resp = client.post(
+            "/api/skus/advice-product-links/import",
+            json={"mappings": [{"sku_code": "   ", "source_product_id": "prd-1"}]},
+            headers=auth_header(merchant_token),
+        )
+        assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # GET /api/skus/{id}
 # ---------------------------------------------------------------------------
 

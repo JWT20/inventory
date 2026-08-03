@@ -24,6 +24,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { AlertCircle, Loader2 } from "lucide-react";
+import { AdviceProductLinkImport } from "@/components/advice-product-link-import";
 
 interface Supplier {
   id: number;
@@ -189,9 +190,12 @@ export function SKUsPage() {
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Producten</h2>
         {user && user.role !== "courier" && (
-          <Button size="sm" onClick={() => setShowNew(true)}>
-            + Nieuw
-          </Button>
+          <div className="flex items-center gap-2">
+            <AdviceProductLinkImport onApplied={() => void load()} />
+            <Button size="sm" onClick={() => setShowNew(true)}>
+              + Nieuw
+            </Button>
+          </div>
         )}
       </div>
 
