@@ -76,9 +76,13 @@ def _has_usable_image(sku: SKU, db: Session) -> bool:
 def recompute_active(sku: SKU, db: Session) -> None:
     """Recompute SKU.active for opted-in organizations.
 
-    No-op for SKUs whose organization has not enabled the rule, so other
-    tenants keep manual control of their active flag.
+    Advice-linked bottle SKUs are governed by the complete product snapshot;
+    their commercial active flag must not be overwritten by local completeness
+    or image-processing transitions. For all other SKUs this is a no-op when
+    the organization has not enabled the rule, preserving manual control.
     """
+    if sku.source_product_id:
+        return
     if not org_auto_inactivates_without_images(sku.organization):
         return
 

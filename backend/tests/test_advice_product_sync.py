@@ -98,6 +98,29 @@ def test_product_sync_is_idempotent_and_keeps_the_sku_code(db, sample_org):
     assert linked[0].attributes_dict["wijnaam"] == "Grand Vin Nieuwe Naam"
 
 
+def test_product_feed_owns_active_state_for_auto_inactivate_org(db, sample_org):
+    sample_org.auto_inactivate_no_images = True
+    db.commit()
+
+    sync_advice_products(
+        db,
+        organization_id=sample_org.id,
+        client=FakeAdviceProductsClient([_product(active=False)]),
+        import_images=False,
+    )
+    sku = db.query(SKU).filter(SKU.source_product_id == "prd-1").one()
+    assert sku.active is False
+
+    summary = sync_advice_products(
+        db,
+        organization_id=sample_org.id,
+        client=FakeAdviceProductsClient([_product(active=True)]),
+        import_images=False,
+    )
+    assert summary.updated == 1
+    assert db.get(SKU, sku.id).active is True
+
+
 def test_product_sync_deactivates_missing_linked_bottles(db, sample_org):
     missing = SKU(
         sku_code="OUD-FLES",

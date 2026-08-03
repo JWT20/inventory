@@ -158,6 +158,18 @@ class TestRecomputeActive:
         db.commit()
         assert sku.active is True
 
+    def test_advice_linked_sku_keeps_feed_status(self, db):
+        org = _make_org(db, auto_inactivate=True)
+        sku = _make_sku(db, org, "S-FEED", active=False, complete=True)
+        sku.is_bottle = True
+        sku.source_product_id = "prd-feed"
+        db.commit()
+
+        recompute_active(sku, db)
+        db.commit()
+
+        assert sku.active is False
+
 
 # ---------------------------------------------------------------------------
 # PATCH /api/skus/{id} flips a finished concept to active (no photo needed)
