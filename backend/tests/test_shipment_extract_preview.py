@@ -530,8 +530,8 @@ def test_extract_preview_uses_own_organization_mapping(
     assert body["lines"][0]["matched_sku_code"] == "ORG-A-WINE"
 
 
-def test_extract_preview_llm_matches_when_supplier_code_missing(
-    client, db, admin_token, sample_sku, tmp_path
+def test_extract_preview_requires_manual_link_when_supplier_code_missing(
+    client, admin_token, tmp_path
 ):
     mocked = {
         "supplier_name": "Anfors",
@@ -549,7 +549,6 @@ def test_extract_preview_llm_matches_when_supplier_code_missing(
     }
 
     with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
-         patch("app.routers.inventory.match_shipment_article_name", new=AsyncMock(return_value=(sample_sku.sku_code, 0.86))), \
          patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
         resp = client.post(
             "/api/shipments/extract-preview",
@@ -560,45 +559,13 @@ def test_extract_preview_llm_matches_when_supplier_code_missing(
 
     assert resp.status_code == 200
     body = resp.json()
+    assert body["lines"][0]["matched_sku_id"] is None
     assert body["lines"][0]["matched_sku_code"] is None
+    assert body["lines"][0]["matched_sku_name"] is None
     assert body["lines"][0]["needs_confirmation"] is True
-    assert body["lines"][0]["match_source"] == "llm_suggestion"
-    assert body["lines"][0]["candidate_matches"][0]["sku_code"] == sample_sku.sku_code
-    assert body["lines"][0]["confidence"] == 0.86
-
-
-def test_extract_preview_llm_low_confidence_does_not_autolink(
-    client, db, admin_token, sample_sku, tmp_path
-):
-    mocked = {
-        "supplier_name": "Anfors",
-        "reference": "PKB-778",
-        "document_type": "pakbon",
-        "raw_text": "sample",
-        "lines": [
-            {
-                "supplier_code": "",
-                "description": "Another product name",
-                "quantity_boxes": 3,
-                "confidence": 0.2,
-            }
-        ],
-    }
-
-    with patch("app.routers.inventory.extract_shipment_document", new=AsyncMock(return_value=mocked)), \
-         patch("app.routers.inventory.match_shipment_article_name", new=AsyncMock(return_value=(sample_sku.sku_code, 0.41))), \
-         patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
-        resp = client.post(
-            "/api/shipments/extract-preview",
-            headers=auth_header(admin_token),
-            files={"file": ("pakbon.jpg", b"fake-image", "image/jpeg")},
-            data={"document_type": "pakbon"},
-        )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["lines"][0]["matched_sku_code"] is None
-    assert body["lines"][0]["needs_confirmation"] is True
+    assert body["lines"][0]["match_source"] == "unresolved"
+    assert body["lines"][0]["candidate_matches"] == []
+    assert body["lines"][0]["confidence"] == 0.2
 
 
 def test_extract_preview_pieces_are_floored_to_whole_boxes(

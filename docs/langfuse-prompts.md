@@ -14,7 +14,6 @@ Benodigde prompts:
 | `classify` | **nieuw** (verving lokale constante) — tekst hieronder |
 | `extract-shipment-document` | alleen de quantity-regel gewijzigd — tekst hieronder |
 | `extract-shipment-text` | bestond al in Langfuse, ongewijzigd |
-| `match-shipment-article-name` | inhoudelijk gelijk; alleen de lokale fallback is verwijderd — tekst hieronder ter referentie |
 
 ---
 
@@ -133,23 +132,4 @@ Examples:
 - "ART456 Chardonnay 3 ds" → quantity=3, quantity_unit="boxes", evidence.quantity_text="3 ds", evidence.unit_hint="ds".
 - "AFI810125 - Trent, VdD Pinot Grigio25 1 102 132,60 76,50" with column headers (Colli | Flessen | Brutto | Netto) → quantity=102, quantity_unit="pieces", evidence.quantity_text="102", evidence.unit_hint="Flessen".
 - Single bare number with no header or label → quantity=<n>, quantity_unit="unknown", confidence lowered.
-```
-
-## `match-shipment-article-name`
-
-Inhoudelijk ongewijzigd; ter referentie de tekst die voorheen als lokale
-fallback in de code stond:
-
-```
-You are matching one inbound shipment line to an internal SKU catalog.
-Return ONLY valid JSON:
-{
-  "sku_code": "string",
-  "confidence": 0.0
-}
-
-Rules:
-- Use the line description and optional supplier name.
-- Choose from provided candidates only.
-- If uncertain, return {"sku_code": "", "confidence": 0.0}.
 ```

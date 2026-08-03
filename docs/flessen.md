@@ -114,14 +114,15 @@ gewoon zijn **eigen besteleenheid**: 1 fles = 1 besteleenheid = 1 scan =
 - In `embedding.py` de constants verwijderen: `CLASSIFY_PROMPT` (regel 54,
   direct gebruikt in `classify_image`), `CLASSIFY_AND_DESCRIBE_DEFAULT` (68),
   `DESCRIBE_DEFAULT` (94), `EXTRACT_SHIPMENT_SYSTEM_DEFAULT` (564),
-  `MATCH_SHIPMENT_ARTICLE_DEFAULT` (765).
+  plus de overige lokale extractie-fallbacks.
 - Alle fetches omzetten naar `get_prompt_required(name)`:
   - `describe_package` → `describe-package`
   - `classify_and_describe` → `classify-and-describe`
   - `classify_image` → nieuwe Langfuse-prompt `classify` (nu nog een lokale
     constante)
   - `extract_shipment_document` → `extract-shipment-document`
-  - `match_shipment_article` → `match-shipment-article-name`
+  - regels zonder leverancierscode worden niet door een LLM gematcht; de
+    gebruiker koppelt deze altijd handmatig
 - Eventueel `get_prompt(name, fallback=...)` uit `langfuse_client.py`
   verwijderen als niets het meer gebruikt.
 - **Gevolg:** zonder geconfigureerde Langfuse falen deze calls bewust.
@@ -190,9 +191,8 @@ Examples of false: a clock, candles on a table, a laptop, a pair of shoes, a gla
 >
 > → "The backend converts the quantity to the product's order unit based on the matched product, so you MUST NOT do any box/bottle math yourself. Report the number and unit exactly as the document states."
 
-(De rest van de extractie-prompt blijft; `extract-shipment-text` en
-`match-shipment-article-name` blijven inhoudelijk gelijk maar verliezen hun
-lokale fallback.)
+(De rest van de extractie-prompt blijft; `extract-shipment-text` blijft
+inhoudelijk gelijk maar verliest zijn lokale fallback.)
 
 ### I3. Conversie per producttype (backend)
 
@@ -302,8 +302,7 @@ nodig heeft (migratie in PR 1).
 - **Geen fallback = harde Langfuse-afhankelijkheid:** de Langfuse-prompts moeten
   bestaan vóór deploy, anders falen vision/extractie. Benodigd in Langfuse:
   `classify-and-describe`, `describe-package`, `extract-shipment-document`,
-  `extract-shipment-text`, `match-shipment-article-name`, plus de **nieuwe**
-  `classify`.
+  `extract-shipment-text`, plus de **nieuwe** `classify`.
 - **Langfuse bijwerken gaat niet automatisch:** de code wordt aangepast, maar de
   prompttekst moet handmatig in het dashboard geplakt worden — er is geen
   sync-script.
