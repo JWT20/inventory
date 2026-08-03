@@ -54,7 +54,6 @@ from app.schemas import (
     InboundUploadAttemptResponse,
     SupplierMappingResponse,
     ShipmentCreate,
-    ShipmentMatchCandidate,
     ShipmentExtractPreviewResponse,
     ShipmentExtractedLine,
     ShipmentLineResponse,
@@ -70,7 +69,6 @@ from langfuse import observe, propagate_attributes
 from app.services.embedding import (
     extract_shipment_document,
     extract_shipment_text,
-    match_shipment_article_name,
 )
 from app.services.langfuse_client import PromptUnavailableError
 from app.services.pricing import calc_effective_price
@@ -98,8 +96,6 @@ def _normalize_supplier_code(value: str | None) -> str:
         return ""
     return value.strip().upper()
 
-
-LLM_ARTICLE_MATCH_MIN_CONFIDENCE = 0.80
 
 BOTTLES_PER_BOX = 6
 
@@ -324,8 +320,9 @@ async def _build_preview_lines(
     """Resolve extracted rows into SKU-matched preview lines for the user's org.
 
     Shared by the image/PDF and pasted-text extraction endpoints so all inputs
-    get identical supplier-mapping lookup, LLM article matching and pieces→boxes
-    conversion. Always scoped to ``user.organization_id``.
+    get identical supplier-mapping lookup, manual handling for lines without a
+    supplier code, and pieces→boxes conversion. Always scoped to
+    ``user.organization_id``.
     """
     target_org_id = user.organization_id
     extracted_supplier = str(extracted.get("supplier_name", "") or "")
@@ -337,8 +334,6 @@ async def _build_preview_lines(
     mapping_lookup: dict[tuple[str, str], tuple[int, str, str]] = {}
     mappings_by_supplier_code: dict[str, dict[int, tuple[int, str, str]]] = {}
     unique_supplier_code_lookup: dict[str, tuple[int, str, str]] = {}
-    sku_candidates: dict[str, tuple[int, str, str]] = {}
-    supplier_scoped_candidates: dict[str, tuple[int, str, str]] = {}
     is_bottle_by_id: dict[int, bool] = {}
     if normalized_supplier:
         mappings = db.query(SupplierSKUMapping, SKU).join(
@@ -358,25 +353,12 @@ async def _build_preview_lines(
             mappings_by_supplier_code.setdefault(mapping_code, {})[
                 sku.id
             ] = normalized_mapping
-            if mapping_supplier == normalized_supplier:
-                supplier_scoped_candidates[
-                    _normalize_supplier_code(sku.sku_code)
-                ] = normalized_mapping
             is_bottle_by_id[sku.id] = sku.is_bottle
         unique_supplier_code_lookup = {
             code: next(iter(sku_matches.values()))
             for code, sku_matches in mappings_by_supplier_code.items()
             if len(sku_matches) == 1
         }
-
-    sku_query = db.query(SKU)
-    if target_org_id is not None:
-        sku_query = sku_query.filter(SKU.organization_id == target_org_id)
-    else:
-        sku_query = sku_query.filter(SKU.organization_id.is_(None))
-    for sku in sku_query.all():
-        sku_candidates[_normalize_supplier_code(sku.sku_code)] = (sku.id, sku.sku_code, sku.name)
-        is_bottle_by_id[sku.id] = sku.is_bottle
 
     lines: list[ShipmentExtractedLine] = []
     for row in extracted.get("lines", []):
@@ -393,7 +375,6 @@ async def _build_preview_lines(
         # verifies the quantity before booking.
         needs_confirmation = (not code) or qty_unit == "unknown"
         match_source = "unresolved"
-        candidate_matches: list[ShipmentMatchCandidate] = []
         if code:
             # Prefer the exact supplier mapping. If the uploaded supplier name
             # differs, only fall back when this code identifies exactly one SKU
@@ -405,33 +386,6 @@ async def _build_preview_lines(
             if hit:
                 matched_id, matched_code, matched_name = hit
                 match_source = "supplier_mapping"
-
-        # If supplier code is missing, use an LLM-only resolver on article description.
-        if not matched_id and not code and str(row_dict.get("description", "")).strip():
-            llm_candidate_pool = supplier_scoped_candidates or sku_candidates
-            supplier_name_for_matcher = normalized_supplier or "(unknown)"
-            suggested_code, llm_confidence = await match_shipment_article_name(
-                supplier_name=supplier_name_for_matcher,
-                article_description=str(row_dict.get("description", "")).strip(),
-                candidates=[(v[1], v[2]) for v in llm_candidate_pool.values()],
-            )
-            normalized_suggested_code = _normalize_supplier_code(suggested_code)
-            if (
-                normalized_suggested_code
-                and normalized_suggested_code in llm_candidate_pool
-            ):
-                c_id, c_code, c_name = llm_candidate_pool[normalized_suggested_code]
-                candidate_matches = [ShipmentMatchCandidate(
-                    sku_id=c_id,
-                    sku_code=c_code,
-                    sku_name=c_name,
-                    is_bottle=is_bottle_by_id.get(c_id, False),
-                    confidence=llm_confidence,
-                )]
-                needs_confirmation = True
-                match_source = "llm_suggestion"
-                if llm_confidence >= LLM_ARTICLE_MATCH_MIN_CONFIDENCE:
-                    confidence = max(confidence, llm_confidence)
 
         # Re-resolve the quantity once the matched SKU's unit is known: a
         # bottle SKU counts pieces one-to-one and flags box quantities as
@@ -454,7 +408,7 @@ async def _build_preview_lines(
             is_bottle=bool(matched_id is not None and is_bottle_by_id.get(matched_id)),
             needs_confirmation=needs_confirmation,
             match_source=match_source,
-            candidate_matches=candidate_matches,
+            candidate_matches=[],
         ))
     return lines
 
