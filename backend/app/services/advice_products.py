@@ -83,10 +83,16 @@ class AdviceProductsClient:
         *,
         base_url: str | None = None,
         api_key: str | None = None,
+        vercel_bypass_secret: str | None = None,
         http_client: httpx.Client | None = None,
     ) -> None:
         self.base_url = (base_url or settings.advice_products_base_url).rstrip("/")
         self.api_key = api_key if api_key is not None else settings.advice_products_api_key
+        self.vercel_bypass_secret = (
+            vercel_bypass_secret
+            if vercel_bypass_secret is not None
+            else settings.advice_products_vercel_bypass_secret
+        )
         self._http = http_client
 
     @property
@@ -102,12 +108,15 @@ class AdviceProductsClient:
         if not self.configured:
             raise AdviceProductSyncError("Adviesproductfeed is niet geconfigureerd")
         try:
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Accept": "application/json",
+            }
+            if self.vercel_bypass_secret:
+                headers["x-vercel-protection-bypass"] = self.vercel_bypass_secret
             response = self._get(
                 f"{self.base_url}{PRODUCTS_PATH}",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Accept": "application/json",
-                },
+                headers=headers,
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
@@ -147,6 +156,8 @@ class AdviceProductsClient:
             # Only send the feed credential back to the configured advice-app
             # origin. External signed storage URLs must never receive it.
             headers["Authorization"] = f"Bearer {self.api_key}"
+            if self.vercel_bypass_secret:
+                headers["x-vercel-protection-bypass"] = self.vercel_bypass_secret
         try:
             response = self._get(url, headers=headers)
             response.raise_for_status()

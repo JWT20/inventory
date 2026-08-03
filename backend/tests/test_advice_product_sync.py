@@ -251,3 +251,18 @@ def test_client_uses_bearer_authentication():
         ).fetch_snapshot()
 
     assert snapshot.products[0].source_product_id == "prd-1"
+
+
+def test_client_sends_vercel_bypass_only_when_configured():
+    def handler(request: httpx.Request):
+        assert request.headers["authorization"] == "Bearer secret"
+        assert request.headers["x-vercel-protection-bypass"] == "preview-secret"
+        return httpx.Response(200, json={"products": [_product().model_dump()]})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        AdviceProductsClient(
+            base_url="https://advies.example",
+            api_key="secret",
+            vercel_bypass_secret="preview-secret",
+            http_client=http_client,
+        ).fetch_snapshot()

@@ -111,6 +111,10 @@ class Settings(BaseSettings):
     # revocable. Empty base URL/key or interval 0 disables the puller.
     advice_products_base_url: str = ""
     advice_products_api_key: str = ""
+    # Optional platform-level credential for protected Vercel previews. This is
+    # separate from the advice app's own bearer key and normally stays empty in
+    # production, where Inventory calls the public production domain.
+    advice_products_vercel_bypass_secret: str = ""
     advice_products_sync_interval_seconds: int = 3600
 
     @property
