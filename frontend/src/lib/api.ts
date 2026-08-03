@@ -282,6 +282,7 @@ export const api = {
     active?: boolean;
     supplier_id?: number | null;
     is_bottle?: boolean;
+    source_product_id?: string | null;
     product_type?: "barcode" | "vision";
     ean?: string;
   }) => json("/skus", "POST", data),
@@ -290,7 +291,6 @@ export const api = {
     json(`/skus/${id}`, "PATCH", data),
   deleteSKU: (id: number, force = false) =>
     request(`/skus/${id}${force ? "?force=true" : ""}`, { method: "DELETE" }),
-
   // Reference images
   listImages: (skuId: number) => request(`/skus/${skuId}/images`),
   listImageStatuses: (skuId: number) => request(`/skus/${skuId}/images/status`),

@@ -219,16 +219,24 @@ def generate_wine_sku_code(attrs: dict[str, str]) -> str:
         cleaned = ascii_only.strip().upper().replace(" ", "")
         return cleaned[:length]
 
-    return "-".join([
+    parts = [
         abbrev(attrs["producent"]),
         abbrev(attrs["wijnaam"]),
         abbrev(attrs["wijntype"], 3),
         attrs["volume"].strip().replace("ml", "").replace("cl", ""),
-    ])
+    ]
+    return "-".join(part for part in parts if part)
 
 
 def generate_wine_display_name(attrs: dict[str, str]) -> str:
-    return f"{attrs['producent']} {attrs['wijnaam']} {attrs['wijntype']}"
+    parts = [
+        part.strip()
+        for part in [attrs["producent"], attrs["wijnaam"], attrs["wijntype"]]
+        if part.strip()
+    ]
+    if not attrs["producent"].strip() and attrs["volume"].strip():
+        parts.append(f"{attrs['volume'].strip()} ml")
+    return " ".join(parts)
 
 
 class SupplierCreate(BaseModel):
@@ -252,6 +260,7 @@ class SKUCreate(BaseModel):
     active: bool = True
     supplier_id: int | None = None
     is_bottle: bool = False
+    source_product_id: str | None = Field(default=None, max_length=100)
     # When omitted, the type is derived from the category below: wine → vision,
     # everything else → barcode (the new default, matching the model/migration).
     product_type: Literal["barcode", "vision"] | None = None
@@ -296,6 +305,7 @@ class SKUUpdate(BaseModel):
     active: bool | None = None
     supplier_id: int | None = None
     is_bottle: bool | None = None
+    source_product_id: str | None = Field(default=None, max_length=100)
     product_type: Literal["barcode", "vision"] | None = None
     # EAN format/uniqueness is validated in the endpoint, where the SKU's
     # product_type (existing or just-changed) and organization are known.
@@ -313,6 +323,7 @@ class SKUResponse(BaseModel):
     supplier_id: int | None = None
     supplier_name: str | None = None
     is_bottle: bool = False
+    source_product_id: str | None = None
     product_type: str = "vision"
     ean: str | None = None
     created_at: datetime
@@ -993,7 +1004,9 @@ class InventoryBalanceResponse(BaseModel):
 
 
 class AdviceStockItem(BaseModel):
+    source_product_id: str | None = Field(default=None, min_length=1, max_length=100)
     sku_code: str = Field(..., min_length=1)
+    is_bottle: bool = True
     quantity_available: int = Field(..., ge=0)
 
 

@@ -12,6 +12,11 @@ finished concept therefore goes active without waiting for a photo — the
 courier can capture one at scan time. An existing image still keeps a SKU
 active so nothing that is live today drops out.
 
+Advice-linked bottles are the exception: they are active iff the advice app
+says so *and* they have a usable reference image. A bottle whose image import
+failed is neither pickable nor sellable, so it stays inactive until a photo
+lands.
+
 This module is the single source of truth for that recomputation. Call
 recompute_active() after any change that could affect the answer:
   - SKU creation
@@ -77,12 +82,23 @@ def recompute_active(sku: SKU, db: Session) -> None:
     """Recompute SKU.active for opted-in organizations.
 
     No-op for SKUs whose organization has not enabled the rule, so other
-    tenants keep manual control of their active flag.
+    tenants keep manual control of their active flag — advice-linked SKUs
+    included, where the feed then writes `active` directly.
+
+    Advice-linked bottles use a stricter rule than the rest of the catalogue.
+    Their commercial availability is owned by the advice app (`source_active`),
+    but a synced bottle without a usable reference image cannot be scanned when
+    picking and must not be offered for sale, so both conditions must hold.
+    Complete wine attributes are not enough here: the sync fills them for every
+    product it creates, which would otherwise activate photo-less bottles.
     """
     if not org_auto_inactivates_without_images(sku.organization):
         return
 
-    desired = is_complete(sku) or _has_usable_image(sku, db)
+    if sku.source_product_id:
+        desired = bool(sku.source_active) and _has_usable_image(sku, db)
+    else:
+        desired = is_complete(sku) or _has_usable_image(sku, db)
     if sku.active != desired:
         sku.active = desired
         db.add(sku)

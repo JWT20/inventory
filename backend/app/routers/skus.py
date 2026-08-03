@@ -302,6 +302,39 @@ def _ean_conflict(
     return db.query(q.exists()).scalar()
 
 
+def _normalize_source_product_id(value: str | None) -> str | None:
+    normalized = (value or "").strip()
+    return normalized or None
+
+
+def _validate_source_product_link(
+    db: Session,
+    *,
+    organization_id: int | None,
+    source_product_id: str | None,
+    is_bottle: bool,
+    exclude_sku_id: int | None = None,
+) -> None:
+    if source_product_id is None:
+        return
+    if not is_bottle:
+        raise HTTPException(
+            400,
+            "Een adviesproduct-ID kan alleen aan een fles-SKU worden gekoppeld",
+        )
+    query = db.query(SKU).filter(
+        SKU.organization_id == organization_id,
+        SKU.source_product_id == source_product_id,
+    )
+    if exclude_sku_id is not None:
+        query = query.filter(SKU.id != exclude_sku_id)
+    if db.query(query.exists()).scalar():
+        raise HTTPException(
+            400,
+            f"Adviesproduct-ID '{source_product_id}' is al aan een andere fles gekoppeld",
+        )
+
+
 def _is_ean_unique_violation(exc: IntegrityError) -> bool:
     """Whether an IntegrityError is the per-org EAN uniqueness violation.
 
@@ -312,6 +345,14 @@ def _is_ean_unique_violation(exc: IntegrityError) -> bool:
     """
     msg = str(getattr(exc, "orig", exc))
     return "uq_skus_org_ean" in msg or "skus.ean" in msg
+
+
+def _is_source_product_unique_violation(exc: IntegrityError) -> bool:
+    msg = str(getattr(exc, "orig", exc))
+    return (
+        "uq_skus_org_source_product_id" in msg
+        or "skus.organization_id, skus.source_product_id" in msg
+    )
 
 
 def _sku_to_response(sku: SKU) -> SKUResponse:
@@ -326,6 +367,7 @@ def _sku_to_response(sku: SKU) -> SKUResponse:
         supplier_id=sku.supplier_id,
         supplier_name=sku.supplier.name if sku.supplier else None,
         is_bottle=sku.is_bottle,
+        source_product_id=sku.source_product_id,
         product_type=sku.product_type,
         ean=sku.ean,
         created_at=sku.created_at,
@@ -473,6 +515,14 @@ def create_sku(
     db: Session = Depends(get_db),
     user: User = Depends(require_product_manager),
 ):
+    source_product_id = _normalize_source_product_id(data.source_product_id)
+    _validate_source_product_link(
+        db,
+        organization_id=user.organization_id,
+        source_product_id=source_product_id,
+        is_bottle=data.is_bottle,
+    )
+
     # For wine: auto-generate sku_code and name from attributes
     if data.category == "wine":
         sku_code = data.sku_code or generate_wine_sku_code(data.attributes)
@@ -506,6 +556,8 @@ def create_sku(
         organization_id=user.organization_id,
         supplier_id=data.supplier_id,
         is_bottle=data.is_bottle,
+        source_product_id=source_product_id,
+        source_active=data.active if source_product_id else None,
         product_type=data.product_type,
         ean=data.ean,
     )
@@ -517,6 +569,8 @@ def create_sku(
         db.rollback()
         if _is_ean_unique_violation(exc):
             raise HTTPException(400, f"EAN '{data.ean}' bestaat al bij deze handelaar")
+        if _is_source_product_unique_violation(exc):
+            raise HTTPException(400, "Dit adviesproduct-ID is al gekoppeld")
         raise
     recompute_active(sku, db)
     # A newly-created product may be the missing catalog entry that a channel
@@ -566,6 +620,22 @@ def update_sku(
 
     changed_fields = data.model_dump(exclude_unset=True)
 
+    resulting_is_bottle = (
+        data.is_bottle if data.is_bottle is not None else sku.is_bottle
+    )
+    resulting_source_product_id = (
+        _normalize_source_product_id(data.source_product_id)
+        if "source_product_id" in changed_fields
+        else sku.source_product_id
+    )
+    _validate_source_product_link(
+        db,
+        organization_id=sku.organization_id,
+        source_product_id=resulting_source_product_id,
+        is_bottle=resulting_is_bottle,
+        exclude_sku_id=sku.id,
+    )
+
     # Explicit active wins; otherwise it is recomputed below for opted-in orgs.
     active_set_explicitly = data.active is not None
     if active_set_explicitly:
@@ -576,6 +646,12 @@ def update_sku(
 
     if "is_bottle" in changed_fields and data.is_bottle is not None:
         sku.is_bottle = data.is_bottle
+
+    if "source_product_id" in changed_fields:
+        sku.source_product_id = resulting_source_product_id
+        # Linking keeps the merchant's current availability until the first
+        # snapshot overwrites it; unlinking hands control back to them.
+        sku.source_active = sku.active if resulting_source_product_id else None
 
     product_type_changed = "product_type" in changed_fields and data.product_type is not None
     if product_type_changed:
@@ -630,7 +706,10 @@ def update_sku(
                 # Inbound concepts keep their supplier code as identity, so a
                 # later re-scan of the same code still finds this SKU instead of
                 # creating a duplicate. Other wines get the canonical wine code.
-                if attrs.get("source") != "inbound_scan":
+                if (
+                    attrs.get("source") != "inbound_scan"
+                    and not sku.source_product_id
+                ):
                     new_code = generate_wine_sku_code(attrs)
                     conflict = db.query(SKU).filter(SKU.sku_code == new_code, SKU.id != sku_id).first()
                     if conflict:
@@ -657,6 +736,8 @@ def update_sku(
         db.rollback()
         if _is_ean_unique_violation(exc):
             raise HTTPException(400, f"EAN '{attempted_ean}' bestaat al bij deze handelaar")
+        if _is_source_product_unique_violation(exc):
+            raise HTTPException(400, "Dit adviesproduct-ID is al gekoppeld")
         raise
     db.refresh(sku)
     publish_event(
