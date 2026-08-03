@@ -26,13 +26,14 @@ class FakeAdviceProductsClient:
 def _product(
     source_product_id="prd-1",
     *,
+    producer="Château Test",
     name="Grand Vin",
     active=True,
     image_url=None,
 ):
     return AdviceProduct(
         source_product_id=source_product_id,
-        producer="Château Test",
+        producer=producer,
         name=name,
         vintage="2024",
         color="red",
@@ -66,6 +67,58 @@ def test_product_sync_creates_only_a_linked_bottle(db, sample_org):
     assert bottles[0].source_product_id == "prd-1"
     assert bottles[0].sku_code == "CHAT-GRAN-ROO-750-FLES"
     assert db.get(SKU, box.id).source_product_id is None
+
+
+def test_product_sync_accepts_missing_producer_and_builds_a_clean_sku(
+    db, sample_org
+):
+    summary = sync_advice_products(
+        db,
+        organization_id=sample_org.id,
+        client=FakeAdviceProductsClient([_product(producer=None)]),
+        import_images=False,
+    )
+
+    sku = db.query(SKU).filter(SKU.source_product_id == "prd-1").one()
+    assert summary.created == 1
+    assert summary.conflicts == []
+    assert sku.sku_code == "GRAN-ROO-750-FLES"
+    assert sku.name == "Grand Vin Rood 750 ml"
+    assert sku.description == "Grand Vin 2024"
+    assert sku.attributes_dict == {
+        "producent": "",
+        "wijnaam": "Grand Vin",
+        "wijntype": "Rood",
+        "volume": "750",
+    }
+
+
+def test_missing_producer_still_uses_the_existing_code_conflict_guard(
+    db, sample_org
+):
+    existing = SKU(
+        sku_code="GRAN-ROO-750-FLES",
+        name="Bestaande andere SKU",
+        organization_id=sample_org.id,
+        is_bottle=True,
+        product_type="vision",
+    )
+    db.add(existing)
+    db.commit()
+
+    summary = sync_advice_products(
+        db,
+        organization_id=sample_org.id,
+        client=FakeAdviceProductsClient([_product(producer="   ")]),
+        import_images=False,
+    )
+
+    assert summary.created == 0
+    assert summary.conflicts == [
+        "prd-1: SKU-code GRAN-ROO-750-FLES bestaat al"
+    ]
+    assert db.query(SKU).count() == 1
+    assert db.get(SKU, existing.id).source_product_id is None
 
 
 def test_product_sync_is_idempotent_and_keeps_the_sku_code(db, sample_org):
@@ -288,6 +341,23 @@ def test_client_uses_bearer_authentication():
         ).fetch_snapshot()
 
     assert snapshot.products[0].source_product_id == "prd-1"
+
+
+def test_client_accepts_a_product_without_a_producer():
+    payload = _product(producer=None).model_dump(exclude_none=True)
+
+    with httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"products": [payload]})
+        )
+    ) as http_client:
+        snapshot = AdviceProductsClient(
+            base_url="https://advies.example",
+            api_key="secret",
+            http_client=http_client,
+        ).fetch_snapshot()
+
+    assert snapshot.products[0].producer is None
 
 
 def test_client_sends_vercel_bypass_only_when_configured():

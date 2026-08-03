@@ -36,7 +36,9 @@ Authorization: Bearer <ADVICE_PRODUCTS_API_KEY>
 }
 ```
 
-`image_url` en `vintage` zijn optioneel; de andere velden zijn verplicht. Een
+`producer`, `image_url` en `vintage` zijn optioneel. Zonder producent gebruikt
+Dockscan de wijnnaam, kleur en het volume voor de zichtbare naam en de nieuwe
+SKU-code. `source_product_id`, `name`, `color` en `active` zijn verplicht. Een
 lege lijst, dubbele ID's, een contractfout of een HTTP-fout wordt geweigerd
 zonder bestaande producten te wijzigen.
 

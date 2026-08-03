@@ -19,7 +19,6 @@ type LinkFile = {
   version: number;
   mappings: AdviceProductLinkMapping[];
   source_report?: {
-    missing_producer_count?: number;
     missing_product_id_count?: number;
     feed_ready?: boolean;
   };
@@ -177,8 +176,7 @@ export function AdviceProductLinkImport({ onApplied }: { onApplied: () => void }
                 {file?.source_report && file.source_report.feed_ready === false ? (
                   <p className="rounded bg-yellow-600/10 p-2 text-xs leading-5">
                     Let op: de automatische feed blijft uit. In wijnadvies1 ontbreken
-                    nog {file.source_report.missing_producer_count ?? 0} producenten en
-                    {" "}{file.source_report.missing_product_id_count ?? 0} product-ID&apos;s.
+                    nog {file.source_report.missing_product_id_count ?? 0} product-ID&apos;s.
                   </p>
                 ) : null}
               </div>

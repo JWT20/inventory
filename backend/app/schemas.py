@@ -219,16 +219,24 @@ def generate_wine_sku_code(attrs: dict[str, str]) -> str:
         cleaned = ascii_only.strip().upper().replace(" ", "")
         return cleaned[:length]
 
-    return "-".join([
+    parts = [
         abbrev(attrs["producent"]),
         abbrev(attrs["wijnaam"]),
         abbrev(attrs["wijntype"], 3),
         attrs["volume"].strip().replace("ml", "").replace("cl", ""),
-    ])
+    ]
+    return "-".join(part for part in parts if part)
 
 
 def generate_wine_display_name(attrs: dict[str, str]) -> str:
-    return f"{attrs['producent']} {attrs['wijnaam']} {attrs['wijntype']}"
+    parts = [
+        part.strip()
+        for part in [attrs["producent"], attrs["wijnaam"], attrs["wijntype"]]
+        if part.strip()
+    ]
+    if not attrs["producent"].strip() and attrs["volume"].strip():
+        parts.append(f"{attrs['volume'].strip()} ml")
+    return " ".join(parts)
 
 
 class SupplierCreate(BaseModel):

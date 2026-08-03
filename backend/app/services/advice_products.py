@@ -40,14 +40,14 @@ class AdviceProductSyncError(RuntimeError):
 
 class AdviceProduct(BaseModel):
     source_product_id: str = Field(..., min_length=1, max_length=100)
-    producer: str = Field(..., min_length=1, max_length=255)
+    producer: str | None = Field(default=None, max_length=255)
     name: str = Field(..., min_length=1, max_length=255)
     vintage: str | None = Field(default=None, max_length=20)
     color: str = Field(..., min_length=1, max_length=50)
     active: bool
     image_url: str | None = Field(default=None, max_length=2_000)
 
-    @field_validator("source_product_id", "producer", "name", "color")
+    @field_validator("source_product_id", "name", "color")
     @classmethod
     def _strip_required(cls, value: str) -> str:
         value = value.strip()
@@ -55,7 +55,7 @@ class AdviceProduct(BaseModel):
             raise ValueError("waarde mag niet leeg zijn")
         return value
 
-    @field_validator("vintage", "image_url")
+    @field_validator("producer", "vintage", "image_url")
     @classmethod
     def _strip_optional(cls, value: str | None) -> str | None:
         value = (value or "").strip()
@@ -187,7 +187,7 @@ def _wine_attributes(product: AdviceProduct) -> dict[str, str]:
         product.color.casefold(), product.color.strip().capitalize()
     )
     return {
-        "producent": product.producer,
+        "producent": product.producer or "",
         "wijnaam": product.name,
         "wijntype": wine_type,
         "volume": "750",
