@@ -91,6 +91,7 @@ export function SKUsPage() {
   const [skus, setSkus] = useState<SKU[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [syncingAdvice, setSyncingAdvice] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
@@ -161,6 +162,26 @@ export function SKUsPage() {
     load();
   }, [load]);
 
+  // Pull the advice app's bottle products in now instead of waiting for the
+  // periodic sync, so a wine created there is linkable here right away.
+  const syncAdviceProducts = useCallback(async () => {
+    setSyncingAdvice(true);
+    try {
+      const summary = (await api.syncAdviceProducts()) as {
+        created: number;
+        updated: number;
+      };
+      await load();
+      toast.success(
+        `${summary.created} nieuw, ${summary.updated} bijgewerkt`,
+      );
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Synchroniseren mislukt");
+    } finally {
+      setSyncingAdvice(false);
+    }
+  }, [load]);
+
   const loadMore = useCallback(async () => {
     const reqId = ++reqIdRef.current;
     setLoadingMore(true);
@@ -189,9 +210,21 @@ export function SKUsPage() {
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Producten</h2>
         {user && user.role !== "courier" && (
-          <Button size="sm" onClick={() => setShowNew(true)}>
-            + Nieuw
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={syncingAdvice}
+              onClick={() => {
+                void syncAdviceProducts();
+              }}
+            >
+              {syncingAdvice ? "Bezig…" : "Synchroniseer nu"}
+            </Button>
+            <Button size="sm" onClick={() => setShowNew(true)}>
+              + Nieuw
+            </Button>
+          </div>
         )}
       </div>
 

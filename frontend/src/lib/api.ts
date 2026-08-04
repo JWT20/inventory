@@ -251,6 +251,7 @@ export const api = {
     request(`/locations/available-skus?q=${encodeURIComponent(q)}`),
 
   // SKUs
+  syncAdviceProducts: () => json("/skus/advice-sync", "POST", {}),
   listSKUs: (
     activeOnly = false,
     organizationId?: number,

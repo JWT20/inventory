@@ -29,6 +29,7 @@ from app.models import (
 from app.modules import PICKING_MODULE_BY_PRODUCT_TYPE
 from app.schemas import (
     WINE_ATTRIBUTE_KEYS,
+    AdviceProductSyncResponse,
     ReferenceImageResponse,
     ReferenceImageStatusResponse,
     SKUCreate,
@@ -51,6 +52,13 @@ from app.services.embedding import (
     normalize_upload_to_jpeg,
 )
 from PIL import UnidentifiedImageError
+from app.services.advice_products import (
+    AdviceProductsClient,
+    AdviceProductSyncBusy,
+    AdviceProductSyncError,
+    advice_sync_slot,
+    sync_advice_products,
+)
 from app.services.booking import promote_pending_images_orders_for_sku
 from app.services.channel_import import resync_channel_for_new_ean
 from app.services.product_status import is_complete, recompute_active
@@ -507,6 +515,52 @@ def _assert_org_supports_product_type(
             f"Deze organisatie heeft module '{required}' niet ingeschakeld; "
             f"kan geen {product_type}-product aanmaken",
         )
+
+
+@router.post("/advice-sync", response_model=AdviceProductSyncResponse)
+def sync_advice_products_now(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_product_manager),
+):
+    """Pull the advice app's product snapshot now instead of waiting for the loop.
+
+    Deliberately a sync ``def``: applying a snapshot runs image analysis through
+    ``asyncio.run``, which fails inside a running event loop. FastAPI puts a
+    sync route on the threadpool, the same place the periodic loop reaches via
+    ``asyncio.to_thread``.
+    """
+    if not settings.advice_products_sync_enabled:
+        raise HTTPException(503, "De adviesproductfeed is niet geconfigureerd")
+
+    organization_id = settings.advice_stock_organization_id
+    if not user.is_platform_admin and user.organization_id != organization_id:
+        raise HTTPException(403, "Geen toegang tot de adviesproductfeed")
+
+    try:
+        with advice_sync_slot():
+            summary = sync_advice_products(
+                db,
+                organization_id=organization_id,
+                client=AdviceProductsClient(),
+                # Reference images stay with the periodic loop: downloading and
+                # analysing them takes tens of seconds, while the operator only
+                # needs the SKU to exist to link and book a shipment line. The
+                # loop still picks them up, since it imports an image only for a
+                # product that has none yet.
+                import_images=False,
+            )
+    except AdviceProductSyncBusy:
+        raise HTTPException(409, "Er loopt al een synchronisatie; probeer het zo opnieuw")
+    except AdviceProductSyncError as exc:
+        raise HTTPException(502, str(exc))
+
+    return AdviceProductSyncResponse(
+        received=summary.received,
+        created=summary.created,
+        updated=summary.updated,
+        deactivated=summary.deactivated,
+        conflicts=summary.conflicts,
+    )
 
 
 @router.post("", response_model=SKUResponse, status_code=201)

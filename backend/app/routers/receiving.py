@@ -1299,6 +1299,22 @@ def create_concept_product(
     else:
         target_org_id = user.organization_id
 
+    # Bottles are shared with the advice app, which owns their identity through
+    # source_product_id. A concept invents a local identity instead, so the feed
+    # would later add its own SKU for the same wine and split the stock — with
+    # the booked bottles sitting on the copy the advice app cannot see. Boxes
+    # stay a Dockscan-only stream and are unaffected.
+    if (
+        is_bottle
+        and settings.advice_stock_organization_id is not None
+        and target_org_id == settings.advice_stock_organization_id
+    ):
+        raise HTTPException(
+            400,
+            "Flesproducten komen uit de advies-app. Maak de wijn daar aan en "
+            "gebruik 'Synchroniseer nu' om hem hier op te halen.",
+        )
+
     base_query = db.query(SKU).filter(SKU.sku_code == code)
 
     def _get_visible_existing() -> SKU | None:

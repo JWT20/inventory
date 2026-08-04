@@ -117,6 +117,48 @@ class TestCreateConceptProduct:
         assert resp.status_code == 201
         assert resp.json()["is_bottle"] is True
 
+
+# ---------------------------------------------------------------------------
+# Advice-app organizations: bottles belong to the advice app
+# ---------------------------------------------------------------------------
+
+class TestAdviceLinkedOrganization:
+    """A merchant on the advice feed may not invent bottle products locally.
+
+    Inventing one gives the wine a Dockscan-only identity, so the feed later
+    adds its own SKU for the same wine and the booked bottles end up on the
+    copy the advice app never sees.
+    """
+
+    @pytest.fixture(autouse=True)
+    def advice_feed(self, monkeypatch, sample_org):
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "advice_stock_organization_id", sample_org.id)
+
+    def test_bottle_concept_rejected(self, client, merchant_token):
+        resp = _post(client, merchant_token, "FLES-001", is_bottle=True)
+
+        assert resp.status_code == 400
+        assert "advies-app" in resp.json()["detail"]
+
+    def test_box_concept_still_allowed(self, client, merchant_token):
+        resp = _post(client, merchant_token, "DOOS-001")
+
+        assert resp.status_code == 201
+        assert resp.json()["is_bottle"] is False
+
+    def test_other_organization_may_still_create_bottles(
+        self, client, monkeypatch, merchant_token
+    ):
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "advice_stock_organization_id", 99_999)
+
+        resp = _post(client, merchant_token, "FLES-002", is_bottle=True)
+
+        assert resp.status_code == 201
+
     def test_default_name_derived_from_code(self, client, courier_token):
         resp = _post(client, courier_token, "XYZ-42")
         assert resp.status_code == 201

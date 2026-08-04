@@ -357,6 +357,7 @@ export function InboundPage() {
     shipmentId: number;
     skus: InboundBookedSKU[];
   } | null>(null);
+  const [syncingAdvice, setSyncingAdvice] = useState(false);
 
   const loadUploadHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -374,22 +375,23 @@ export function InboundPage() {
     void loadUploadHistory();
   }, [loadUploadHistory]);
 
-  useEffect(() => {
-    async function loadSkus() {
-      try {
-        // Haal de volledige lijst op (niet de standaard 100) zodat ook
-        // inactieve producten met voorraad opnieuw gekoppeld kunnen worden en
-        // SKU's verderop in het alfabet — bijv. wijnen met de T — beschikbaar
-        // zijn om te scrollen en doorzoeken in de koppel-combobox.
-        const skus = (skusOrEmpty(await api.listSKUs(false, undefined, { limit: 10000 })))
-          .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, "nl"));
-        setSkuOptions(skus);
-      } catch (err: unknown) {
-        toast.error(err instanceof Error ? err.message : "SKU's laden mislukt");
-      }
+  const loadSkus = useCallback(async () => {
+    try {
+      // Haal de volledige lijst op (niet de standaard 100) zodat ook
+      // inactieve producten met voorraad opnieuw gekoppeld kunnen worden en
+      // SKU's verderop in het alfabet — bijv. wijnen met de T — beschikbaar
+      // zijn om te scrollen en doorzoeken in de koppel-combobox.
+      const skus = (skusOrEmpty(await api.listSKUs(false, undefined, { limit: 10000 })))
+        .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, "nl"));
+      setSkuOptions(skus);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "SKU's laden mislukt");
     }
-    void loadSkus();
   }, []);
+
+  useEffect(() => {
+    void loadSkus();
+  }, [loadSkus]);
 
   function applyPreview(data: ExtractPreview) {
     setPreview(data);
@@ -707,7 +709,29 @@ export function InboundPage() {
     }
   }
 
-  async function createConceptForLine(lineIndex: number, isBottle: boolean) {
+  async function syncAdviceProducts() {
+    setSyncingAdvice(true);
+    try {
+      const summary = (await api.syncAdviceProducts()) as {
+        created: number;
+        updated: number;
+      };
+      await loadSkus();
+      toast.success(
+        summary.created > 0
+          ? `${summary.created} nieuw${summary.created === 1 ? "" : "e"} product${summary.created === 1 ? "" : "en"} opgehaald — kies het hieronder`
+          : "Geen nieuwe producten in de advies-app",
+      );
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Synchroniseren mislukt");
+    } finally {
+      setSyncingAdvice(false);
+    }
+  }
+
+  // Boxes only: a bottle's identity belongs to the advice app, so an unknown
+  // bottle is resolved by syncing that product in, not by inventing one here.
+  async function createConceptForLine(lineIndex: number) {
     if (!preview) return;
     const line = preview.lines[lineIndex];
     if (!line || line.matched_sku_id) return;
@@ -722,7 +746,7 @@ export function InboundPage() {
       const created = await api.createConceptProduct(
         supplierCode,
         line.description || undefined,
-        isBottle,
+        false,
       );
 
       const supplierNameForMapping = (preview.supplier_name || "").trim();
@@ -1087,26 +1111,36 @@ export function InboundPage() {
                             Koppel
                           </Button>
                         </div>
-                        {!line.matched_sku_id && <div className="flex items-center gap-2">
-                          <span className="text-xs text-muted-foreground">Nieuw concept als:</span>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => {
-                              void createConceptForLine(idx, false);
-                            }}
-                          >
-                            Doos
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => {
-                              void createConceptForLine(idx, true);
-                            }}
-                          >
-                            Losse fles
-                          </Button>
+                        {!line.matched_sku_id && <div className="flex flex-col gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">Onbekende doos:</span>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => {
+                                void createConceptForLine(idx);
+                              }}
+                            >
+                              Nieuw doosconcept
+                            </Button>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">Onbekende fles:</span>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              disabled={syncingAdvice}
+                              onClick={() => {
+                                void syncAdviceProducts();
+                              }}
+                            >
+                              {syncingAdvice ? "Bezig…" : "Synchroniseer nu"}
+                            </Button>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            Flessen komen uit de advies-app. Maak de wijn daar aan (met beeld) en
+                            haal hem hiermee op.
+                          </p>
                         </div>}
                         {editing && (
                           <Button

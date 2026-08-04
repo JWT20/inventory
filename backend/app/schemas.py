@@ -350,6 +350,18 @@ class SKUOption(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AdviceProductSyncResponse(BaseModel):
+    """Result of one manually triggered advice-product snapshot pull."""
+
+    received: int
+    created: int
+    updated: int
+    deactivated: int
+    conflicts: list[str] = []
+
+    model_config = {"from_attributes": True}
+
+
 # --- Reference Image ---
 class ReferenceImageResponse(BaseModel):
     id: int
