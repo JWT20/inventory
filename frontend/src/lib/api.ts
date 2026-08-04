@@ -1,5 +1,21 @@
 const BASE = "/api";
 
+export interface AdviceProductSyncSummary {
+  received: number;
+  created: number;
+  updated: number;
+  deactivated: number;
+  conflicts: string[];
+}
+
+export function adviceSyncConflictMessage(
+  summary: AdviceProductSyncSummary,
+): string | null {
+  if (summary.conflicts.length === 0) return null;
+  const label = summary.conflicts.length === 1 ? "conflict" : "conflicten";
+  return `${summary.conflicts.length} ${label}: ${summary.conflicts[0]}`;
+}
+
 export class ApiError extends Error {
   status: number;
   detail: unknown;
@@ -251,7 +267,8 @@ export const api = {
     request(`/locations/available-skus?q=${encodeURIComponent(q)}`),
 
   // SKUs
-  syncAdviceProducts: () => json("/skus/advice-sync", "POST", {}),
+  syncAdviceProducts: () =>
+    json("/skus/advice-sync", "POST", {}) as Promise<AdviceProductSyncSummary>,
   listSKUs: (
     activeOnly = false,
     organizationId?: number,

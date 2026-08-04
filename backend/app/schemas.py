@@ -28,6 +28,7 @@ class TokenResponse(BaseModel):
     custom_label: str | None = None
     customer_id: int | None = None
     enabled_modules: list[str] = []
+    advice_products_sync_available: bool = False
 
 
 class RefreshRequest(BaseModel):
@@ -122,6 +123,7 @@ class UserResponse(BaseModel):
     customer_id: int | None = None
     customer_name: str | None = None
     enabled_modules: list[str] = []
+    advice_products_sync_available: bool = False
     is_active: bool
     created_at: datetime
 

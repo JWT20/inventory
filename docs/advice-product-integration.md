@@ -105,6 +105,9 @@ product en is niet nodig om te koppelen en te boeken. De periodieke pull haalt
 het beeld daarna alsnog binnen, want die importeert alleen voor een product dat
 er nog geen heeft. Draait er al een synchronisatie, dan volgt een 409: twee
 gelijktijdige snapshots zouden op `uq_skus_org_source_product_id` botsen.
+Een interval van `0` schakelt alleen de periodieke pull uit; handmatig
+synchroniseren blijft beschikbaar zolang URL, API-key en organisatie zijn
+geconfigureerd.
 
 ## Geen flesproducten in Dockscan aanmaken
 
@@ -114,6 +117,12 @@ lokale identiteit, waarna de feed voor diezelfde wijn zijn eigen SKU aanmaakt en
 de geboekte flessen achterblijven op de kopie die de advies-app niet ziet. De
 route voor een onbekende fles is dus: wijn aanmaken in de advies-app,
 **Synchroniseer nu**, koppelen, boeken.
+
+Deze beperking geldt alleen voor de geconfigureerde adviesorganisatie. Andere
+organisaties behouden hun lokale optie **Losse fles**. Ook via het normale
+productformulier kan de adviesorganisatie geen fles zonder Adviesproduct-ID
+opslaan; zo kan dezelfde dubbele identiteit niet langs een tweede route alsnog
+ontstaan.
 
 ## Eenmalige bestaande koppelingen
 

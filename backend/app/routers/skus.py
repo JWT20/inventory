@@ -323,6 +323,16 @@ def _validate_source_product_link(
     is_bottle: bool,
     exclude_sku_id: int | None = None,
 ) -> None:
+    if (
+        settings.has_advice_products_feed(organization_id)
+        and is_bottle
+        and source_product_id is None
+    ):
+        raise HTTPException(
+            400,
+            "Flesproducten komen uit de advies-app en vereisen een "
+            "Adviesproduct-ID. Gebruik 'Synchroniseer nu' om ze op te halen.",
+        )
     if source_product_id is None:
         return
     if not is_bottle:
@@ -529,7 +539,7 @@ def sync_advice_products_now(
     sync route on the threadpool, the same place the periodic loop reaches via
     ``asyncio.to_thread``.
     """
-    if not settings.advice_products_sync_enabled:
+    if not settings.advice_products_feed_configured:
         raise HTTPException(503, "De adviesproductfeed is niet geconfigureerd")
 
     organization_id = settings.advice_stock_organization_id

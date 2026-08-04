@@ -134,6 +134,8 @@ class TestAdviceLinkedOrganization:
     def advice_feed(self, monkeypatch, sample_org):
         from app.config import settings
 
+        monkeypatch.setattr(settings, "advice_products_base_url", "https://advies.example")
+        monkeypatch.setattr(settings, "advice_products_api_key", "secret")
         monkeypatch.setattr(settings, "advice_stock_organization_id", sample_org.id)
 
     def test_bottle_concept_rejected(self, client, merchant_token):
@@ -156,6 +158,17 @@ class TestAdviceLinkedOrganization:
         monkeypatch.setattr(settings, "advice_stock_organization_id", 99_999)
 
         resp = _post(client, merchant_token, "FLES-002", is_bottle=True)
+
+        assert resp.status_code == 201
+
+    def test_unconfigured_product_feed_does_not_block_bottles(
+        self, client, monkeypatch, merchant_token
+    ):
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "advice_products_api_key", "")
+
+        resp = _post(client, merchant_token, "FLES-003", is_bottle=True)
 
         assert resp.status_code == 201
 

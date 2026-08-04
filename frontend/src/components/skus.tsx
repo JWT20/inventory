@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "@/App";
-import { api } from "@/lib/api";
+import { adviceSyncConflictMessage, api } from "@/lib/api";
 import { useAuth, hasModule } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -86,6 +86,7 @@ const PAGE_SIZE = 50;
 export function SKUsPage() {
   const { user } = useAuth();
   const isCourier = user?.role === "courier";
+  const adviceSyncAvailable = Boolean(user?.advice_products_sync_available);
   // EAN orgs scan a barcode into the search box, so advertise it in the hint.
   const canBarcode = hasModule(user, "barcode_picking");
   const [skus, setSkus] = useState<SKU[]>([]);
@@ -167,14 +168,17 @@ export function SKUsPage() {
   const syncAdviceProducts = useCallback(async () => {
     setSyncingAdvice(true);
     try {
-      const summary = (await api.syncAdviceProducts()) as {
-        created: number;
-        updated: number;
-      };
+      const summary = await api.syncAdviceProducts();
       await load();
-      toast.success(
-        `${summary.created} nieuw, ${summary.updated} bijgewerkt`,
-      );
+      const conflictMessage = adviceSyncConflictMessage(summary);
+      if (conflictMessage) {
+        toast.error(
+          `${summary.created} nieuw, ${summary.updated} bijgewerkt; `
+          + conflictMessage,
+        );
+      } else {
+        toast.success(`${summary.created} nieuw, ${summary.updated} bijgewerkt`);
+      }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Synchroniseren mislukt");
     } finally {
@@ -211,16 +215,18 @@ export function SKUsPage() {
         <h2 className="text-xl font-bold">Producten</h2>
         {user && user.role !== "courier" && (
           <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={syncingAdvice}
-              onClick={() => {
-                void syncAdviceProducts();
-              }}
-            >
-              {syncingAdvice ? "Bezig…" : "Synchroniseer nu"}
-            </Button>
+            {adviceSyncAvailable && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={syncingAdvice}
+                onClick={() => {
+                  void syncAdviceProducts();
+                }}
+              >
+                {syncingAdvice ? "Bezig…" : "Synchroniseer nu"}
+              </Button>
+            )}
             <Button size="sm" onClick={() => setShowNew(true)}>
               + Nieuw
             </Button>
@@ -351,6 +357,7 @@ function SKUDialog({
 }) {
   const { user } = useAuth();
   const isCourier = user?.role === "courier";
+  const adviceSyncAvailable = Boolean(user?.advice_products_sync_available);
   // The product form may only offer pick methods the org has a module for; the
   // invariant on the backend rejects anything else. Default a new product to
   // whichever the org supports (vision wins when both are enabled).
@@ -818,10 +825,13 @@ function SKUDialog({
                     value={sourceProductId}
                     onChange={(e) => setSourceProductId(e.target.value)}
                     placeholder="prd_01H8..."
+                    required={adviceSyncAvailable}
                     disabled={isCourier}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Stabiele koppeling met de advies-app; leeg laten voor niet-gekoppelde flessen.
+                    {adviceSyncAvailable
+                      ? "Verplicht voor flessen van deze organisatie. Gebruik bij voorkeur Synchroniseer nu."
+                      : "Stabiele koppeling met de advies-app; leeg laten voor niet-gekoppelde flessen."}
                   </p>
                 </div>
               )}

@@ -62,6 +62,20 @@ def _post(client, token):
     return client.post("/api/skus/advice-sync", headers=auth_header(token))
 
 
+def _wine_payload(*, source_product_id=None):
+    return {
+        "category": "wine",
+        "attributes": {
+            "producent": "Château Test",
+            "wijnaam": "Grand Vin",
+            "wijntype": "Rood",
+            "volume": "750",
+        },
+        "is_bottle": True,
+        "source_product_id": source_product_id,
+    }
+
+
 def test_sync_creates_the_bottle_and_reports_it(
     client, db, monkeypatch, advice_feed, merchant_token
 ):
@@ -88,6 +102,16 @@ def test_sync_skips_images_so_the_button_stays_fast(
     assert _post(client, merchant_token).status_code == 200
 
 
+def test_manual_sync_still_works_when_periodic_loop_is_disabled(
+    client, monkeypatch, advice_feed, merchant_token
+):
+    monkeypatch.setattr(settings, "advice_products_sync_interval_seconds", 0)
+    _use_client(monkeypatch, FakeClient())
+
+    assert settings.advice_products_sync_enabled is False
+    assert _post(client, merchant_token).status_code == 200
+
+
 def test_sync_requires_the_feed_to_be_configured(client, monkeypatch, merchant_token):
     monkeypatch.setattr(settings, "advice_products_base_url", "")
 
@@ -106,6 +130,62 @@ def test_sync_rejects_a_customer(client, monkeypatch, advice_feed, customer_toke
     _use_client(monkeypatch, FakeClient())
 
     assert _post(client, customer_token).status_code == 403
+
+
+def test_advice_org_cannot_create_a_bottle_without_source_id(
+    client, advice_feed, merchant_token
+):
+    resp = client.post(
+        "/api/skus",
+        json=_wine_payload(),
+        headers=auth_header(merchant_token),
+    )
+
+    assert resp.status_code == 400
+    assert "Adviesproduct-ID" in resp.json()["detail"]
+
+
+def test_other_org_can_create_a_bottle_without_source_id(
+    client, monkeypatch, advice_feed, merchant_token
+):
+    monkeypatch.setattr(settings, "advice_stock_organization_id", advice_feed.id + 999)
+
+    resp = client.post(
+        "/api/skus",
+        json=_wine_payload(),
+        headers=auth_header(merchant_token),
+    )
+
+    assert resp.status_code == 201
+
+
+def test_existing_local_bottle_must_be_linked_before_other_updates(
+    client, monkeypatch, advice_feed, merchant_token
+):
+    monkeypatch.setattr(settings, "advice_stock_organization_id", advice_feed.id + 999)
+    created = client.post(
+        "/api/skus",
+        json=_wine_payload(),
+        headers=auth_header(merchant_token),
+    )
+    assert created.status_code == 201
+    sku_id = created.json()["id"]
+
+    monkeypatch.setattr(settings, "advice_stock_organization_id", advice_feed.id)
+    blocked = client.patch(
+        f"/api/skus/{sku_id}",
+        json={"name": "Nog steeds lokaal"},
+        headers=auth_header(merchant_token),
+    )
+    linked = client.patch(
+        f"/api/skus/{sku_id}",
+        json={"source_product_id": "prd-legacy"},
+        headers=auth_header(merchant_token),
+    )
+
+    assert blocked.status_code == 400
+    assert linked.status_code == 200
+    assert linked.json()["source_product_id"] == "prd-legacy"
 
 
 def test_sync_reports_a_running_sync_instead_of_racing(

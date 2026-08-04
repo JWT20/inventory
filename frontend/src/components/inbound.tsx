@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
 import { toast } from "@/App";
-import { api, ApiError } from "@/lib/api";
+import { adviceSyncConflictMessage, api, ApiError } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -337,7 +338,60 @@ function isDuplicatePakbonError(err: unknown): err is ApiError & { detail: Dupli
   );
 }
 
+export function UnmatchedProductActions({
+  adviceSyncAvailable,
+  syncingAdvice,
+  onCreateConcept,
+  onSyncAdvice,
+}: {
+  adviceSyncAvailable: boolean;
+  syncingAdvice: boolean;
+  onCreateConcept: (isBottle: boolean) => void;
+  onSyncAdvice: () => void;
+}) {
+  if (!adviceSyncAvailable) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-muted-foreground">Nieuw concept als:</span>
+        <Button type="button" variant="outline" onClick={() => onCreateConcept(false)}>
+          Doos
+        </Button>
+        <Button type="button" variant="outline" onClick={() => onCreateConcept(true)}>
+          Losse fles
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-muted-foreground">Onbekende doos:</span>
+        <Button type="button" variant="outline" onClick={() => onCreateConcept(false)}>
+          Nieuw doosconcept
+        </Button>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-muted-foreground">Onbekende fles:</span>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={syncingAdvice}
+          onClick={onSyncAdvice}
+        >
+          {syncingAdvice ? "Bezig…" : "Synchroniseer nu"}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Flessen komen uit de advies-app. Maak de wijn daar aan (met beeld) en haal hem hiermee op.
+      </p>
+    </div>
+  );
+}
+
 export function InboundPage() {
+  const { user } = useAuth();
+  const adviceSyncAvailable = Boolean(user?.advice_products_sync_available);
   const [loading, setLoading] = useState(false);
   const [confirmingInbound, setConfirmingInbound] = useState(false);
   const [preview, setPreview] = useState<ExtractPreview | null>(null);
@@ -712,16 +766,21 @@ export function InboundPage() {
   async function syncAdviceProducts() {
     setSyncingAdvice(true);
     try {
-      const summary = (await api.syncAdviceProducts()) as {
-        created: number;
-        updated: number;
-      };
+      const summary = await api.syncAdviceProducts();
       await loadSkus();
-      toast.success(
-        summary.created > 0
-          ? `${summary.created} nieuw${summary.created === 1 ? "" : "e"} product${summary.created === 1 ? "" : "en"} opgehaald — kies het hieronder`
-          : "Geen nieuwe producten in de advies-app",
-      );
+      const conflictMessage = adviceSyncConflictMessage(summary);
+      if (conflictMessage) {
+        toast.error(
+          `${summary.created} product${summary.created === 1 ? "" : "en"} opgehaald; `
+          + conflictMessage,
+        );
+      } else {
+        toast.success(
+          summary.created > 0
+            ? `${summary.created} nieuw${summary.created === 1 ? "" : "e"} product${summary.created === 1 ? "" : "en"} opgehaald — kies het hieronder`
+            : "Geen nieuwe producten in de advies-app",
+        );
+      }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Synchroniseren mislukt");
     } finally {
@@ -729,9 +788,7 @@ export function InboundPage() {
     }
   }
 
-  // Boxes only: a bottle's identity belongs to the advice app, so an unknown
-  // bottle is resolved by syncing that product in, not by inventing one here.
-  async function createConceptForLine(lineIndex: number) {
+  async function createConceptForLine(lineIndex: number, isBottle: boolean) {
     if (!preview) return;
     const line = preview.lines[lineIndex];
     if (!line || line.matched_sku_id) return;
@@ -746,7 +803,7 @@ export function InboundPage() {
       const created = await api.createConceptProduct(
         supplierCode,
         line.description || undefined,
-        false,
+        isBottle,
       );
 
       const supplierNameForMapping = (preview.supplier_name || "").trim();
@@ -1111,37 +1168,18 @@ export function InboundPage() {
                             Koppel
                           </Button>
                         </div>
-                        {!line.matched_sku_id && <div className="flex flex-col gap-2">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-muted-foreground">Onbekende doos:</span>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              onClick={() => {
-                                void createConceptForLine(idx);
-                              }}
-                            >
-                              Nieuw doosconcept
-                            </Button>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-muted-foreground">Onbekende fles:</span>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              disabled={syncingAdvice}
-                              onClick={() => {
-                                void syncAdviceProducts();
-                              }}
-                            >
-                              {syncingAdvice ? "Bezig…" : "Synchroniseer nu"}
-                            </Button>
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            Flessen komen uit de advies-app. Maak de wijn daar aan (met beeld) en
-                            haal hem hiermee op.
-                          </p>
-                        </div>}
+                        {!line.matched_sku_id && (
+                          <UnmatchedProductActions
+                            adviceSyncAvailable={adviceSyncAvailable}
+                            syncingAdvice={syncingAdvice}
+                            onCreateConcept={(isBottle) => {
+                              void createConceptForLine(idx, isBottle);
+                            }}
+                            onSyncAdvice={() => {
+                              void syncAdviceProducts();
+                            }}
+                          />
+                        )}
                         {editing && (
                           <Button
                             type="button"

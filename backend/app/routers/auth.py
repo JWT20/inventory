@@ -25,6 +25,7 @@ from app.auth import (
     revoke_refresh_token,
     verify_password,
 )
+from app.config import settings
 from app.database import get_db
 from app.events import publish_event
 from app.models import Customer, Organization, User
@@ -55,6 +56,17 @@ class _LoginCredentials:
     """Adapter between our JSON login body and UserManager.authenticate()."""
     username: str
     password: str
+
+
+def _advice_products_sync_available(user: User) -> bool:
+    """Expose the server-side feed capability without leaking its target org id."""
+    return bool(
+        settings.advice_products_feed_configured
+        and (
+            user.is_platform_admin
+            or user.organization_id == settings.advice_stock_organization_id
+        )
+    )
 
 
 def _user_to_response(user: User, db: Session | None = None) -> UserResponse:
@@ -99,6 +111,7 @@ def _user_to_response(user: User, db: Session | None = None) -> UserResponse:
         customer_id=user.customer_id,
         customer_name=customer_name,
         enabled_modules=enabled_modules,
+        advice_products_sync_available=_advice_products_sync_available(user),
         is_active=user.is_active,
         created_at=user.created_at,
     )
@@ -168,6 +181,7 @@ async def login(
         custom_label=custom_label,
         customer_id=user.customer_id,
         enabled_modules=enabled_modules,
+        advice_products_sync_available=_advice_products_sync_available(user),
     )
 
 

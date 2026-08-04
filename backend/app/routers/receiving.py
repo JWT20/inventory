@@ -1306,8 +1306,7 @@ def create_concept_product(
     # stay a Dockscan-only stream and are unaffected.
     if (
         is_bottle
-        and settings.advice_stock_organization_id is not None
-        and target_org_id == settings.advice_stock_organization_id
+        and settings.has_advice_products_feed(target_org_id)
     ):
         raise HTTPException(
             400,
