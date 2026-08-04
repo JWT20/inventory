@@ -28,6 +28,7 @@ class TokenResponse(BaseModel):
     custom_label: str | None = None
     customer_id: int | None = None
     enabled_modules: list[str] = []
+    advice_products_sync_available: bool = False
 
 
 class RefreshRequest(BaseModel):
@@ -122,6 +123,7 @@ class UserResponse(BaseModel):
     customer_id: int | None = None
     customer_name: str | None = None
     enabled_modules: list[str] = []
+    advice_products_sync_available: bool = False
     is_active: bool
     created_at: datetime
 
@@ -346,6 +348,18 @@ class SKUOption(BaseModel):
     category: str | None = None
     producent: str | None = None
     supplier_name: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class AdviceProductSyncResponse(BaseModel):
+    """Result of one manually triggered advice-product snapshot pull."""
+
+    received: int
+    created: int
+    updated: int
+    deactivated: int
+    conflicts: list[str] = []
 
     model_config = {"from_attributes": True}
 

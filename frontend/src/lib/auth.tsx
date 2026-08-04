@@ -14,6 +14,7 @@ interface AuthUser {
   custom_label: string | null;
   customer_id: number | null;
   enabled_modules: string[];
+  advice_products_sync_available: boolean;
 }
 
 /** Whether the logged-in user's organization has a given feature module.
@@ -65,6 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       custom_label: resp.custom_label ?? null,
       customer_id: resp.customer_id ?? null,
       enabled_modules: resp.enabled_modules ?? [],
+      advice_products_sync_available: resp.advice_products_sync_available ?? false,
     });
     // Refresh full user data
     const me = await api.me();

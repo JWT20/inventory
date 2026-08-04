@@ -118,11 +118,30 @@ class Settings(BaseSettings):
     advice_products_sync_interval_seconds: int = 3600
 
     @property
-    def advice_products_sync_enabled(self) -> bool:
+    def advice_products_feed_configured(self) -> bool:
+        """Whether manual product sync is safe to offer.
+
+        The interval only controls the background loop. Keeping it out of this
+        predicate allows installations to use manual-only sync with interval 0.
+        """
         return bool(
             self.advice_products_base_url.strip()
             and self.advice_products_api_key
             and self.advice_stock_organization_id is not None
+        )
+
+    def has_advice_products_feed(self, organization_id: int | None) -> bool:
+        """Whether this organization must use advice-owned bottle identities."""
+        return bool(
+            self.advice_products_feed_configured
+            and organization_id == self.advice_stock_organization_id
+        )
+
+    @property
+    def advice_products_sync_enabled(self) -> bool:
+        """Whether the periodic product-sync loop should run."""
+        return bool(
+            self.advice_products_feed_configured
             and self.advice_products_sync_interval_seconds > 0
         )
 

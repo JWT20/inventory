@@ -1,6 +1,7 @@
 """Tests for auth endpoints: login, /me, user management, role guards, password, tokens."""
 
 from app.auth import create_refresh_token
+from app.config import settings
 from tests.conftest import auth_header
 
 
@@ -72,6 +73,21 @@ class TestMe:
     def test_get_me_invalid_token(self, client):
         resp = client.get("/api/auth/me", headers=auth_header("bad.token.here"))
         assert resp.status_code == 401
+
+    def test_advice_sync_capability_is_scoped_to_configured_organization(
+        self, client, monkeypatch, sample_org, merchant_token
+    ):
+        monkeypatch.setattr(settings, "advice_products_base_url", "https://advies.example")
+        monkeypatch.setattr(settings, "advice_products_api_key", "secret")
+        monkeypatch.setattr(settings, "advice_stock_organization_id", sample_org.id)
+        monkeypatch.setattr(settings, "advice_products_sync_interval_seconds", 0)
+
+        available = client.get("/api/auth/me", headers=auth_header(merchant_token))
+        monkeypatch.setattr(settings, "advice_stock_organization_id", sample_org.id + 999)
+        unavailable = client.get("/api/auth/me", headers=auth_header(merchant_token))
+
+        assert available.json()["advice_products_sync_available"] is True
+        assert unavailable.json()["advice_products_sync_available"] is False
 
 
 # ---------------------------------------------------------------------------

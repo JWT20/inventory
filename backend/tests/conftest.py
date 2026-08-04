@@ -36,6 +36,7 @@ def _compile_vector_sqlite(type_, compiler, **kw):
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.auth import create_token, hash_password, _failed_attempts, _revoked_tokens, _get_revocation_redis  # noqa: E402
+from app.config import settings  # noqa: E402
 from app.database import Base, get_db, get_async_session  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import SKU, Organization, User  # noqa: E402
@@ -134,6 +135,21 @@ def stub_langfuse_prompts(monkeypatch):
     monkeypatch.setattr(
         "app.services.embedding.get_prompt_required", _fake_prompt
     )
+
+
+@pytest.fixture(autouse=True)
+def advice_products_feed_off(monkeypatch):
+    """Keep the advice-product feed out of every test unless one asks for it.
+
+    Settings are read from the process environment, so a developer running the
+    suite in a container that carries a working ADVICE_* configuration would
+    otherwise see the feed rules apply to tests that predate them — the test
+    organization is the first one created and lands on id 1, which is exactly
+    what ADVICE_STOCK_ORGANIZATION_ID points at in dev. Clearing the target id
+    disables the feed predicates outright; tests that exercise them set their
+    own value with monkeypatch on top of this.
+    """
+    monkeypatch.setattr(settings, "advice_stock_organization_id", None)
 
 
 # ---------------------------------------------------------------------------

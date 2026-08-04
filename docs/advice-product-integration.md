@@ -92,6 +92,41 @@ blijven aanwezig met voorraad nul. Beschikbare voorraad is
 `max(quantity_on_hand - quantity_reserved, 0)` en wordt nooit aangevuld vanuit
 doosvoorraad.
 
+## Handmatig synchroniseren
+
+De periodieke pull kan tot een uur duren. Een net aangemaakte wijn is eerder
+nodig: zodra een pakbon binnenkomt moet de fles koppelbaar zijn. Daarvoor is er
+een knop **Synchroniseer nu** in Producten en in het inbound-scherm.
+
+```http
+POST /api/skus/advice-sync
+```
+
+Alleen voor productbeheerders van de organisatie die aan de feed hangt. De
+knop haalt geen referentiebeelden op — dat duurt tientallen seconden per nieuw
+product en is niet nodig om te koppelen en te boeken. De periodieke pull haalt
+het beeld daarna alsnog binnen, want die importeert alleen voor een product dat
+er nog geen heeft. Draait er al een synchronisatie, dan volgt een 409: twee
+gelijktijdige snapshots zouden op `uq_skus_org_source_product_id` botsen.
+Een interval van `0` schakelt alleen de periodieke pull uit; handmatig
+synchroniseren blijft beschikbaar zolang URL, API-key en organisatie zijn
+geconfigureerd.
+
+## Geen flesproducten in Dockscan aanmaken
+
+Inbound kan een onbekende doos als concept aanmaken. Voor flessen is dat
+geweigerd zolang de organisatie aan de adviesfeed hangt: een concept verzint een
+lokale identiteit, waarna de feed voor diezelfde wijn zijn eigen SKU aanmaakt en
+de geboekte flessen achterblijven op de kopie die de advies-app niet ziet. De
+route voor een onbekende fles is dus: wijn aanmaken in de advies-app,
+**Synchroniseer nu**, koppelen, boeken.
+
+Deze beperking geldt alleen voor de geconfigureerde adviesorganisatie. Andere
+organisaties behouden hun lokale optie **Losse fles**. Ook via het normale
+productformulier kan de adviesorganisatie geen fles zonder Adviesproduct-ID
+opslaan; zo kan dezelfde dubbele identiteit niet langs een tweede route alsnog
+ontstaan.
+
 ## Eenmalige bestaande koppelingen
 
 Bestaande fles-SKU's kunnen via het normale SKU-update-endpoint een

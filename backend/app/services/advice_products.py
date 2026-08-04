@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import threading
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -37,6 +39,30 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 class AdviceProductSyncError(RuntimeError):
     """The remote snapshot could not be fetched or safely applied."""
+
+
+class AdviceProductSyncBusy(RuntimeError):
+    """Another sync is already applying a snapshot."""
+
+
+_sync_lock = threading.Lock()
+
+
+@contextmanager
+def advice_sync_slot():
+    """Let only one sync apply a snapshot at a time.
+
+    The periodic loop and a manual trigger both create SKUs for source ids they
+    believe to be new. Running them concurrently makes the second one lose the
+    race on ``uq_skus_org_source_product_id`` and roll back its whole snapshot,
+    so the caller waits its turn instead.
+    """
+    if not _sync_lock.acquire(blocking=False):
+        raise AdviceProductSyncBusy("Er loopt al een adviesproductsynchronisatie")
+    try:
+        yield
+    finally:
+        _sync_lock.release()
 
 
 class AdviceProduct(BaseModel):
@@ -396,11 +422,12 @@ def sync_advice_products_once() -> AdviceProductSyncSummary | None:
         return None
     db = SessionLocal()
     try:
-        summary = sync_advice_products(
-            db,
-            organization_id=settings.advice_stock_organization_id,
-            client=AdviceProductsClient(),
-        )
+        with advice_sync_slot():
+            summary = sync_advice_products(
+                db,
+                organization_id=settings.advice_stock_organization_id,
+                client=AdviceProductsClient(),
+            )
         logger.info(
             "Advice product sync: received=%s created=%s updated=%s "
             "deactivated=%s images=%s conflicts=%s image_errors=%s",
@@ -415,6 +442,10 @@ def sync_advice_products_once() -> AdviceProductSyncSummary | None:
         for conflict in summary.conflicts:
             logger.error("Advice product sync conflict: %s", conflict)
         return summary
+    except AdviceProductSyncBusy:
+        # A manual trigger holds the slot; the next scheduled run covers it.
+        logger.info("Advice product sync skipped: another sync is running")
+        return None
     except Exception:
         db.rollback()
         logger.exception("Advice product sync failed; existing products unchanged")

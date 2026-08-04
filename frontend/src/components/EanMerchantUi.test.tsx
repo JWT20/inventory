@@ -14,6 +14,7 @@ const eanUser = {
   role: "owner",
   is_platform_admin: false,
   enabled_modules: ["inventory", "orders", "barcode_picking", "channel_orders"],
+  advice_products_sync_available: false,
 };
 
 vi.mock("@/lib/api", () => ({ api: mocks }));
@@ -62,6 +63,7 @@ describe("EAN merchant UI", () => {
 
     expect(await screen.findByText("EAN product")).toBeTruthy();
     expect(screen.queryByText(/referentiebeeld/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Synchroniseer nu" })).toBeNull();
   });
 
   it("shows arrival date and items on scanner order cards", () => {

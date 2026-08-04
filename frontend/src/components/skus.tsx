@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "@/App";
-import { api } from "@/lib/api";
+import { adviceSyncConflictMessage, api } from "@/lib/api";
 import { useAuth, hasModule } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -86,11 +86,13 @@ const PAGE_SIZE = 50;
 export function SKUsPage() {
   const { user } = useAuth();
   const isCourier = user?.role === "courier";
+  const adviceSyncAvailable = Boolean(user?.advice_products_sync_available);
   // EAN orgs scan a barcode into the search box, so advertise it in the hint.
   const canBarcode = hasModule(user, "barcode_picking");
   const [skus, setSkus] = useState<SKU[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [syncingAdvice, setSyncingAdvice] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
@@ -161,6 +163,29 @@ export function SKUsPage() {
     load();
   }, [load]);
 
+  // Pull the advice app's bottle products in now instead of waiting for the
+  // periodic sync, so a wine created there is linkable here right away.
+  const syncAdviceProducts = useCallback(async () => {
+    setSyncingAdvice(true);
+    try {
+      const summary = await api.syncAdviceProducts();
+      await load();
+      const conflictMessage = adviceSyncConflictMessage(summary);
+      if (conflictMessage) {
+        toast.error(
+          `${summary.created} nieuw, ${summary.updated} bijgewerkt; `
+          + conflictMessage,
+        );
+      } else {
+        toast.success(`${summary.created} nieuw, ${summary.updated} bijgewerkt`);
+      }
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Synchroniseren mislukt");
+    } finally {
+      setSyncingAdvice(false);
+    }
+  }, [load]);
+
   const loadMore = useCallback(async () => {
     const reqId = ++reqIdRef.current;
     setLoadingMore(true);
@@ -189,9 +214,23 @@ export function SKUsPage() {
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold">Producten</h2>
         {user && user.role !== "courier" && (
-          <Button size="sm" onClick={() => setShowNew(true)}>
-            + Nieuw
-          </Button>
+          <div className="flex items-center gap-2">
+            {adviceSyncAvailable && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={syncingAdvice}
+                onClick={() => {
+                  void syncAdviceProducts();
+                }}
+              >
+                {syncingAdvice ? "Bezig…" : "Synchroniseer nu"}
+              </Button>
+            )}
+            <Button size="sm" onClick={() => setShowNew(true)}>
+              + Nieuw
+            </Button>
+          </div>
         )}
       </div>
 
@@ -318,6 +357,7 @@ function SKUDialog({
 }) {
   const { user } = useAuth();
   const isCourier = user?.role === "courier";
+  const adviceSyncAvailable = Boolean(user?.advice_products_sync_available);
   // The product form may only offer pick methods the org has a module for; the
   // invariant on the backend rejects anything else. Default a new product to
   // whichever the org supports (vision wins when both are enabled).
@@ -785,10 +825,13 @@ function SKUDialog({
                     value={sourceProductId}
                     onChange={(e) => setSourceProductId(e.target.value)}
                     placeholder="prd_01H8..."
+                    required={adviceSyncAvailable}
                     disabled={isCourier}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Stabiele koppeling met de advies-app; leeg laten voor niet-gekoppelde flessen.
+                    {adviceSyncAvailable
+                      ? "Verplicht voor flessen van deze organisatie. Gebruik bij voorkeur Synchroniseer nu."
+                      : "Stabiele koppeling met de advies-app; leeg laten voor niet-gekoppelde flessen."}
                   </p>
                 </div>
               )}
