@@ -1,16 +1,19 @@
 """Tests for closing active orders that are not fully picked."""
 
-from app.models import Customer, Order, OrderLine, SKU
+from app.models import Customer, InventoryBalance, Order, OrderLine, SKU
 from app.routers.receiving import _open_scope_lines_query
 from tests.conftest import auth_header
 
 
-def _make_order(db, org, ref, status="active", week="2026-W21"):
+def _make_order(
+    db, org, ref, status="active", week="2026-W21", channel="manual"
+):
     order = Order(
         organization_id=org.id,
         reference=ref,
         status=status,
         delivery_week=week,
+        channel=channel,
     )
     db.add(order)
     db.flush()
@@ -31,17 +34,31 @@ def _make_line(db, order, sku, customer, quantity, booked_count=0):
     return line
 
 
-def _setup_partial_order(db, sample_org, ref="PARTIAL", status="active"):
+def _setup_partial_order(
+    db, sample_org, ref="PARTIAL", status="active", channel="manual"
+):
     sku = SKU(sku_code=f"SKU-{ref}", name=f"Wine {ref}")
     db.add(sku)
     db.flush()
     customer = Customer(name=f"Cust {ref}", organization_id=sample_org.id)
     db.add(customer)
     db.flush()
-    order = _make_order(db, sample_org, ref, status=status)
+    order = _make_order(db, sample_org, ref, status=status, channel=channel)
     line = _make_line(db, order, sku, customer, quantity=8, booked_count=3)
     db.commit()
     return order, line
+
+
+def _set_balance(db, org, line, *, reserved):
+    balance = InventoryBalance(
+        sku_id=line.sku_id,
+        organization_id=org.id,
+        quantity_on_hand=10,
+        quantity_reserved=reserved,
+    )
+    db.add(balance)
+    db.commit()
+    return balance
 
 
 def test_owner_closes_partial_order_keeps_bookings(client, db, owner_token, sample_org):
@@ -60,6 +77,63 @@ def test_owner_closes_partial_order_keeps_bookings(client, db, owner_token, samp
     # Ordered and booked quantities are left untouched.
     assert line.quantity == 8
     assert line.booked_count == 3
+
+
+def test_closing_channel_order_releases_only_its_unbooked_reservation(
+    client, db, owner_token, sample_org
+):
+    order, line = _setup_partial_order(
+        db, sample_org, ref="CHANNEL", channel="shopify"
+    )
+    balance = _set_balance(db, sample_org, line, reserved=12)
+
+    resp = client.post(
+        f"/api/orders/{order.id}/close",
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200
+    db.refresh(balance)
+    assert balance.quantity_on_hand == 10
+    assert balance.quantity_reserved == 7
+
+
+def test_closing_inactive_channel_order_does_not_release_reservation(
+    client, db, owner_token, sample_org
+):
+    order, line = _setup_partial_order(
+        db,
+        sample_org,
+        ref="CHANNEL-PENDING",
+        status="pending_images",
+        channel="shopify",
+    )
+    balance = _set_balance(db, sample_org, line, reserved=7)
+
+    resp = client.post(
+        f"/api/orders/{order.id}/close",
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200
+    db.refresh(balance)
+    assert balance.quantity_reserved == 7
+
+
+def test_closing_manual_order_does_not_release_other_reservations(
+    client, db, owner_token, sample_org
+):
+    order, line = _setup_partial_order(db, sample_org, ref="MANUAL")
+    balance = _set_balance(db, sample_org, line, reserved=5)
+
+    resp = client.post(
+        f"/api/orders/{order.id}/close",
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200
+    db.refresh(balance)
+    assert balance.quantity_reserved == 5
 
 
 def test_closed_order_leaves_scan_scope(client, db, owner_token, sample_org):

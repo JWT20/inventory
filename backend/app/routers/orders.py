@@ -51,12 +51,13 @@ from app.schemas import (
     WeeklySummarySupplier,
     WeeklySummaryWine,
 )
-from app.services.booking import recompute_order_status
+from app.services.booking import recompute_order_status, remaining_for_line
 from app.services.pricing import calc_effective_price
 from app.services.push_notifications import (
     enqueue_approved_order_ready,
     enqueue_customer_order_created,
 )
+from app.services.stock import adjust_reservation
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -1462,9 +1463,20 @@ def close_order(
     couriers stop receiving matches for it. Closing is available to the courier
     and to the owning organization (and platform admins).
     """
+    # Match the lock order used by apply_booking: lines first, then the order.
+    # This prevents a concurrent scan from changing booked_count while the
+    # remaining channel reservation is being calculated and released.
+    lines = (
+        db.query(OrderLine)
+        .filter(OrderLine.order_id == order_id)
+        .with_for_update()
+        .populate_existing()
+        .all()
+    )
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, "Order niet gevonden")
+    db.refresh(order, with_for_update=True)
 
     allowed = (
         user.is_platform_admin
@@ -1480,6 +1492,26 @@ def close_order(
     if order.status not in ("active", "pending_images"):
         raise HTTPException(400, f"Order kan niet gesloten worden (status: {order.status})")
 
+    released_reserved_boxes = 0
+    if (
+        order.status == "active"
+        and order.channel != "manual"
+        and order.organization_id is not None
+    ):
+        remaining_by_sku: dict[int, int] = defaultdict(int)
+        for line in lines:
+            remaining_by_sku[line.sku_id] += remaining_for_line(line)
+        for sku_id, remaining in sorted(remaining_by_sku.items()):
+            if remaining <= 0:
+                continue
+            adjust_reservation(
+                db,
+                sku_id=sku_id,
+                organization_id=order.organization_id,
+                delta=-remaining,
+            )
+            released_reserved_boxes += remaining
+
     order.status = "closed"
     order.mark_finalized()
     db.commit()
@@ -1489,8 +1521,9 @@ def close_order(
         "order_closed",
         details={
             "order_reference": order.reference,
-            "total_boxes": sum(l.quantity for l in order.lines),
-            "booked_boxes": sum(l.booked_count for l in order.lines),
+            "total_boxes": sum(line.quantity for line in lines),
+            "booked_boxes": sum(line.booked_count for line in lines),
+            "released_reserved_boxes": released_reserved_boxes,
         },
         user=user,
         resource_type="order",
