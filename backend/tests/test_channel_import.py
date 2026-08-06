@@ -919,3 +919,77 @@ def test_fulfillment_counter_decrease_parks_without_auto_restock(db):
     assert saved.status == "needs_review"
     assert saved.review_reason == "fulfillment_reversed"
     assert balance.quantity_on_hand == 8  # no guessed restock
+
+
+# --- Finalize stamp: a sync may be the step that closes a picked order --------
+
+def test_sync_shipping_a_picked_order_stamps_finalized(db):
+    """Remote fulfillment of the remainder must not hide the local pick.
+
+    Without the stamp the picked units never reach the monthly report, which
+    selects on finalized_at.
+    """
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-finalize")
+    conn = _connection(db, org, mode="live")
+    conn.inventory_authority_started_at = datetime.datetime(2026, 1, 1)
+    sku = _sku(db, org, "SOK-1", "8710000000430")
+    db.add(InventoryBalance(sku_id=sku.id, organization_id=org.id, quantity_on_hand=10))
+    db.commit()
+
+    order = _order(external_id="SHOP-FIN", lines=[
+        NormalizedLine(
+            ean="8710000000430",
+            quantity=3,
+            external_id="L1",
+            unfulfilled_quantity=3,
+        ),
+    ])
+    order.ordered_at = datetime.datetime(2026, 7, 1)
+    r1 = import_channel_order(db, conn, order)
+    db.commit()
+    o = db.get(Order, r1.order_id)
+    assert o.status == "active"
+    assert o.finalized_at is None
+
+    o.lines[0].booked_count = 2  # two of three units picked in-app
+    db.commit()
+
+    # The remainder ships from home: the channel reports nothing unfulfilled.
+    order.lines[0].unfulfilled_quantity = 0
+    order.fulfillment_status = "fulfilled"
+    r2 = import_channel_order(db, conn, order)
+    db.commit()
+
+    o = db.get(Order, r2.order_id)
+    assert o.status == "shipped"
+    assert o.finalized_at is not None
+
+
+def test_sync_does_not_stamp_an_order_without_local_picks(db):
+    """A purely external fulfillment is no warehouse work: no finalize stamp."""
+    from app.models import InventoryBalance
+
+    org = _org(db, "socks-no-finalize")
+    conn = _connection(db, org, mode="live")
+    conn.inventory_authority_started_at = datetime.datetime(2026, 1, 1)
+    sku = _sku(db, org, "SOK-1", "8710000000431")
+    db.add(InventoryBalance(sku_id=sku.id, organization_id=org.id, quantity_on_hand=5))
+    db.commit()
+    order = _order(external_id="SHOP-EXT", lines=[
+        NormalizedLine(
+            ean="8710000000431",
+            quantity=1,
+            external_id="L1",
+            unfulfilled_quantity=0,
+        ),
+    ])
+    order.ordered_at = datetime.datetime(2026, 7, 1)
+    order.fulfillment_status = "fulfilled"
+    result = import_channel_order(db, conn, order)
+    db.commit()
+
+    o = db.get(Order, result.order_id)
+    assert o.status == "shipped"
+    assert o.finalized_at is None

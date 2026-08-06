@@ -518,6 +518,15 @@ def import_channel_order(
         ):
             db_order.channel_shipped_at = order.shipped_at
 
+    # A sync that closes a locally picked order has to stamp the finalize moment
+    # itself. The pick flow only stamps at completion or at the label scan, so an
+    # order whose remainder was fulfilled at the channel (status jumps straight to
+    # shipped) would otherwise keep finalized_at NULL — and its picked units would
+    # never appear in the monthly report. Idempotent: an already-stamped order
+    # keeps its original month.
+    if has_bookings and final_status in ("completed", "shipped", "closed"):
+        db_order.mark_finalized()
+
     affected_sku_ids: list[int] = []
     if final_status != "needs_review":
         old_open = (
