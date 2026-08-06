@@ -6,7 +6,7 @@ import uuid
 from collections import defaultdict
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session, selectinload
 
@@ -52,6 +52,7 @@ from app.schemas import (
     WeeklySummaryWine,
 )
 from app.services.booking import recompute_order_status, remaining_for_line
+from app.services.inventory_sync import push_inventory_to_channels
 from app.services.pricing import calc_effective_price
 from app.services.push_notifications import (
     enqueue_approved_order_ready,
@@ -1453,6 +1454,7 @@ def _split_unimaged_lines(order: Order, db: Session) -> "Order | None":
 @router.post("/{order_id}/close", response_model=OrderResponse)
 def close_order(
     order_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1463,20 +1465,9 @@ def close_order(
     couriers stop receiving matches for it. Closing is available to the courier
     and to the owning organization (and platform admins).
     """
-    # Match the lock order used by apply_booking: lines first, then the order.
-    # This prevents a concurrent scan from changing booked_count while the
-    # remaining channel reservation is being calculated and released.
-    lines = (
-        db.query(OrderLine)
-        .filter(OrderLine.order_id == order_id)
-        .with_for_update()
-        .populate_existing()
-        .all()
-    )
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, "Order niet gevonden")
-    db.refresh(order, with_for_update=True)
 
     allowed = (
         user.is_platform_admin
@@ -1489,10 +1480,25 @@ def close_order(
     if not allowed:
         raise HTTPException(403, "Geen toegang om deze order te sluiten")
 
+    # Lock only after the access check: a caller who may not touch this order
+    # must not be able to hold its line locks — and stall the courier's scans —
+    # for the length of their request. Within the lock, match the order used by
+    # apply_booking (lines first, then the order) so a concurrent scan cannot
+    # change booked_count while the remaining reservation is calculated.
+    lines = (
+        db.query(OrderLine)
+        .filter(OrderLine.order_id == order_id)
+        .with_for_update()
+        .populate_existing()
+        .all()
+    )
+    db.refresh(order, with_for_update=True)
+
     if order.status not in ("active", "pending_images"):
         raise HTTPException(400, f"Order kan niet gesloten worden (status: {order.status})")
 
     released_reserved_boxes = 0
+    released_sku_ids: list[int] = []
     if (
         order.status == "active"
         and order.channel != "manual"
@@ -1504,18 +1510,43 @@ def close_order(
         for sku_id, remaining in sorted(remaining_by_sku.items()):
             if remaining <= 0:
                 continue
-            adjust_reservation(
+            applied = adjust_reservation(
                 db,
                 sku_id=sku_id,
                 organization_id=order.organization_id,
                 delta=-remaining,
             )
-            released_reserved_boxes += remaining
+            if applied != -remaining:
+                # The reservation is a shared per-product counter, clamped at 0.
+                # Releasing more than is reserved means this order held less than
+                # its open lines suggest (activated before reservations existed,
+                # or already released elsewhere) — the shortfall was taken from
+                # what other open orders reserved, so say so instead of silently
+                # freeing their stock.
+                logger.warning(
+                    "close_order: reservering geklemd voor SKU %s (order %s): "
+                    "%s gevraagd, %s vrijgegeven",
+                    sku_id,
+                    order.reference,
+                    remaining,
+                    -applied,
+                )
+            if applied:
+                released_reserved_boxes += -applied
+                released_sku_ids.append(sku_id)
 
     order.status = "closed"
     order.mark_finalized()
     db.commit()
     db.refresh(order)
+
+    # Releasing a reservation raises the available number a sales channel should
+    # see. Mirror it outward after the response, like every other reservation or
+    # stock write (see picking.scan_ean, channels.resolve_channel_review).
+    for sku_id in released_sku_ids:
+        background_tasks.add_task(
+            push_inventory_to_channels, sku_id, order.organization_id
+        )
 
     publish_event(
         "order_closed",

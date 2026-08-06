@@ -80,8 +80,11 @@ def test_owner_closes_partial_order_keeps_bookings(client, db, owner_token, samp
 
 
 def test_closing_channel_order_releases_only_its_unbooked_reservation(
-    client, db, owner_token, sample_org
+    client, db, owner_token, sample_org, monkeypatch
 ):
+    monkeypatch.setattr(
+        "app.routers.orders.push_inventory_to_channels", lambda *a, **k: None
+    )
     order, line = _setup_partial_order(
         db, sample_org, ref="CHANNEL", channel="shopify"
     )
@@ -134,6 +137,97 @@ def test_closing_manual_order_does_not_release_other_reservations(
     assert resp.status_code == 200
     db.refresh(balance)
     assert balance.quantity_reserved == 5
+
+
+def test_closing_channel_order_pushes_released_stock_to_channels(
+    client, db, owner_token, sample_org, monkeypatch
+):
+    # The released reservation raises available; the sales channels have to hear
+    # about it, or the stock stays unsellable at the webshop.
+    pushed: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        "app.routers.orders.push_inventory_to_channels",
+        lambda sku_id, org_id: pushed.append((sku_id, org_id)),
+    )
+    order, line = _setup_partial_order(
+        db, sample_org, ref="CHANNEL-PUSH", channel="shopify"
+    )
+    _set_balance(db, sample_org, line, reserved=12)
+
+    resp = client.post(
+        f"/api/orders/{order.id}/close",
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200
+    assert pushed == [(line.sku_id, sample_org.id)]
+
+
+def test_closing_manual_order_pushes_nothing(
+    client, db, owner_token, sample_org, monkeypatch
+):
+    pushed: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        "app.routers.orders.push_inventory_to_channels",
+        lambda sku_id, org_id: pushed.append((sku_id, org_id)),
+    )
+    order, line = _setup_partial_order(db, sample_org, ref="MANUAL-PUSH")
+    _set_balance(db, sample_org, line, reserved=5)
+
+    resp = client.post(
+        f"/api/orders/{order.id}/close",
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200
+    assert pushed == []
+
+
+def test_release_beyond_reservation_is_clamped_and_logged(
+    client, db, owner_token, sample_org, monkeypatch, caplog
+):
+    # The order has 5 open units but the shared counter holds only 2: it never
+    # reserved its full share. Releasing must not push the counter negative, and
+    # must not do it silently — the missing 3 came out of other open orders.
+    monkeypatch.setattr(
+        "app.routers.orders.push_inventory_to_channels", lambda *a, **k: None
+    )
+    order, line = _setup_partial_order(
+        db, sample_org, ref="CHANNEL-CLAMP", channel="shopify"
+    )
+    balance = _set_balance(db, sample_org, line, reserved=2)
+
+    with caplog.at_level("WARNING"):
+        resp = client.post(
+            f"/api/orders/{order.id}/close",
+            headers=auth_header(owner_token),
+        )
+
+    assert resp.status_code == 200
+    db.refresh(balance)
+    assert balance.quantity_reserved == 0
+    assert "reservering geklemd" in caplog.text
+    assert "CHANNEL-CLAMP" in caplog.text
+
+
+def test_forbidden_close_leaves_reservation_untouched(
+    client, db, customer_token, sample_org
+):
+    order, line = _setup_partial_order(
+        db, sample_org, ref="CHANNEL-FORBIDDEN", channel="shopify"
+    )
+    balance = _set_balance(db, sample_org, line, reserved=8)
+
+    resp = client.post(
+        f"/api/orders/{order.id}/close",
+        headers=auth_header(customer_token),
+    )
+
+    assert resp.status_code == 403
+    db.refresh(order)
+    db.refresh(balance)
+    assert order.status == "active"
+    assert balance.quantity_reserved == 8
 
 
 def test_closed_order_leaves_scan_scope(client, db, owner_token, sample_org):
