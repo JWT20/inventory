@@ -5,6 +5,7 @@ import logging
 import uuid
 from collections import defaultdict
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, case, func, or_
@@ -68,6 +69,10 @@ COURIER_VIEWABLE_STATUSES = (
     "pending_approval", "active", "completed", "shipped", "cancelled", "closed",
 )
 
+# The warehouse (and the invoice built on the monthly report) runs on local time,
+# while timestamps are stored as naive UTC.
+WAREHOUSE_TZ = ZoneInfo("Europe/Amsterdam")
+
 # Mirrors receiving._DELIVERY_DAY_SORT so the next-pick suggestion is selected
 # in the same order book_box actually books, keeping the card truthful.
 _DELIVERY_DAY_SORT = {
@@ -83,6 +88,19 @@ def _as_float(value: Decimal | float | None) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _report_month(finalized_at: datetime.datetime) -> str:
+    """Bucket a finalize moment into its warehouse month ("YYYY-MM").
+
+    ``finalized_at`` is stored as naive UTC (see Order.mark_finalized), while the
+    warehouse — and the invoice built on this report — works in local time. An
+    evening pick just after midnight local (22:xx UTC in summer) belongs to the
+    month the courier actually worked, not to the UTC one.
+    """
+    if finalized_at.tzinfo is None:
+        finalized_at = finalized_at.replace(tzinfo=datetime.timezone.utc)
+    return finalized_at.astimezone(WAREHOUSE_TZ).strftime("%Y-%m")
 
 
 def _primary_location_code(sku) -> str | None:
@@ -774,7 +792,7 @@ def monthly_booked_boxes(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Aantal verwerkte eenheden per maand voor voltooide/verzonden/gesloten orders.
+    """Aantal verwerkte eenheden per maand voor afgeronde orders.
 
     Eenheden tellen mee in de maand waarin de order is afgerond (``finalized_at``)
     en worden uitgesplitst als dozen, flessen of items. Het aantal is het werkelijk
@@ -788,6 +806,14 @@ def monthly_booked_boxes(
     owner/member (alleen de eigen handelaar).
     """
     # Per finalized order: its organization, finalize moment and booked boxes.
+    #
+    # ``finalized_at`` alone decides membership — deliberately *not* the current
+    # status. A picked order can still be parked (needs_review) or cancelled by a
+    # later channel sync, and reading the live status would then retroactively
+    # shrink a month that was already reported as closed. The work was done; the
+    # stamp records that. Reverted work is removed at its source instead: undoing
+    # a booking clears the stamp when the order reopens, and a cancel-with-restock
+    # zeroes ``booked_count``, so both drop out through the units check below.
     query = (
         db.query(
             Order.id.label("order_id"),
@@ -804,10 +830,7 @@ def monthly_booked_boxes(
         )
         .join(OrderLine, OrderLine.order_id == Order.id)
         .join(SKU, OrderLine.sku_id == SKU.id)
-        .filter(
-            Order.status.in_(("completed", "shipped", "closed")),
-            Order.finalized_at.isnot(None),
-        )
+        .filter(Order.finalized_at.isnot(None))
         .group_by(
             Order.id,
             Order.organization_id,
@@ -838,7 +861,7 @@ def monthly_booked_boxes(
     for row in query.all():
         if not row.units or row.finalized_at is None:
             continue
-        month = row.finalized_at.strftime("%Y-%m")
+        month = _report_month(row.finalized_at)
         unit = (
             "items"
             if row.product_type == "barcode"

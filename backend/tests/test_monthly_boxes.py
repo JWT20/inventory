@@ -293,6 +293,74 @@ def test_active_and_pending_orders_excluded(client, db, courier_token, sample_or
     assert resp.json()["organizations"] == []
 
 
+def test_parked_order_keeps_its_counted_month(client, db, courier_token, sample_org):
+    # A channel sync can park an already picked order (cancelled/changed at the
+    # webshop). The work was done, so the month it was reported in must not shrink.
+    _seed(
+        db,
+        sample_org,
+        "PARKED",
+        status="needs_review",
+        booked=3,
+        quantity=3,
+        finalized_at=datetime.datetime(2026, 4, 10),
+        product_type="barcode",
+    )
+
+    resp = client.get(
+        "/api/orders/reports/monthly-boxes",
+        headers=auth_header(courier_token),
+    )
+    org = resp.json()["organizations"][0]
+    assert org["months"] == [
+        _month("2026-04", items=3, item_orders=1, item_lines=1)
+    ]
+
+
+def test_cancelled_with_restock_drops_out(client, db, courier_token, sample_org):
+    # cancel_restock zeroes booked_count and deletes the bookings: the goods came
+    # back, so nothing was processed.
+    _seed(
+        db,
+        sample_org,
+        "RESTOCKED",
+        status="cancelled",
+        booked=0,
+        quantity=3,
+        finalized_at=datetime.datetime(2026, 4, 11),
+        product_type="barcode",
+    )
+
+    resp = client.get(
+        "/api/orders/reports/monthly-boxes",
+        headers=auth_header(courier_token),
+    )
+    assert resp.json()["organizations"] == []
+
+
+def test_month_follows_local_warehouse_time(client, db, courier_token, sample_org):
+    # 31 July 22:30 UTC is 1 August 00:30 in Amsterdam (CEST): August work.
+    _seed(
+        db,
+        sample_org,
+        "LATE",
+        status="shipped",
+        booked=2,
+        quantity=2,
+        finalized_at=datetime.datetime(2026, 7, 31, 22, 30),
+        product_type="barcode",
+    )
+
+    resp = client.get(
+        "/api/orders/reports/monthly-boxes",
+        headers=auth_header(courier_token),
+    )
+    org = resp.json()["organizations"][0]
+    assert org["months"] == [
+        _month("2026-08", items=2, item_orders=1, item_lines=1)
+    ]
+
+
 def test_organization_filter(client, db, courier_token, sample_org):
     other = type(sample_org)(name="Andere Handel", slug="andere")
     db.add(other)
