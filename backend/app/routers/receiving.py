@@ -37,10 +37,20 @@ from app.services.embedding import (
 )
 from app.services.matching import find_best_matches
 from app.services.product_status import recompute_active
+from app.services.rerank import (
+    RerankVerdict,
+    needs_visual_check,
+    rerank_scan,
+    select_rerank_candidates,
+)
 
 logger = logging.getLogger(__name__)
 
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
+# Vector hits pulled before the visual rerank narrows them down. Deep enough
+# that a whole cluster of near-identical variants fits in the result set —
+# with lookalikes the true SKU may sit a few ranks below the wrong one.
+CATALOG_SEARCH_TOP_N = 10
 CONFIRMATION_TOKEN_MAX_AGE = 120  # seconds
 
 _signer = URLSafeTimedSerializer(settings.secret_key, salt="booking-confirm")
@@ -331,13 +341,34 @@ async def identify_box(
         if embedding is None:
             embedding = await generate_embedding(description)
 
-        candidates = find_best_matches(db, embedding, top_n=5, is_bottle=bottle_mode)
+        matches = find_best_matches(
+            db, embedding, top_n=CATALOG_SEARCH_TOP_N, is_bottle=bottle_mode
+        )
         t_match = time.perf_counter()
 
+        # Same visual second pass as booking, on the same close-call trigger,
+        # so herkennen and boeken cannot disagree about a photo. There is no
+        # order here, so only the ambiguity trigger applies.
+        needs_check, check_reason = needs_visual_check(matches)
+        if needs_check:
+            logger.info("Visual check triggered: %s", check_reason)
+            verdict = await rerank_scan(
+                image_bytes, select_rerank_candidates(db, matches)
+            )
+        else:
+            verdict = RerankVerdict(ran=False, skip_reason=check_reason)
+        by_sku_id = {m[0].id: m for m in matches}
+
         matched_sku, confidence, matched_ref_desc = None, 0.0, None
-        if candidates and candidates[0][1] >= settings.match_threshold:
-            matched_sku, confidence = candidates[0][0], candidates[0][1]
-            matched_ref_desc = candidates[0][3]
+        if verdict.is_confident and verdict.sku_id in by_sku_id:
+            matched_sku, confidence, _path, matched_ref_desc = by_sku_id[verdict.sku_id]
+        elif (
+            not verdict.rejected_all
+            and matches
+            and matches[0][1] >= settings.match_threshold
+        ):
+            matched_sku, confidence = matches[0][0], matches[0][1]
+            matched_ref_desc = matches[0][3]
 
         logger.info(
             "[TIMING] identify total=%.0fms | read=%.0fms save=%.0fms process_image=%.0fms matching=%.0fms",
@@ -355,7 +386,7 @@ async def identify_box(
                 "similarity": round(sim, 4),
                 "reference_description": ref_desc,
             }
-            for s, sim, _img_path, ref_desc in candidates
+            for s, sim, _img_path, ref_desc in matches
         ]
 
         publish_event(
@@ -367,6 +398,10 @@ async def identify_box(
                 "candidates": candidate_details,
                 "threshold": settings.match_threshold,
                 "scan_mode": scan_mode,
+                "rerank_ran": verdict.ran,
+                "rerank_sku_id": verdict.sku_id,
+                "rerank_certainty": verdict.certainty if verdict.ran else None,
+                "rerank_feature": verdict.distinguishing_feature or None,
             },
             user=user,
             resource_type="receiving",
@@ -386,26 +421,32 @@ async def identify_box(
             reasons.append("low-quality description")
         if confidence < CONFIRM_THRESHOLD:
             reasons.append(f"low confidence ({confidence:.2f} < {CONFIRM_THRESHOLD})")
+        if verdict.degraded:
+            reasons.append(f"visual check unavailable ({verdict.skip_reason})")
+        elif verdict.ran and verdict.certainty != "high":
+            reasons.append("visual check was not certain")
+        if verdict.is_confident and verdict.distinguishing_feature:
+            reasons.append(f"visual check: {verdict.distinguishing_feature}")
 
-        # Check for ambiguous matches: if #2 is within ambiguity_margin of #1
-        if len(candidates) >= 2:
-            gap = candidates[0][1] - candidates[1][1]
-            if gap < settings.ambiguity_margin:
-                rival = candidates[1]
-                reasons.append(
-                    f"ambiguous match ({rival[0].sku_code} at {rival[1]:.3f} is only {gap:.3f} away)"
-                )
-                # Include all close rivals as alternatives
-                for s, sim, img_path, _ref_desc in candidates[1:]:
-                    if candidates[0][1] - sim < settings.ambiguity_margin:
-                        alternatives.append(AlternativeMatch(
-                            sku_id=s.id,
-                            sku_code=s.sku_code,
-                            sku_name=s.name,
-                            confidence=sim,
-                            reference_image_url=_image_url(img_path),
-                            reference_image_urls=_all_reference_image_urls(db, s.id),
-                        ))
+        # Every rival close enough to be confusable is offered, measured from
+        # the match that was actually chosen — after a rerank that need not be
+        # the top vector hit.
+        for s, sim, img_path, _ref_desc in matches:
+            if s.id == matched_sku.id:
+                continue
+            if confidence - sim >= settings.ambiguity_margin:
+                continue
+            reasons.append(
+                f"ambiguous match ({s.sku_code} at {sim:.3f} vs best match at {confidence:.3f})"
+            )
+            alternatives.append(AlternativeMatch(
+                sku_id=s.id,
+                sku_code=s.sku_code,
+                sku_name=s.name,
+                confidence=sim,
+                reference_image_url=_image_url(img_path),
+                reference_image_urls=_all_reference_image_urls(db, s.id),
+            ))
 
         needs_confirmation = len(reasons) > 0
         confirmation_reason = ", ".join(reasons) if reasons else None
@@ -614,23 +655,79 @@ async def book_box(
                 400,
                 "Geen open orderregels gevonden",
             )
-        candidates = find_best_matches(
-            db, embedding, top_n=5, sku_ids=list(scope_sku_ids), is_bottle=bottle_mode
+
+        # Search the whole catalogue, never only the SKUs open in scope.
+        # Restricting the pool to the order's own SKUs is what let a lookalike
+        # from another product line pass as a match: with three near-identical
+        # variants received and only one of them ordered, the scan of a wrong
+        # variant still cleared the threshold because the variant it actually
+        # was had been excluded from the pool and could not outscore it.
+        matches = find_best_matches(
+            db, embedding, top_n=CATALOG_SEARCH_TOP_N, is_bottle=bottle_mode
         )
         t_match = time.perf_counter()
 
-        matched_sku, confidence, matched_image_path, matched_ref_desc = None, 0.0, None, None
-        if candidates and candidates[0][1] >= settings.match_threshold:
-            matched_sku, confidence, matched_image_path, matched_ref_desc = candidates[0]
+        # Second pass, on the photos themselves — but only for a close call.
+        # Cosine similarity compares paraphrases of the packaging; two variants
+        # that differ in one printed word paraphrase almost identically, so the
+        # ordering between them is noise. Showing the model the scan next to the
+        # candidates' reference photos is the comparison that can separate them.
+        # A match that leads its runner-up by a wide margin needs no such help.
+        needs_check, check_reason = needs_visual_check(matches, scope_sku_ids)
+        if needs_check:
+            logger.info("Visual check triggered: %s", check_reason)
+            verdict = await rerank_scan(
+                image_bytes, select_rerank_candidates(db, matches)
+            )
+        else:
+            verdict = RerankVerdict(ran=False, skip_reason=check_reason)
 
-        # Always run an unrestricted search to detect cross-order ambiguity
-        # (still within the same unit pool).
-        all_candidates = find_best_matches(db, embedding, top_n=5, is_bottle=bottle_mode)
+        by_sku_id = {m[0].id: m for m in matches}
+        vector_best = matches[0] if matches else None
+        in_scope_matches = [m for m in matches if m[0].id in scope_sku_ids]
+
+        chosen: tuple[SKU, float, str | None, str | None] | None = None
+        if verdict.is_confident and verdict.sku_id in by_sku_id:
+            chosen = by_sku_id[verdict.sku_id]
+        elif not verdict.rejected_all and vector_best and vector_best[1] >= settings.match_threshold:
+            chosen = vector_best
+
+        # A confident verdict for a SKU that is not open here means the picker
+        # is holding the wrong box. Never offer a bookable proposal in that
+        # case — a one-tap confirm is exactly how the wrong variant got booked.
+        if chosen is not None and chosen[0].id not in scope_sku_ids and verdict.is_confident:
+            wrong_sku = chosen[0]
+            detail = (
+                f"Deze {unit_word} is {wrong_sku.sku_code} ({wrong_sku.name}), "
+                f"maar die staat niet open in {_scope_label(order)}"
+            )
+            if verdict.distinguishing_feature:
+                detail += f" — {verdict.distinguishing_feature}"
+            raise HTTPException(409, detail)
+
+        # Unsure, and the best guess is out of scope: fall back to the best
+        # candidate that *is* open, but only as a proposal to confirm, with the
+        # out-of-scope lookalike shown alongside it (handled below).
+        out_of_scope_lookalike: tuple[SKU, float, str | None, str | None] | None = None
+        if chosen is not None and chosen[0].id not in scope_sku_ids:
+            out_of_scope_lookalike = chosen
+            chosen = next(
+                (m for m in in_scope_matches if m[1] >= settings.match_threshold), None
+            )
+
+        matched_sku, confidence, matched_image_path, matched_ref_desc = None, 0.0, None, None
+        if chosen is not None:
+            matched_sku, confidence, matched_image_path, matched_ref_desc = chosen
 
         if matched_sku is None:
-            # Check if the scan matches a SKU outside this week's open order lines.
-            if all_candidates and all_candidates[0][1] >= settings.match_threshold:
-                wrong_sku = all_candidates[0][0]
+            # The scan matched a SKU outside this week's open order lines.
+            fallback_lookalike = out_of_scope_lookalike or (
+                vector_best
+                if vector_best and vector_best[1] >= settings.match_threshold
+                else None
+            )
+            if fallback_lookalike is not None and not verdict.rejected_all:
+                wrong_sku = fallback_lookalike[0]
                 raise HTTPException(
                     409,
                     f"Deze {unit_word} lijkt op SKU {wrong_sku.sku_code} ({wrong_sku.name}), "
@@ -678,44 +775,63 @@ async def book_box(
             reason.append("low-quality description")
         if confidence < CONFIRM_THRESHOLD:
             reason.append(f"low confidence ({confidence:.2f} < {CONFIRM_THRESHOLD})")
+        if verdict.degraded:
+            # The scan was a close call and the visual pass could not be made,
+            # so the proposal rests on the embedding alone — precisely what
+            # cannot separate lookalikes. The picker gets the last word rather
+            # than a silent auto-proposal.
+            reason.append(f"visual check unavailable ({verdict.skip_reason})")
+        elif verdict.ran and verdict.certainty != "high":
+            reason.append("visual check was not certain")
+        if verdict.is_confident and verdict.distinguishing_feature:
+            reason.append(f"visual check: {verdict.distinguishing_feature}")
 
-        # Check for ambiguous matches within the order candidates
-        if len(candidates) >= 2:
-            gap = candidates[0][1] - candidates[1][1]
-            if gap < settings.ambiguity_margin:
-                rival = candidates[1]
-                reason.append(
-                    f"ambiguous match ({rival[0].sku_code} at {rival[1]:.3f} is only {gap:.3f} away)"
-                )
-                for s, sim, img_path, _ref_desc in candidates[1:]:
-                    if candidates[0][1] - sim < settings.ambiguity_margin:
-                        alternatives.append(AlternativeMatch(
-                            sku_id=s.id,
-                            sku_code=s.sku_code,
-                            sku_name=s.name,
-                            confidence=sim,
-                            reference_image_url=_image_url(img_path),
-                            reference_image_urls=_all_reference_image_urls(db, s.id),
-                        ))
+        def _add_alternative(
+            sku: SKU, sim: float, img_path: str | None, *, note: str = ""
+        ) -> None:
+            if sku.id == matched_sku.id or any(a.sku_id == sku.id for a in alternatives):
+                return
+            alternatives.append(AlternativeMatch(
+                sku_id=sku.id,
+                sku_code=sku.sku_code,
+                sku_name=sku.name,
+                confidence=sim,
+                reference_image_url=_image_url(img_path),
+                reference_image_urls=_all_reference_image_urls(db, sku.id),
+                bookable=sku.id in scope_sku_ids,
+                note=note,
+            ))
 
-        # Cross-check: if the unrestricted catalog has a better or close match
-        # with a *different* SKU that is also open in scope, flag ambiguity.
-        for s, sim, img_path, _ref_desc in all_candidates:
+        # Every lookalike close enough to be confusable goes on the screen —
+        # including the ones that are not open here. The out-of-scope ones
+        # cannot be booked, but they are usually the box actually in the
+        # picker's hands, and seeing that photo is what stops the mis-pick.
+        if out_of_scope_lookalike is not None:
+            s, sim, img_path, _ref_desc = out_of_scope_lookalike
+            reason.append(f"closest catalogue match {s.sku_code} is not open in scope")
+            _add_alternative(
+                s, sim, img_path,
+                note=f"staat niet open in {_scope_label(order)}",
+            )
+
+        for s, sim, img_path, _ref_desc in matches:
             if s.id == matched_sku.id:
                 continue
-            if s.id in scope_sku_ids and sim >= confidence - settings.ambiguity_margin:
-                if not any(a.sku_id == s.id for a in alternatives):
-                    reason.append(
-                        f"close match in scope ({s.sku_code} at {sim:.3f} vs best match at {confidence:.3f})"
-                    )
-                    alternatives.append(AlternativeMatch(
-                        sku_id=s.id,
-                        sku_code=s.sku_code,
-                        sku_name=s.name,
-                        confidence=sim,
-                        reference_image_url=_image_url(img_path),
-                        reference_image_urls=_all_reference_image_urls(db, s.id),
-                    ))
+            if sim < confidence - settings.ambiguity_margin:
+                continue
+            if s.id in scope_sku_ids:
+                reason.append(
+                    f"close match in scope ({s.sku_code} at {sim:.3f} vs best match at {confidence:.3f})"
+                )
+                _add_alternative(s, sim, img_path)
+            else:
+                reason.append(
+                    f"close catalogue match out of scope ({s.sku_code} at {sim:.3f})"
+                )
+                _add_alternative(
+                    s, sim, img_path,
+                    note=f"staat niet open in {_scope_label(order)}",
+                )
 
         if reason:
             logger.info(
@@ -729,17 +845,24 @@ async def book_box(
             order, order_line, matched_sku.id, confidence, scan_key, user.id
         ))
 
-        # Generate a confirmation token for each alternative
+        # Generate a confirmation token for each bookable alternative. An
+        # alternative that turns out to have no bookable order line is demoted
+        # to a warning rather than dropped: hiding it would hide the very
+        # lookalike the picker needs to rule out.
         for alt in alternatives:
+            if not alt.bookable:
+                continue
             try:
                 alt_line, _alt_cap_remaining = _select_order_line_for_scope(db, order, alt.sku_id)
             except HTTPException:
+                alt.bookable = False
                 alt.confirmation_token = ""
+                if not alt.note:
+                    alt.note = f"niet meer te boeken in {_scope_label(order)}"
                 continue
             alt.confirmation_token = _signer.dumps(_confirmation_token_data(
                 order, alt_line, alt.sku_id, alt.confidence, scan_key, user.id
             ))
-        alternatives = [alt for alt in alternatives if alt.confirmation_token]
 
         # Pre-check stock availability (with row lock to prevent race conditions)
         balance = (
@@ -795,6 +918,7 @@ async def book_box(
             remaining_quantity=remaining,
             cap_for_customer=cap_for_customer,
             ordered_by_customer=ordered_by_customer,
+            confirmation_reason=", ".join(reason) if reason else None,
         )
 
 

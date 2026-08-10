@@ -112,6 +112,11 @@ export interface AlternativeMatch {
   reference_image_url: string;
   reference_image_urls?: string[];
   confirmation_token: string;
+  // False for a lookalike that is not open in this scan scope: shown with its
+  // photo so the picker can recognise the box they are actually holding, but
+  // it cannot be booked here.
+  bookable?: boolean;
+  note?: string;
 }
 
 export interface DistributionLine {
@@ -157,6 +162,7 @@ export interface ConfirmationData {
   remaining_quantity?: number;
   cap_for_customer?: number | null;
   ordered_by_customer?: number | null;
+  confirmation_reason?: string | null;
 }
 
 export interface WeeklyPickPhoto {

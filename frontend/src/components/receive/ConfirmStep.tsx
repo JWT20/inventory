@@ -81,6 +81,16 @@ export function ConfirmStep({
         </div>
       )}
 
+      {/* Why this scan is being questioned — the visual check's own words when
+          it found one, so the picker knows what to look at on the box. */}
+      {confirmation.confirmation_reason && (
+        <div className="p-3 rounded-lg bg-muted/50 border mb-4">
+          <p className="text-xs text-muted-foreground">
+            {confirmation.confirmation_reason}
+          </p>
+        </div>
+      )}
+
       {/* Rolcontainer assignment */}
       {confirmation.rolcontainer && (
         <div className="p-4 rounded-lg bg-muted/50 border text-center mb-4">
@@ -172,42 +182,65 @@ export function ConfirmStep({
             </Button>
           </Card>
 
-          {/* Alternatives */}
-          {confirmation.alternatives!.map((alt) => (
-            <Card key={alt.sku_id} className="p-4 mb-3 border border-muted">
-              <div className="space-y-1 mb-3">
-                <p className="text-sm">
-                  <span className="text-muted-foreground">Product:</span>{" "}
-                  <span className="font-semibold">{alt.sku_name}</span>
-                </p>
-                <p className="text-sm">
-                  <span className="text-muted-foreground">SKU:</span>{" "}
-                  <span className="font-mono">{alt.sku_code}</span>
-                </p>
-                <p className="text-sm">
-                  <span className="text-muted-foreground">Zekerheid:</span>{" "}
-                  {Math.round(alt.confidence * 100)}%
-                </p>
-              </div>
-              <ImageSlideshow
-                images={alt.reference_image_urls?.length ? alt.reference_image_urls : (alt.reference_image_url ? [alt.reference_image_url] : [])}
-                maxWidth="160px"
-                onImageClick={(i) => {
-                  const imgs = alt.reference_image_urls?.length ? alt.reference_image_urls : (alt.reference_image_url ? [alt.reference_image_url] : []);
-                  setLightbox({ images: imgs, index: i });
-                }}
-              />
-              <Button
-                size="lg"
-                className="w-full h-12 text-base mt-3"
-                variant="outline"
-                onClick={() => handleConfirm(alt.confirmation_token)}
-                disabled={confirming}
+          {/* Alternatives. A lookalike that is not open in this scope carries
+              bookable=false: it gets a photo and a reason but no confirm
+              button, because it is a warning ("this may be the box you are
+              holding"), not something that can be booked here. */}
+          {confirmation.alternatives!.map((alt) => {
+            const bookable = alt.bookable !== false && !!alt.confirmation_token;
+            return (
+              <Card
+                key={alt.sku_id}
+                className={
+                  bookable
+                    ? "p-4 mb-3 border border-muted"
+                    : "p-4 mb-3 border border-orange-600/50 bg-orange-950/20"
+                }
               >
-                {confirming ? "Boeken..." : `Dit is ${alt.sku_name}`}
-              </Button>
-            </Card>
-          ))}
+                <div className="space-y-1 mb-3">
+                  {!bookable && (
+                    <p className="text-sm font-semibold text-orange-400">
+                      Lijkt hier ook op — niet te boeken
+                    </p>
+                  )}
+                  <p className="text-sm">
+                    <span className="text-muted-foreground">Product:</span>{" "}
+                    <span className="font-semibold">{alt.sku_name}</span>
+                  </p>
+                  <p className="text-sm">
+                    <span className="text-muted-foreground">SKU:</span>{" "}
+                    <span className="font-mono">{alt.sku_code}</span>
+                  </p>
+                  <p className="text-sm">
+                    <span className="text-muted-foreground">Zekerheid:</span>{" "}
+                    {Math.round(alt.confidence * 100)}%
+                  </p>
+                  {alt.note && (
+                    <p className="text-xs text-orange-400">{alt.note}</p>
+                  )}
+                </div>
+                <ImageSlideshow
+                  images={alt.reference_image_urls?.length ? alt.reference_image_urls : (alt.reference_image_url ? [alt.reference_image_url] : [])}
+                  maxWidth="160px"
+                  onImageClick={(i) => {
+                    const imgs = alt.reference_image_urls?.length ? alt.reference_image_urls : (alt.reference_image_url ? [alt.reference_image_url] : []);
+                    setLightbox({ images: imgs, index: i });
+                  }}
+                />
+                {bookable && (
+                  <Button
+                    size="lg"
+                    className="w-full h-12 text-base mt-3"
+                    variant="outline"
+                    onClick={() => handleConfirm(alt.confirmation_token)}
+                    disabled={confirming}
+                  >
+                    {confirming ? "Boeken..." : `Dit is ${alt.sku_name}`}
+                  </Button>
+                )}
+              </Card>
+            );
+          })}
 
           <Button
             variant="destructive"

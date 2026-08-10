@@ -416,6 +416,98 @@ async def _call_vision(
 
 
 @observe(as_type="generation")
+async def _call_vision_multi(
+    images: list[tuple[str, Image.Image]],
+    prompt: str,
+    *,
+    model: str | None = None,
+    fallback_model: str | None = None,
+    system_instruction: str | None = None,
+    response_schema: types.SchemaUnion | None = None,
+) -> str:
+    """Call Gemini Vision with several labelled images in one request.
+
+    ``images`` is a list of ``(label, image)`` pairs; each image is preceded by
+    its label in the request contents so the model can refer to them by name
+    ("A", "B", …) instead of by position. Used by the rerank pass, which shows
+    the scan photo next to candidate reference photos and asks which one it is.
+
+    Shares the retry + cross-model fallback behaviour of :func:`_call_vision`.
+    """
+    model = model or settings.gemini_vision_model
+    fallback_model = fallback_model or settings.gemini_vision_fallback_model
+    models = _models_with_fallback(model, fallback_model)
+    client = _get_client()
+    logger.info("Calling Gemini Vision (multi-image, n=%d) model=%s", len(images), model)
+    t0 = time.perf_counter()
+
+    contents: list = [prompt]
+    for label, image in images:
+        contents.append(f"[{label}]")
+        contents.append(image)
+
+    generate_kwargs: dict = {"contents": contents}
+    config_kwargs: dict = {}
+    if system_instruction:
+        config_kwargs["system_instruction"] = system_instruction
+    if response_schema is not None:
+        config_kwargs["response_mime_type"] = "application/json"
+        config_kwargs["response_schema"] = response_schema
+    if config_kwargs:
+        generate_kwargs["config"] = types.GenerateContentConfig(**config_kwargs)
+
+    response, used_model = await _generate_content_with_retry(
+        client, models=models, label="Vision-multi", **generate_kwargs
+    )
+    fallback_used = used_model != model
+
+    finish_reason = _finish_reason(response)
+    logger.info(
+        "[TIMING] gemini_vision_multi=%.0fms images=%d model=%s fallback_used=%s finish_reason=%s",
+        (time.perf_counter() - t0) * 1000, len(images), used_model, fallback_used, finish_reason,
+    )
+    if finish_reason is not None and "STOP" not in finish_reason:
+        logger.warning(
+            "Gemini Vision (multi-image) finished abnormally: finish_reason=%s usage=%s",
+            finish_reason,
+            _usage_details_from_gemini(response) or "{}",
+        )
+
+    try:
+        langfuse = get_langfuse_client()
+        content: list[dict] = []
+        for label, image in images:
+            buf = io.BytesIO()
+            image.save(buf, format="JPEG")
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            content.append({"type": "text", "text": f"[{label}]"})
+            content.append(
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+            )
+        content.append({"type": "text", "text": prompt})
+        langfuse_input = []
+        if system_instruction:
+            langfuse_input.append({"role": "system", "content": system_instruction})
+        langfuse_input.append({"role": "user", "content": content})
+        langfuse.update_current_generation(
+            model=used_model,
+            input=langfuse_input,
+            output=response.text,
+            metadata={
+                "requested_model": model,
+                "fallback_used": fallback_used,
+                "fallback_from": model if fallback_used else None,
+                "image_count": len(images),
+            },
+            usage_details=_usage_details_from_gemini(response) or None,
+        )
+    except Exception:
+        pass  # Langfuse not initialized or not in traced context
+
+    return response.text
+
+
+@observe(as_type="generation")
 async def _call_text(
     prompt: str,
     *,
