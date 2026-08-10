@@ -92,6 +92,53 @@ blijven aanwezig met voorraad nul. Beschikbare voorraad is
 `max(quantity_on_hand - quantity_reserved, 0)` en wordt nooit aangevuld vanuit
 doosvoorraad.
 
+## Verkopen naar Dockscan
+
+De advies-app meldt een afgeronde verkoop — aan de toonbank of in de webshop —
+en Dockscan boekt die direct van de voorraad af. Anders dan bij een
+kanaalorder is er geen pickstap om op te wachten: de flessen zijn de deur al
+uit.
+
+```http
+POST /api/integrations/advice/sales
+Authorization: Bearer <ADVICE_SALES_API_KEY>
+```
+
+```json
+{
+  "sale_id": "ord_01J...",
+  "channel": "pos",
+  "occurred_at": "2026-08-10T14:12:00Z",
+  "lines": [
+    { "source_product_id": "prd_01H8...", "quantity": 2 }
+  ]
+}
+```
+
+Het antwoord splitst de regels in `applied` (nu geboekt, met de nieuwe
+beschikbare voorraad), `duplicate` (al eerder geboekt) en `unmatched`.
+
+Het endpoint faalt bewust **open**. Een kassa aan de balie mag nooit blijven
+hangen op een voorraadsysteem:
+
+- **Onbekend product** blokkeert de rest van de verkoop niet; het ID komt terug
+  in `unmatched`. Koppel het product en post dezelfde verkoop opnieuw — de al
+  geboekte regels blijven staan, de nieuwe komt er alsnog bij.
+- **Te weinig voorraad** weigert de verkoop niet. De balans mag negatief worden;
+  dat maakt de afwijking zichtbaar in plaats van de kassa te blokkeren. Een
+  telling (`count`) zet het recht.
+- **Retour** is dezelfde aanroep met een negatieve `quantity`.
+
+Idempotent op `(organisatie, sale_id)` en per regel op `(verkoop, SKU)`, want
+een kassa op slechte wifi herhaalt zijn verzoek. Dubbele regels voor hetzelfde
+product binnen één verkoop worden opgeteld tot één boeking. Elke geboekte regel
+levert een `stock_movement` van het type `sale` met `reference_type`
+`advice_sale`, en duwt de nieuwe beschikbare voorraad naar de live
+verkoopkanalen.
+
+De sleutel staat los van de twee leessleutels, zodat schrijfrechten apart
+ingetrokken kunnen worden.
+
 ## Handmatig synchroniseren
 
 De periodieke pull kan tot een uur duren. Een net aangemaakte wijn is eerder
@@ -143,6 +190,7 @@ fles-SKU's kan aanmaken.
 
 ```dotenv
 ADVICE_STOCK_API_KEY=<inbound-read-key>
+ADVICE_SALES_API_KEY=<inbound-write-key>
 ADVICE_STOCK_ORGANIZATION_ID=<organization-id>
 ADVICE_PRODUCTS_BASE_URL=https://<advice-app>
 ADVICE_PRODUCTS_API_KEY=<outbound-product-key>

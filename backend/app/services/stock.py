@@ -23,11 +23,18 @@ def apply_stock_movement(
     reference_id: int | None = None,
     note: str | None = None,
     performed_by: int | None,
+    allow_negative: bool = False,
 ) -> StockMovement:
     """Create a stock movement and update the inventory balance.
 
     Does NOT commit — the caller controls the transaction boundary.
     Raises HTTPException(409) if the resulting balance would go negative.
+
+    ``allow_negative`` lifts that guard for movements that record something that
+    already happened in the physical world and cannot be refused — a sale at the
+    shop counter is booked after the customer walked out with the bottle.
+    Refusing it would only hide the discrepancy; a negative balance surfaces it
+    instead, and a stock count corrects it.
     """
     balance = (
         db.query(InventoryBalance)
@@ -48,7 +55,7 @@ def apply_stock_movement(
         db.flush()
 
     new_qty = balance.quantity_on_hand + quantity
-    if quantity < 0 and abs(quantity) > balance.quantity_available:
+    if quantity < 0 and not allow_negative and abs(quantity) > balance.quantity_available:
         sku = db.get(SKU, sku_id)
         sku_code = sku.sku_code if sku else str(sku_id)
         raise HTTPException(
@@ -56,7 +63,7 @@ def apply_stock_movement(
             f"Onvoldoende voorraad voor {sku_code}: "
             f"{balance.quantity_available} beschikbaar, {abs(quantity)} nodig",
         )
-    if new_qty < balance.quantity_reserved:
+    if new_qty < balance.quantity_reserved and not allow_negative:
         raise HTTPException(
             409,
             "Voorraad kan niet onder het gereserveerde aantal komen",

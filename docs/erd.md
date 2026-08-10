@@ -205,3 +205,4 @@ flowchart LR
 | `pick` | Scan/booking | -1 | Doos gescand en op rolcontainer gezet |
 | `adjust` | Handmatige correctie | +/- | Correctie door admin/merchant |
 | `count` | Fysieke telling | +/- | Delta na telling (saldo bijstellen) |
+| `sale` | Verkoopmelding advies-app | +/- | Toonbank of webshop; mag negatief gaan (zie [advies-koppeling](advice-product-integration.md)) |
