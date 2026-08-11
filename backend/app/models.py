@@ -1050,10 +1050,12 @@ class AdviceSaleLine(Base):
     sale_id: Mapped[int] = mapped_column(
         ForeignKey("advice_sales.id", ondelete="CASCADE")
     )
-    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
+    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="CASCADE"))
     quantity: Mapped[int] = mapped_column(Integer)
+    # SET NULL: force-deleting a SKU wipes its stock movements first, and the
+    # sale line must survive that delete long enough for its own CASCADE to fire.
     stock_movement_id: Mapped[int | None] = mapped_column(
-        ForeignKey("stock_movements.id"), nullable=True
+        ForeignKey("stock_movements.id", ondelete="SET NULL"), nullable=True
     )
 
     sale: Mapped["AdviceSale"] = relationship(back_populates="lines")

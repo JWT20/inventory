@@ -43,8 +43,10 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["sale_id"], ["advice_sales.id"], ondelete="CASCADE"
         ),
-        sa.ForeignKeyConstraint(["sku_id"], ["skus.id"]),
-        sa.ForeignKeyConstraint(["stock_movement_id"], ["stock_movements.id"]),
+        sa.ForeignKeyConstraint(["sku_id"], ["skus.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["stock_movement_id"], ["stock_movements.id"], ondelete="SET NULL"
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("sale_id", "sku_id", name="uq_advice_sale_lines_sale_sku"),
     )
