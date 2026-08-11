@@ -707,10 +707,32 @@ async def book_box(
         in_scope_matches = [m for m in matches if m[0].id in scope_sku_ids]
 
         chosen: tuple[SKU, float, str | None, str | None] | None = None
+        manual_review_required = False
         if verdict.is_confident and verdict.sku_id in by_sku_id:
             chosen = by_sku_id[verdict.sku_id]
         elif not verdict.rejected_all and vector_best and vector_best[1] >= settings.match_threshold:
             chosen = vector_best
+        elif verdict.rejected_all and vector_best:
+            # The visual pass can reject every photo even though the strongest
+            # open-order candidate is still a plausible, near-tied vector hit
+            # (for example when its reference photo is stale or poor). Do not
+            # dead-end the picker in that narrow case: offer exactly that one
+            # order candidate for explicit manual approval.
+            #
+            # The guardrails deliberately mirror the normal match and
+            # ambiguity thresholds. A materially better catalogue hit must not
+            # be forced onto the order, and a SKU the visual pass never saw is
+            # not eligible for this fallback.
+            best_in_scope = next(iter(in_scope_matches), None)
+            if (
+                best_in_scope is not None
+                and best_in_scope[1] >= settings.match_threshold
+                and vector_best[1] - best_in_scope[1] <= settings.ambiguity_margin
+                and best_in_scope[0].id in verdict.considered_sku_ids
+                and best_in_scope[2] is not None
+            ):
+                chosen = best_in_scope
+                manual_review_required = True
 
         # A confident verdict for a SKU that is not open here means the picker
         # is holding the wrong box. Never offer a bookable proposal in that
@@ -791,20 +813,26 @@ async def book_box(
         reason: list[str] = []
         alternatives: list[AlternativeMatch] = []
 
-        if quality == "low":
-            reason.append("low-quality description")
-        if confidence < CONFIRM_THRESHOLD:
-            reason.append(f"low confidence ({confidence:.2f} < {CONFIRM_THRESHOLD})")
-        if verdict.degraded:
-            # The scan was a close call and the visual pass could not be made,
-            # so the proposal rests on the embedding alone — precisely what
-            # cannot separate lookalikes. The picker gets the last word rather
-            # than a silent auto-proposal.
-            reason.append(f"visual check unavailable ({verdict.skip_reason})")
-        elif verdict.ran and verdict.certainty != "high":
-            reason.append("visual check was not certain")
-        if verdict.is_confident and verdict.distinguishing_feature:
-            reason.append(f"visual check: {verdict.distinguishing_feature}")
+        if manual_review_required:
+            reason.append(
+                "Automatische fotovergelijking kon geen zekere match bevestigen. "
+                "Vergelijk de scan met de referentiefoto en bevestig alleen als dit product klopt."
+            )
+        else:
+            if quality == "low":
+                reason.append("low-quality description")
+            if confidence < CONFIRM_THRESHOLD:
+                reason.append(f"low confidence ({confidence:.2f} < {CONFIRM_THRESHOLD})")
+            if verdict.degraded:
+                # The scan was a close call and the visual pass could not be made,
+                # so the proposal rests on the embedding alone — precisely what
+                # cannot separate lookalikes. The picker gets the last word rather
+                # than a silent auto-proposal.
+                reason.append(f"visual check unavailable ({verdict.skip_reason})")
+            elif verdict.ran and verdict.certainty != "high":
+                reason.append("visual check was not certain")
+            if verdict.is_confident and verdict.distinguishing_feature:
+                reason.append(f"visual check: {verdict.distinguishing_feature}")
 
         def _add_alternative(
             sku: SKU, sim: float, img_path: str | None, *, note: str = ""
@@ -826,32 +854,36 @@ async def book_box(
         # including the ones that are not open here. The out-of-scope ones
         # cannot be booked, but they are usually the box actually in the
         # picker's hands, and seeing that photo is what stops the mis-pick.
-        if out_of_scope_lookalike is not None:
-            s, sim, img_path, _ref_desc = out_of_scope_lookalike
-            reason.append(f"closest catalogue match {s.sku_code} is not open in scope")
-            _add_alternative(
-                s, sim, img_path,
-                note=f"staat niet open in {_scope_label(order)}",
-            )
-
-        for s, sim, img_path, _ref_desc in matches:
-            if s.id == matched_sku.id:
-                continue
-            if sim < confidence - settings.ambiguity_margin:
-                continue
-            if s.id in scope_sku_ids:
-                reason.append(
-                    f"close match in scope ({s.sku_code} at {sim:.3f} vs best match at {confidence:.3f})"
-                )
-                _add_alternative(s, sim, img_path)
-            else:
-                reason.append(
-                    f"close catalogue match out of scope ({s.sku_code} at {sim:.3f})"
-                )
+        # The rejected-all fallback intentionally shows one option only. Its
+        # purpose is a simple scan-vs-reference decision, not another candidate
+        # picker. All existing uncertain/degraded paths keep their alternatives.
+        if not manual_review_required:
+            if out_of_scope_lookalike is not None:
+                s, sim, img_path, _ref_desc = out_of_scope_lookalike
+                reason.append(f"closest catalogue match {s.sku_code} is not open in scope")
                 _add_alternative(
                     s, sim, img_path,
                     note=f"staat niet open in {_scope_label(order)}",
                 )
+
+            for s, sim, img_path, _ref_desc in matches:
+                if s.id == matched_sku.id:
+                    continue
+                if sim < confidence - settings.ambiguity_margin:
+                    continue
+                if s.id in scope_sku_ids:
+                    reason.append(
+                        f"close match in scope ({s.sku_code} at {sim:.3f} vs best match at {confidence:.3f})"
+                    )
+                    _add_alternative(s, sim, img_path)
+                else:
+                    reason.append(
+                        f"close catalogue match out of scope ({s.sku_code} at {sim:.3f})"
+                    )
+                    _add_alternative(
+                        s, sim, img_path,
+                        note=f"staat niet open in {_scope_label(order)}",
+                    )
 
         if reason:
             logger.info(
@@ -939,6 +971,7 @@ async def book_box(
             cap_for_customer=cap_for_customer,
             ordered_by_customer=ordered_by_customer,
             confirmation_reason=", ".join(reason) if reason else None,
+            manual_review_required=manual_review_required,
         )
 
 

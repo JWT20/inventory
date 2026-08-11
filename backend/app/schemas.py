@@ -814,6 +814,10 @@ class BookingConfirmation(BaseModel):
     # Why this scan needs a human look (low confidence, lookalikes, rerank
     # unavailable). Empty when the match was clean.
     confirmation_reason: str | None = None
+    # True only for the narrow rejected-all fallback: the visual pass could not
+    # confirm any photo, but one plausible, near-tied SKU is open on the order.
+    # The UI must present it as an explicit manual decision, never as a clean hit.
+    manual_review_required: bool = False
 
 
 class ConfirmBookingRequest(BaseModel):
