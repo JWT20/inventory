@@ -41,13 +41,18 @@ staat is willekeurig.
 ```
 foto → beschrijving → embedding
      → pgvector over de HELE catalogus (top 10)
+       + beste matches uit de open orderregels
      → visuele rerank: scanfoto naast de referentiefoto's van de top-kandidaten
      → beslissing
 ```
 
 **Zoeken gaat altijd over de hele catalogus.** `CATALOG_SEARCH_TOP_N = 10`; de
 scope bepaalt pas achteraf wat geboekt mag worden, niet waartegen vergeleken
-wordt.
+wordt. Daarnaast worden de beste matches uit de open orderregels apart opgehaald
+en terug in de kandidaatset gezet. Zo kan een grote lookalike-cluster niet alle
+tien globale plaatsen vullen en daarmee het product dat werkelijk op de order
+staat onzichtbaar maken. De visuele selectie bewaart om dezelfde reden ruimte
+voor minstens de beste open kandidaat.
 
 **De rerank is de tweede trap, en draait alleen bij close calls.** Letterlijk
 elke foto door een LLM halen kan niet (honderden SKU's × foto's per scan).

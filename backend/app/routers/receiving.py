@@ -662,8 +662,27 @@ async def book_box(
         # variants received and only one of them ordered, the scan of a wrong
         # variant still cleared the threshold because the variant it actually
         # was had been excluded from the pool and could not outscore it.
-        matches = find_best_matches(
+        catalogue_matches = find_best_matches(
             db, embedding, top_n=CATALOG_SEARCH_TOP_N, is_bottle=bottle_mode
+        )
+        # The catalogue LIMIT must never make an open order SKU disappear. A
+        # large lookalike cluster can occupy every global top-N slot even though
+        # the correct SKU is the next result. Pull the strongest open candidates
+        # separately and merge them back before the visual pass.
+        scope_matches = find_best_matches(
+            db,
+            embedding,
+            top_n=max(1, settings.rerank_max_candidates),
+            sku_ids=list(scope_sku_ids),
+            is_bottle=bottle_mode,
+        )
+        matches_by_sku_id = {match[0].id: match for match in catalogue_matches}
+        for match in scope_matches:
+            current = matches_by_sku_id.get(match[0].id)
+            if current is None or match[1] > current[1]:
+                matches_by_sku_id[match[0].id] = match
+        matches = sorted(
+            matches_by_sku_id.values(), key=lambda match: match[1], reverse=True
         )
         t_match = time.perf_counter()
 
@@ -677,7 +696,8 @@ async def book_box(
         if needs_check:
             logger.info("Visual check triggered: %s", check_reason)
             verdict = await rerank_scan(
-                image_bytes, select_rerank_candidates(db, matches)
+                image_bytes,
+                select_rerank_candidates(db, matches, scope_sku_ids=scope_sku_ids),
             )
         else:
             verdict = RerankVerdict(ran=False, skip_reason=check_reason)

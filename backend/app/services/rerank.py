@@ -151,28 +151,51 @@ def needs_visual_check(
 def select_rerank_candidates(
     db: Session,
     matches: list[tuple[SKU, float, str | None, str | None]],
+    scope_sku_ids: set[int] | None = None,
 ) -> list[RerankCandidate]:
     """Narrow vector hits to the set worth comparing visually.
 
-    Everything within ``rerank_similarity_band`` of the best hit is plausible —
-    that band is what a lookalike cluster looks like — capped at
-    ``rerank_max_candidates`` SKUs so the call stays bounded. The best-matching
-    reference image of each SKU is listed first, then its other usable photos up
-    to ``rerank_images_per_sku``: different angles of the same box are what let
-    the model find the one printed word that separates two variants.
+    The best hits inside the normal similarity band are kept first. The strongest
+    open-order hit is then guaranteed one place, replacing the weakest selected
+    hit when a large out-of-scope lookalike cluster would otherwise fill every
+    slot. This keeps the closest catalogue rivals visible while ensuring the
+    product that can actually be booked never disappears. The total stays
+    bounded by ``rerank_max_candidates``.
+
+    The best-matching reference image of each SKU is listed first, then its other
+    usable photos up to ``rerank_images_per_sku``: different angles of the same
+    box are what let the model find the one printed word that separates two
+    variants.
     """
     if not matches:
         return []
 
     best_similarity = matches[0][1]
     cutoff = best_similarity - settings.rerank_similarity_band
+    max_candidates = max(1, settings.rerank_max_candidates)
+
+    plausible = [match for match in matches if match[1] >= cutoff]
+    selected = plausible[:max_candidates]
+
+    # Reserve one place for the strongest SKU that is actually open. Usually it
+    # is already selected; the replacement path handles an out-of-scope cluster
+    # that occupied every global candidate slot.
+    if scope_sku_ids:
+        best_in_scope = next(
+            (match for match in matches if match[0].id in scope_sku_ids), None
+        )
+        selected_sku_ids = {match[0].id for match in selected}
+        if (
+            best_in_scope is not None
+            and best_in_scope[0].id not in selected_sku_ids
+        ):
+            if len(selected) < max_candidates:
+                selected.append(best_in_scope)
+            else:
+                selected[-1] = best_in_scope
 
     candidates: list[RerankCandidate] = []
-    for sku, similarity, image_path, _ref_desc in matches:
-        if similarity < cutoff:
-            break
-        if len(candidates) >= settings.rerank_max_candidates:
-            break
+    for sku, similarity, image_path, _ref_desc in selected:
         candidates.append(
             RerankCandidate(
                 sku_id=sku.id,

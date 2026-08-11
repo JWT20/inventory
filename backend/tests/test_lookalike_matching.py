@@ -276,6 +276,49 @@ def test_in_scope_rival_is_still_offered_as_a_bookable_alternative(
     assert rival[0]["confirmation_token"]
 
 
+def test_order_match_is_kept_when_catalogue_top_results_omit_it(
+    client, courier_token, variants, tmp_path
+):
+    """The catalogue LIMIT may not hide the SKU that is open on the order."""
+    ordered, other, third, order = variants
+
+    def search_results(*_args, **kwargs):
+        if kwargs.get("sku_ids"):
+            return [
+                (
+                    ordered,
+                    0.84,
+                    "reference_images/CALY-BIANCO.jpg",
+                    "Calycanto Bianco box",
+                )
+            ]
+        # Simulate a global top-N filled by lookalikes. The ordered SKU is the
+        # next catalogue result and therefore absent from this bounded list.
+        return [
+            (other, 0.95, "reference_images/CALY-ROSSO.jpg", "Calycanto box"),
+            (third, 0.94, "reference_images/CALY-ROSATO.jpg", "Calycanto box"),
+        ]
+
+    with patch("app.routers.receiving.process_image", side_effect=_mock_process_package), \
+         patch("app.routers.receiving.storage", _tmp_storage(tmp_path)), \
+         patch("app.routers.receiving.find_best_matches", side_effect=search_results), \
+         patch("app.routers.receiving.rerank_scan") as mock_rerank:
+        mock_rerank.return_value = RerankVerdict(
+            ran=True,
+            sku_id=ordered.id,
+            certainty="high",
+            distinguishing_feature="etiket zegt Bianco",
+            considered_sku_ids=[other.id, third.id, ordered.id],
+        )
+
+        resp = _post_book(client, courier_token, order)
+
+    assert resp.status_code == 200
+    assert resp.json()["sku_code"] == "CALY-BIANCO"
+    rerank_candidates = mock_rerank.call_args.args[1]
+    assert ordered.id in {candidate.sku_id for candidate in rerank_candidates}
+
+
 def test_identify_prefers_the_visual_verdict_over_the_vector_ranking(
     client, courier_token, variants, tmp_path
 ):
@@ -360,6 +403,35 @@ def test_candidate_selection_skips_skus_without_usable_reference_photos(db, vari
     )
 
     assert [c.sku_code for c in selected] == ["CALY-BIANCO"]
+
+
+def test_candidate_selection_reserves_a_place_for_the_best_open_sku(
+    db, variants
+):
+    from app.services.rerank import select_rerank_candidates
+
+    ordered, other, third, _order = variants
+    extra_a = _make_sku(db, "CALY-EXTRA-A", "Calycanto Extra A")
+    extra_b = _make_sku(db, "CALY-EXTRA-B", "Calycanto Extra B")
+    db.commit()
+
+    selected = select_rerank_candidates(
+        db,
+        [
+            (other, 0.95, "reference_images/CALY-ROSSO.jpg", None),
+            (third, 0.94, "reference_images/CALY-ROSATO.jpg", None),
+            (extra_a, 0.93, "reference_images/CALY-EXTRA-A.jpg", None),
+            (extra_b, 0.92, "reference_images/CALY-EXTRA-B.jpg", None),
+            # Outside the normal 0.10 band and beyond the four candidate slots,
+            # but this is the strongest SKU that can actually be booked.
+            (ordered, 0.84, "reference_images/CALY-BIANCO.jpg", None),
+        ],
+        scope_sku_ids={ordered.id},
+    )
+
+    assert len(selected) == 4
+    assert selected[0].sku_id == other.id
+    assert ordered.id in {candidate.sku_id for candidate in selected}
 
 
 # ---------------------------------------------------------------------------
