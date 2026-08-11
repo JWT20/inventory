@@ -135,8 +135,12 @@ Answer with:
   picker grabbed a product that is not in the candidate list.
 - "certainty": "high" only when you can name the concrete detail that confirms
   the match and rules out the other candidates. Anything else is "low".
-- "distinguishing_feature": the detail you used, in one short Dutch phrase
-  (for example: "etiket zegt Rosso, niet Bianco"). Empty string if none.
+- "distinguishing_feature": what the scanned product's OWN label says, in one
+  short Dutch phrase. Describe only the scan. Never name the other candidates
+  and never phrase it as what the product is not — the picker does not know
+  which candidates you were shown, so naming them is confusing.
+  Good: "etiket zegt Merlot 2025". Bad: "Merlot, niet Sauvignon Blanc".
+  Empty string if nothing decisive is readable.
 
 A wrong "high" answer ships the wrong product to a customer. When the decisive
 detail is unreadable, blurred or out of frame, answer "low".
