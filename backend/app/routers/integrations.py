@@ -188,7 +188,9 @@ def advice_sale(
             sale = candidate
         except IntegrityError:
             # Two retries of the same sale raced; the other one created it.
-            db.expunge(candidate)
+            # Rolling back the savepoint already makes the failed candidate
+            # transient. Calling ``expunge`` here would itself raise because
+            # the instance is no longer present in the session.
             sale = _load_sale()
             if sale is None:
                 raise

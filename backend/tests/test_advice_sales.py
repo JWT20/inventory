@@ -2,6 +2,7 @@
 
 import pytest
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Query
 
 from app.config import settings
 from app.models import AdviceSale, InventoryBalance, Organization, SKU, StockMovement
@@ -128,6 +129,45 @@ def test_retry_is_idempotent(client, db, sample_org, monkeypatch):
     assert balance.quantity_on_hand == 8
     assert db.query(StockMovement).filter(StockMovement.sku_id == sku.id).count() == 1
     assert db.query(AdviceSale).count() == 1
+
+
+def test_concurrent_retry_reloads_the_winning_sale(
+    client, db, sample_org, monkeypatch
+):
+    """A competing insert between the lookup and flush remains idempotent."""
+    _configure(monkeypatch, sample_org.id)
+    sku = _bottle(db, sample_org, product_id="prd_a", code="BAROLO-750-FLES")
+    db.add(
+        AdviceSale(
+            organization_id=sample_org.id,
+            sale_id="ord_1",
+            channel="pos",
+        )
+    )
+    db.commit()
+
+    real_first = Query.first
+    sale_lookups = 0
+
+    def miss_the_first_sale_lookup(query):
+        nonlocal sale_lookups
+        sale_lookups += 1
+        if sale_lookups == 1:
+            return None
+        return real_first(query)
+
+    monkeypatch.setattr(Query, "first", miss_the_first_sale_lookup)
+
+    response = client.post(URL, json=_payload(), headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json()["applied"][0]["source_product_id"] == "prd_a"
+    assert db.query(AdviceSale).count() == 1
+    balance = (
+        db.query(InventoryBalance).filter(InventoryBalance.sku_id == sku.id).one()
+    )
+    db.refresh(balance)
+    assert balance.quantity_on_hand == 8
 
 
 def test_unknown_product_does_not_block_the_rest(client, db, sample_org, monkeypatch):
