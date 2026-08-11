@@ -33,7 +33,10 @@ export function ConfirmStep({
   const hasCap = confirmation.cap_for_customer != null
     && confirmation.ordered_by_customer != null
     && confirmation.cap_for_customer < confirmation.ordered_by_customer;
-  const highConfidence = !hasAlternatives && confirmation.confidence >= 0.84;
+  const manualReviewRequired = confirmation.manual_review_required === true;
+  const highConfidence = !hasAlternatives
+    && !manualReviewRequired
+    && confirmation.confidence >= 0.84;
 
   async function handleConfirm(token?: string) {
     setConfirming(true);
@@ -73,10 +76,12 @@ export function ConfirmStep({
       ) : (
         <div className="p-4 rounded-lg bg-yellow-600/20 border-2 border-yellow-600 text-center mb-4">
           <p className="text-yellow-400 text-xl font-bold mb-1">
-            Controleer match
+            {manualReviewRequired ? "Handmatige controle nodig" : "Controleer match"}
           </p>
           <p className="text-yellow-300 text-sm">
-            Onzekere match — bevestig handmatig
+            {manualReviewRequired
+              ? `Waarschijnlijk ${confirmation.sku_name} — vergelijk de foto's`
+              : "Onzekere match — bevestig handmatig"}
           </p>
         </div>
       )}
@@ -296,7 +301,11 @@ export function ConfirmStep({
               onClick={() => handleConfirm()}
               disabled={confirming}
             >
-              {confirming ? "Boeken..." : `Ja, dit klopt${quantity > 1 ? ` (${quantity}×)` : ""}`}
+              {confirming
+                ? "Boeken..."
+                : manualReviewRequired
+                  ? `Ja, dit is ${confirmation.sku_name}${quantity > 1 ? ` (${quantity}×)` : ""}`
+                  : `Ja, dit klopt${quantity > 1 ? ` (${quantity}×)` : ""}`}
             </Button>
             <Button
               variant="destructive"

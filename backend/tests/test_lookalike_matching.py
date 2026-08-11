@@ -179,10 +179,10 @@ def test_unsure_between_variants_offers_a_choice_with_the_lookalike_shown(
     assert lookalikes[0]["reference_image_urls"]
 
 
-def test_visual_check_recognises_none_of_the_candidates(
+def test_visual_rejection_offers_one_plausible_order_match_for_manual_review(
     client, courier_token, variants, tmp_path
 ):
-    """"None of these" must not fall back to the nearest embedding neighbour."""
+    """A near-tied open SKU remains available as one explicit human decision."""
     ordered, other, _third, order = variants
 
     with patch("app.routers.receiving.process_image", side_effect=_mock_process_package), \
@@ -190,18 +190,76 @@ def test_visual_check_recognises_none_of_the_candidates(
          patch("app.routers.receiving.find_best_matches") as mock_match, \
          patch("app.routers.receiving.rerank_scan") as mock_rerank:
         mock_match.return_value = [
-            (ordered, 0.95, "reference_images/CALY-BIANCO.jpg", "Calycanto box"),
-            (other, 0.94, "reference_images/CALY-ROSSO.jpg", "Calycanto box"),
+            (other, 0.823, "reference_images/CALY-ROSSO.jpg", "Calycanto box"),
+            (ordered, 0.814, "reference_images/CALY-BIANCO.jpg", "Calycanto box"),
         ]
         mock_rerank.return_value = RerankVerdict(
-            ran=True, sku_id=None, certainty="high", considered_sku_ids=[ordered.id]
+            ran=True,
+            sku_id=None,
+            certainty="high",
+            considered_sku_ids=[other.id, ordered.id],
         )
 
         resp = _post_book(client, courier_token, order)
 
-    # Not recognised — 404, or 422 when the scope still has SKUs without a
-    # reference photo to offer. Never a booking proposal.
-    assert resp.status_code in (404, 422)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["sku_code"] == "CALY-BIANCO"
+    assert body["manual_review_required"] is True
+    assert body["alternatives"] == []
+    assert "bevestig alleen" in body["confirmation_reason"]
+
+
+def test_visual_rejection_stays_blocked_when_another_product_is_clearly_better(
+    client, courier_token, variants, tmp_path
+):
+    """An order hit above 0.80 is unsafe when a catalogue rival leads by >0.05."""
+    ordered, other, _third, order = variants
+
+    with patch("app.routers.receiving.process_image", side_effect=_mock_process_package), \
+         patch("app.routers.receiving.storage", _tmp_storage(tmp_path)), \
+         patch("app.routers.receiving.find_best_matches") as mock_match, \
+         patch("app.routers.receiving.rerank_scan") as mock_rerank:
+        mock_match.return_value = [
+            (other, 0.94, "reference_images/CALY-ROSSO.jpg", "Calycanto box"),
+            (ordered, 0.82, "reference_images/CALY-BIANCO.jpg", "Calycanto box"),
+        ]
+        mock_rerank.return_value = RerankVerdict(
+            ran=True,
+            sku_id=None,
+            certainty="high",
+            considered_sku_ids=[other.id, ordered.id],
+        )
+
+        resp = _post_book(client, courier_token, order)
+
+    assert resp.status_code == 404
+
+
+def test_visual_rejection_stays_blocked_below_the_match_threshold(
+    client, courier_token, variants, tmp_path
+):
+    """A near tie below 0.80 is not plausible enough to put in front of the picker."""
+    ordered, other, _third, order = variants
+
+    with patch("app.routers.receiving.process_image", side_effect=_mock_process_package), \
+         patch("app.routers.receiving.storage", _tmp_storage(tmp_path)), \
+         patch("app.routers.receiving.find_best_matches") as mock_match, \
+         patch("app.routers.receiving.rerank_scan") as mock_rerank:
+        mock_match.return_value = [
+            (other, 0.79, "reference_images/CALY-ROSSO.jpg", "Calycanto box"),
+            (ordered, 0.78, "reference_images/CALY-BIANCO.jpg", "Calycanto box"),
+        ]
+        mock_rerank.return_value = RerankVerdict(
+            ran=True,
+            sku_id=None,
+            certainty="high",
+            considered_sku_ids=[other.id, ordered.id],
+        )
+
+        resp = _post_book(client, courier_token, order)
+
+    assert resp.status_code == 404
 
 
 def test_visual_check_unavailable_still_asks_the_human(
@@ -547,6 +605,7 @@ def test_clear_match_skips_the_vision_call_without_flagging_the_scan(
     mock_rerank.assert_not_called()
     body = resp.json()
     assert body["sku_code"] == "CALY-BIANCO"
+    assert body["manual_review_required"] is False
     # No visual check was wanted, so the picker is never told one is missing.
     # (The short mock description still trips the unrelated quality check.)
     assert "visual check" not in (body["confirmation_reason"] or "")

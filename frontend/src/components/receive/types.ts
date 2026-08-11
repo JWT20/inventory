@@ -163,6 +163,7 @@ export interface ConfirmationData {
   cap_for_customer?: number | null;
   ordered_by_customer?: number | null;
   confirmation_reason?: string | null;
+  manual_review_required?: boolean;
 }
 
 export interface WeeklyPickPhoto {
