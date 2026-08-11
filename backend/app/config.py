@@ -27,6 +27,28 @@ class Settings(BaseSettings):
     gemini_extraction_max_dimension: int = 2048  # px – longest side for pakbon/invoice extraction (table digits need more resolution than box classification)
     match_threshold: float = 0.80
     ambiguity_margin: float = 0.05
+
+    # Visual rerank (second pass over the vector search).
+    #
+    # Cosine similarity runs on the *text description* of a photo. Two boxes of
+    # the same product line that differ in one printed word (a cultivar, a
+    # cuvée) produce near-identical descriptions and therefore near-identical
+    # embeddings — the ranking inside such a cluster is noise. The rerank pass
+    # puts the scan photo next to the candidates' reference photos in a single
+    # vision call and asks which one it actually is, which is the comparison the
+    # embedding cannot make.
+    # Runs on close calls only — rivals inside `ambiguity_margin`, or a best
+    # catalogue match that is not open on the order. A match that leads its
+    # runner-up by a wide margin is already decided; paying for a vision call to
+    # confirm it buys nothing.
+    rerank_enabled: bool = True
+    # Candidates handed to the rerank call: those within `rerank_similarity_band`
+    # of the best vector hit, capped at `rerank_max_candidates` SKUs and
+    # `rerank_images_per_sku` reference photos each. Bounds the images per call
+    # (and thus latency/cost) while keeping every plausible lookalike in view.
+    rerank_max_candidates: int = 4
+    rerank_similarity_band: float = 0.10
+    rerank_images_per_sku: int = 2
     upload_dir: str = "/app/uploads"
 
     # Kafka

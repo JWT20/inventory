@@ -398,6 +398,13 @@ class AlternativeMatch(BaseModel):
     reference_image_url: str = ""
     reference_image_urls: list[str] = []
     confirmation_token: str = ""
+    # False for a lookalike that is not open in the scan scope: it cannot be
+    # booked, but the picker still needs to see its photo — it is usually the
+    # box they are actually holding.
+    bookable: bool = True
+    # Short human-readable reason shown next to the candidate ("staat niet open
+    # in deze week", or what visually separates it from the proposal).
+    note: str = ""
 
 
 class MatchResult(BaseModel):
@@ -804,6 +811,9 @@ class BookingConfirmation(BaseModel):
     remaining_quantity: int = 0
     cap_for_customer: int | None = None
     ordered_by_customer: int | None = None
+    # Why this scan needs a human look (low confidence, lookalikes, rerank
+    # unavailable). Empty when the match was clean.
+    confirmation_reason: str | None = None
 
 
 class ConfirmBookingRequest(BaseModel):
