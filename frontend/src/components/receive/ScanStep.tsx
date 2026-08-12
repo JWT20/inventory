@@ -9,6 +9,8 @@ import { ScanModeToggle } from "./ScanModeToggle";
 import { SCAN_MODE_WORD } from "./constants";
 import type { ConfirmationData, NextPick, Order, ScanMode, WeeklyPickPhoto } from "./types";
 
+const SCAN_FEEDBACK_TOAST_ID = "scan-feedback";
+
 export function ScanStep({
   order,
   scanMode,
@@ -145,11 +147,13 @@ export function ScanStep({
     startCamera();
     return () => {
       streamRef.current?.getTracks().forEach((t) => t.stop());
+      toast.dismiss(SCAN_FEEDBACK_TOAST_ID);
     };
   }, []);
 
   async function capture() {
     if (!videoRef.current || !canvasRef.current) return;
+    toast.dismiss(SCAN_FEEDBACK_TOAST_ID);
     setScanning(true);
 
     const canvas = canvasRef.current;
@@ -190,7 +194,11 @@ export function ScanStep({
         setNeedsRef(err.detail as typeof needsRef);
         setSnapshot(null);
       } else {
-        toast.error(err instanceof Error ? err.message : "Scanfout");
+        toast.error(err instanceof Error ? err.message : "Scanfout", {
+          id: SCAN_FEEDBACK_TOAST_ID,
+          duration: Infinity,
+          closeButton: true,
+        });
         setSnapshot(null);
       }
     } finally {
