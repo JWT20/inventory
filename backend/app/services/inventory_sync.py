@@ -60,6 +60,7 @@ def _available(db, sku_id: int, organization_id: int) -> int:
         .filter(
             InventoryBalance.sku_id == sku_id,
             InventoryBalance.organization_id == organization_id,
+            InventoryBalance.inventory_location == "warehouse",
         )
         .first()
     )

@@ -90,14 +90,14 @@ geconfigureerde organisatie. Een nog niet gekoppelde fles heeft
 `source_product_id: null`; de advies-app negeert die regel. Inactieve flessen
 blijven aanwezig met voorraad nul. Beschikbare voorraad is
 `max(quantity_on_hand - quantity_reserved, 0)` en wordt nooit aangevuld vanuit
-doosvoorraad.
+doosvoorraad. Deze feed toont uitsluitend de locatie `store`: de webshop is nu
+alleen afhalen en mag geen magazijnvoorraad verkopen.
 
 ## Verkopen naar Dockscan
 
-De advies-app meldt een afgeronde verkoop — aan de toonbank of in de webshop —
-en Dockscan boekt die direct van de voorraad af. Anders dan bij een
-kanaalorder is er geen pickstap om op te wachten: de flessen zijn de deur al
-uit.
+De advies-app meldt een afgeronde toonbankverkoop en Dockscan boekt die direct
+van de winkelvoorraad af. Een webshoporder gebruikt de reserveringsstroom
+hieronder: betaald is nog niet hetzelfde als fysiek afgehaald.
 
 ```http
 POST /api/integrations/advice/sales
@@ -133,11 +133,56 @@ Idempotent op `(organisatie, sale_id)` en per regel op `(verkoop, SKU)`, want
 een kassa op slechte wifi herhaalt zijn verzoek. Dubbele regels voor hetzelfde
 product binnen één verkoop worden opgeteld tot één boeking. Elke geboekte regel
 levert een `stock_movement` van het type `sale` met `reference_type`
-`advice_sale`, en duwt de nieuwe beschikbare voorraad naar de live
-verkoopkanalen.
+`advice_sale` op locatie `store`.
 
 De sleutel staat los van de twee leessleutels, zodat schrijfrechten apart
 ingetrokken kunnen worden.
+
+## Webshop afhalen
+
+Een order uit wijnadvies1 blijft in wijnadvies1 en verschijnt niet in Scan &
+Boek. Vóór de Rabo-betaalpagina wordt de winkelvoorraad atomair gereserveerd:
+
+```http
+POST /api/integrations/advice/reservations
+Authorization: Bearer <ADVICE_SALES_API_KEY>
+```
+
+```json
+{
+  "external_order_id": "order_01J...",
+  "order_reference": "JUR-2026-000123",
+  "fulfillment_method": "pickup",
+  "inventory_location": "store",
+  "lines": [
+    { "source_product_id": "prd_01H8...", "quantity": 2 }
+  ]
+}
+```
+
+Onbekende producten of onvoldoende winkelvoorraad weigeren de volledige
+reservering met HTTP 409; de betaling mag dan niet starten. Een retry met
+dezelfde order en dezelfde regels is een succesvolle no-op. Dezelfde order-ID
+met andere regels wordt geweigerd.
+
+Bij fysiek afhalen verbruikt één idempotente handeling de reservering én boekt
+de flessen af, in dezelfde databasetransactie:
+
+```http
+POST /api/integrations/advice/reservations/{order-id}/collect
+```
+
+Bij definitief annuleren of terugbetalen vóór afhalen wordt alleen de
+reservering vrijgegeven:
+
+```http
+POST /api/integrations/advice/reservations/{order-id}/release
+```
+
+De reservering bewaart `fulfillment_method=pickup` en
+`inventory_location=store` als snapshots. Een latere bezorgstroom kan daardoor
+nieuwe orders als `warehouse + dockscan` routeren zonder bestaande afhaalorders
+te verplaatsen.
 
 ## Handmatig synchroniseren
 

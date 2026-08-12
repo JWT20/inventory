@@ -241,6 +241,7 @@ def _order_to_response(
         reference=order.reference,
         status=order.status,
         channel=order.channel,
+        inventory_location=order.inventory_location,
         pick_method=pick_method,
         remarks=order.remarks or "",
         delivery_week=order.delivery_week,
@@ -1016,6 +1017,7 @@ def weekly_order_summary(
             .filter(
                 InventoryBalance.sku_id.in_(sku_ids),
                 InventoryBalance.organization_id.in_(organization_ids),
+                InventoryBalance.inventory_location == "warehouse",
             )
             .all()
         )

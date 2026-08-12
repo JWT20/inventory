@@ -38,6 +38,7 @@ interface InventoryItem {
   attributes: Record<string, string>;
   ean: string | null;
   default_price: number | null;
+  inventory_location: "warehouse" | "store";
   quantity_on_hand: number;
   quantity_reserved: number;
   quantity_available: number;
@@ -82,6 +83,7 @@ export function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
+  const [inventoryLocation, setInventoryLocation] = useState<"warehouse" | "store">("warehouse");
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
@@ -111,6 +113,7 @@ export function InventoryPage() {
       if (selectedOrganizationId) {
         params.set("organization_id", selectedOrganizationId);
       }
+      params.set("inventory_location", inventoryLocation);
       const qs = params.toString();
       setItems(await api.listInventoryOverview(qs ? `?${qs}` : ""));
     } catch {
@@ -118,7 +121,7 @@ export function InventoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [needsOrganizationSelection, query, selectedOrganizationId]);
+  }, [inventoryLocation, needsOrganizationSelection, query, selectedOrganizationId]);
 
   useEffect(() => {
     load();
@@ -153,6 +156,24 @@ export function InventoryPage() {
           </Select>
         </div>
       )}
+
+      <div className="mb-4">
+        <Select
+          value={inventoryLocation}
+          onValueChange={(value) => {
+            setInventoryLocation(value as "warehouse" | "store");
+            setSelected(null);
+          }}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="warehouse">Magazijnvoorraad</SelectItem>
+            <SelectItem value="store">Winkelvoorraad</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
 
       <Input
         placeholder={
@@ -330,7 +351,13 @@ function InventoryDetailDialog({
     const note = stockNoteValue.trim() || null;
     setSavingStock(true);
     try {
-      await api.adjustInventory(item.sku_id, delta, note, organizationId);
+      await api.adjustInventory(
+        item.sku_id,
+        delta,
+        note,
+        organizationId,
+        item.inventory_location,
+      );
       const quantityOnHand = item.quantity_on_hand + delta;
       onUpdated({
         ...item,
@@ -404,6 +431,9 @@ function InventoryDetailDialog({
             {item.sku_name}
             <span className="ml-2 text-sm font-normal text-muted-foreground">
               {item.sku_code}
+            </span>
+            <span className="ml-2 text-xs font-normal text-muted-foreground">
+              {item.inventory_location === "store" ? "Winkel" : "Magazijn"}
             </span>
           </DialogTitle>
         </DialogHeader>

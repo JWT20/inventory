@@ -3,6 +3,7 @@ import logging
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from fastapi import (
     APIRouter,
@@ -183,6 +184,7 @@ def _shipment_to_response(shipment: InboundShipment) -> ShipmentResponse:
         supplier_name=shipment.supplier_name,
         reference=shipment.reference,
         status=shipment.status,
+        inventory_location=shipment.inventory_location,
         created_at=shipment.created_at,
         booked_at=shipment.booked_at,
         booked_by=shipment.booked_by,
@@ -811,6 +813,7 @@ def create_shipment(
         supplier_name=supplier_name_display,
         reference=reference_value,
         status="draft",
+        inventory_location=data.inventory_location,
         document_sha256=data.document_sha256,
     )
     db.add(shipment)
@@ -1060,6 +1063,7 @@ def book_shipment(
                 reference_type="shipment",
                 reference_id=shipment.id,
                 performed_by=user.id,
+                inventory_location=shipment.inventory_location,
             )
 
         shipment.status = "booked"
@@ -1084,10 +1088,11 @@ def book_shipment(
 
     # Mirror each affected product's new available to all live channels. Dedupe: a pakbon
     # may carry several lines for the same SKU, but one push per SKU suffices.
-    for pushed_sku_id in {line.sku_id for line in shipment.lines}:
-        background_tasks.add_task(
-            push_inventory_to_channels, pushed_sku_id, shipment.organization_id
-        )
+    if shipment.inventory_location == "warehouse":
+        for pushed_sku_id in {line.sku_id for line in shipment.lines}:
+            background_tasks.add_task(
+                push_inventory_to_channels, pushed_sku_id, shipment.organization_id
+            )
 
     publish_event(
         "shipment_booked",
@@ -1150,6 +1155,7 @@ def delete_shipment(
 @router.get("/inventory", response_model=list[InventoryBalanceResponse])
 def list_inventory(
     organization_id: int | None = None,
+    inventory_location: Literal["warehouse", "store"] = "warehouse",
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1157,7 +1163,10 @@ def list_inventory(
     query = (
         db.query(InventoryBalance)
         .join(SKU, InventoryBalance.sku_id == SKU.id)
-        .filter(InventoryBalance.organization_id == org_id)
+        .filter(
+            InventoryBalance.organization_id == org_id,
+            InventoryBalance.inventory_location == inventory_location,
+        )
     )
 
     balances = query.order_by(SKU.name).all()
@@ -1167,6 +1176,7 @@ def list_inventory(
             sku_code=b.sku.sku_code,
             sku_name=b.sku.name,
             organization_id=b.organization_id,
+            inventory_location=b.inventory_location,
             quantity_on_hand=b.quantity_on_hand,
             quantity_reserved=b.quantity_reserved,
             quantity_available=b.quantity_available,
@@ -1179,6 +1189,7 @@ def list_inventory(
 @router.get("/inventory/overview", response_model=list[InventoryOverviewItem])
 def inventory_overview(
     organization_id: int | None = None,
+    inventory_location: Literal["warehouse", "store"] = "warehouse",
     search: str | None = None,
     wijntype: str | None = None,
     producent: str | None = None,
@@ -1195,7 +1206,8 @@ def inventory_overview(
         .outerjoin(
             InventoryBalance,
             (InventoryBalance.sku_id == SKU.id)
-            & (InventoryBalance.organization_id == org_id),
+            & (InventoryBalance.organization_id == org_id)
+            & (InventoryBalance.inventory_location == inventory_location),
         )
         .options(
             selectinload(SKU.attributes),
@@ -1325,6 +1337,7 @@ def inventory_overview(
                     if can_view_prices and sku.default_price is not None
                     else None
                 ),
+                inventory_location=inventory_location,
                 quantity_on_hand=balance.quantity_on_hand if balance else 0,
                 quantity_reserved=balance.quantity_reserved if balance else 0,
                 quantity_available=balance.quantity_available if balance else 0,
@@ -1360,6 +1373,7 @@ def update_default_price(
         .filter(
             InventoryBalance.sku_id == sku_id,
             InventoryBalance.organization_id == (user.organization_id or sku.organization_id),
+            InventoryBalance.inventory_location == "warehouse",
         )
         .first()
     )
@@ -1457,10 +1471,14 @@ def update_customer_sku_discount(
 def list_movements(
     sku_id: int,
     organization_id: int | None = None,
+    inventory_location: Literal["warehouse", "store"] = "warehouse",
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    query = db.query(StockMovement).filter(StockMovement.sku_id == sku_id)
+    query = db.query(StockMovement).filter(
+        StockMovement.sku_id == sku_id,
+        StockMovement.inventory_location == inventory_location,
+    )
     if user.is_platform_admin:
         if organization_id:
             query = query.filter(StockMovement.organization_id == organization_id)
@@ -1499,12 +1517,14 @@ def adjust_inventory(
         reference_type="manual",
         note=data.note,
         performed_by=user.id,
+        inventory_location=data.inventory_location,
     )
     db.commit()
     db.refresh(movement)
 
     # Mirror the new available to all live channels after the response.
-    background_tasks.add_task(push_inventory_to_channels, data.sku_id, organization_id)
+    if data.inventory_location == "warehouse":
+        background_tasks.add_task(push_inventory_to_channels, data.sku_id, organization_id)
 
     publish_event(
         "inventory_adjusted",
@@ -1542,6 +1562,7 @@ def count_inventory(
         .filter(
             InventoryBalance.sku_id == data.sku_id,
             InventoryBalance.organization_id == organization_id,
+            InventoryBalance.inventory_location == data.inventory_location,
         )
         .first()
     )
@@ -1560,13 +1581,15 @@ def count_inventory(
         reference_type="manual",
         note=data.note or f"Telling: {current} → {data.counted_quantity}",
         performed_by=user.id,
+        inventory_location=data.inventory_location,
     )
     db.commit()
     db.refresh(movement)
 
     # A physical count changes the same balance as a manual adjustment, so it
     # must be mirrored to all live channels too.
-    background_tasks.add_task(push_inventory_to_channels, data.sku_id, organization_id)
+    if data.inventory_location == "warehouse":
+        background_tasks.add_task(push_inventory_to_channels, data.sku_id, organization_id)
 
     publish_event(
         "inventory_counted",

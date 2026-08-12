@@ -169,7 +169,11 @@ def apply_booking(
     #    rolls the release back too.
     if order.channel != "manual":
         adjust_reservation(
-            db, sku_id=sku_id, organization_id=order.organization_id, delta=-quantity
+            db,
+            sku_id=sku_id,
+            organization_id=order.organization_id,
+            inventory_location=order.inventory_location,
+            delta=-quantity,
         )
     apply_stock_movement(
         db,
@@ -180,6 +184,7 @@ def apply_booking(
         reference_type="booking",
         reference_id=last_booking.id,
         performed_by=scanned_by,
+        inventory_location=order.inventory_location,
     )
 
     # 6. Recompute status on the fresh lines, then commit.
@@ -278,12 +283,19 @@ def undo_booking(db: Session, *, booking_id: int, performed_by: int) -> UndoResu
         reference_type="booking_undo",
         reference_id=None,
         performed_by=performed_by,
+        inventory_location=order.inventory_location,
     )
     # Re-reserve the unit the order still needs (inverse of the pick release).
     # Only for channel orders, mirroring apply_booking — a manual undo must not
     # inflate the shared reservation.
     if order.channel != "manual":
-        adjust_reservation(db, sku_id=sku_id, organization_id=org_id, delta=1)
+        adjust_reservation(
+            db,
+            sku_id=sku_id,
+            organization_id=org_id,
+            inventory_location=order.inventory_location,
+            delta=1,
+        )
 
     # A completed order that is no longer fully booked reopens for picking; clear
     # the finalize stamp so the monthly report does not count a reverted order.

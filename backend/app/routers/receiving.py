@@ -553,6 +553,7 @@ def sku_distribution(
             .filter(
                 InventoryBalance.sku_id == sku_id,
                 InventoryBalance.organization_id == context_order.organization_id,
+                InventoryBalance.inventory_location == context_order.inventory_location,
             )
             .first()
         )
@@ -922,6 +923,7 @@ async def book_box(
             .filter(
                 InventoryBalance.sku_id == matched_sku.id,
                 InventoryBalance.organization_id == booking_order.organization_id,
+                InventoryBalance.inventory_location == booking_order.inventory_location,
             )
             .with_for_update()
             .first()

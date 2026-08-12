@@ -538,6 +538,7 @@ class OrderResponse(BaseModel):
     status: str
     # Order provenance: "manual" (in-app/customer), "shopify" or "bol".
     channel: str = "manual"
+    inventory_location: Literal["warehouse", "store"] = "warehouse"
     # How this order is picked: "vision" (camera + AI) or "barcode" (handscanner
     # EAN scan). Derived from the order's products so the courier UI can route to
     # the right scanner.
@@ -880,6 +881,7 @@ class ShipmentCreate(BaseModel):
     document_sha256: str | None = None
     upload_attempt_id: int | None = Field(None, gt=0)
     force: bool = False
+    inventory_location: Literal["warehouse", "store"] = "warehouse"
     lines: list[ShipmentLineCreate] = Field(..., min_length=1)
 
 
@@ -915,6 +917,7 @@ class ShipmentResponse(BaseModel):
     supplier_name: str | None
     reference: str | None
     status: str
+    inventory_location: Literal["warehouse", "store"] = "warehouse"
     created_at: datetime
     booked_at: datetime | None
     booked_by: int | None
@@ -1023,6 +1026,7 @@ class InventoryBalanceResponse(BaseModel):
     sku_code: str = ""
     sku_name: str = ""
     organization_id: int | None = None
+    inventory_location: Literal["warehouse", "store"] = "warehouse"
     quantity_on_hand: int
     quantity_reserved: int = 0
     quantity_available: int = 0
@@ -1058,7 +1062,7 @@ class AdviceSaleLineIn(BaseModel):
 
 class AdviceSaleRequest(BaseModel):
     sale_id: str = Field(..., min_length=1, max_length=100)
-    channel: Literal["pos", "web"] = "pos"
+    channel: Literal["pos"] = "pos"
     occurred_at: datetime | None = None
     lines: list[AdviceSaleLineIn] = Field(..., min_length=1)
 
@@ -1081,6 +1085,35 @@ class AdviceSaleResponse(BaseModel):
     unmatched: list[str]
 
 
+class AdviceReservationLineIn(BaseModel):
+    source_product_id: str = Field(..., min_length=1, max_length=100)
+    quantity: int = Field(..., gt=0)
+
+
+class AdviceReservationRequest(BaseModel):
+    external_order_id: str = Field(..., min_length=1, max_length=100)
+    order_reference: str | None = Field(default=None, max_length=100)
+    fulfillment_method: Literal["pickup"] = "pickup"
+    inventory_location: Literal["store"] = "store"
+    lines: list[AdviceReservationLineIn] = Field(..., min_length=1)
+
+
+class AdviceReservationLineResponse(BaseModel):
+    source_product_id: str
+    sku_code: str
+    quantity: int
+
+
+class AdviceReservationResponse(BaseModel):
+    external_order_id: str
+    order_reference: str | None = None
+    fulfillment_method: Literal["pickup"] = "pickup"
+    inventory_location: Literal["store"] = "store"
+    status: Literal["active", "collected", "released"]
+    duplicate: bool = False
+    lines: list[AdviceReservationLineResponse]
+
+
 class InventoryOverviewItem(BaseModel):
     sku_id: int
     sku_code: str = ""
@@ -1090,6 +1123,7 @@ class InventoryOverviewItem(BaseModel):
     # EAN-13 barcode; NULL for vision (wine) products.
     ean: str | None = None
     default_price: float | None = None
+    inventory_location: Literal["warehouse", "store"] = "warehouse"
     quantity_on_hand: int = 0
     quantity_reserved: int = 0
     quantity_available: int = 0
@@ -1104,6 +1138,7 @@ class StockMovementResponse(BaseModel):
     id: int
     sku_id: int
     organization_id: int | None = None
+    inventory_location: Literal["warehouse", "store"] = "warehouse"
     movement_type: str
     quantity: int
     reference_type: str | None
@@ -1120,6 +1155,7 @@ class InventoryAdjustRequest(BaseModel):
     quantity: int
     note: str | None = None
     organization_id: int | None = None
+    inventory_location: Literal["warehouse", "store"] = "warehouse"
 
 
 class InventoryCountRequest(BaseModel):
@@ -1127,6 +1163,7 @@ class InventoryCountRequest(BaseModel):
     counted_quantity: int = Field(..., ge=0)
     note: str | None = None
     organization_id: int | None = None
+    inventory_location: Literal["warehouse", "store"] = "warehouse"
 
 
 class UpdateDefaultPriceRequest(BaseModel):
