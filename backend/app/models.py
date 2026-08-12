@@ -31,7 +31,7 @@ VALID_ROLES = ("owner", "member", "courier", "customer")
 VALID_PRODUCT_TYPES = ("barcode", "vision")
 VALID_SHIPMENT_STATUSES = ("draft", "booked")
 VALID_INBOUND_UPLOAD_STATUSES = ("processing", "needs_action", "draft", "booked", "failed")
-VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count")
+VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count", "sale")
 VALID_DISCOUNT_TYPES = ("percentage", "fixed")
 VALID_DELIVERY_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday")
 DEFAULT_DELIVERY_DAYS = ("wednesday", "thursday", "friday")
@@ -998,3 +998,65 @@ class SKULocation(Base):
 
     sku: Mapped["SKU"] = relationship(back_populates="location_links")
     location: Mapped["Location"] = relationship(back_populates="sku_links")
+
+
+class AdviceSale(Base):
+    """One completed sale reported by the advice app (shop counter or webshop).
+
+    Dockscan books these off stock immediately: unlike a channel order there is
+    no pick step to wait for — the bottles left with the customer. The row
+    exists to make the report idempotent, since a counter on bad wifi retries.
+    """
+    __tablename__ = "advice_sales"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "sale_id", name="uq_advice_sales_org_sale"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
+    # The advice app's own order id. Opaque here; only used to recognise a retry.
+    sale_id: Mapped[str] = mapped_column(String(100))
+    # "pos" (shop counter) or "web" (webshop). Provenance for reporting only —
+    # both book off stock the same way.
+    channel: Mapped[str] = mapped_column(String(20))
+    occurred_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    organization: Mapped["Organization"] = relationship()
+    lines: Mapped[list["AdviceSaleLine"]] = relationship(
+        back_populates="sale", cascade="all, delete-orphan"
+    )
+
+
+class AdviceSaleLine(Base):
+    """One booked product line of an advice sale.
+
+    Unique per (sale, sku) so a retry re-reports the same line without booking
+    it twice. A line the first call could not match — the product was not linked
+    yet — is simply absent, and a later retry adds it.
+    """
+    __tablename__ = "advice_sale_lines"
+    __table_args__ = (
+        UniqueConstraint("sale_id", "sku_id", name="uq_advice_sale_lines_sale_sku"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sale_id: Mapped[int] = mapped_column(
+        ForeignKey("advice_sales.id", ondelete="CASCADE")
+    )
+    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="CASCADE"))
+    quantity: Mapped[int] = mapped_column(Integer)
+    # SET NULL: force-deleting a SKU wipes its stock movements first, and the
+    # sale line must survive that delete long enough for its own CASCADE to fire.
+    stock_movement_id: Mapped[int | None] = mapped_column(
+        ForeignKey("stock_movements.id", ondelete="SET NULL"), nullable=True
+    )
+
+    sale: Mapped["AdviceSale"] = relationship(back_populates="lines")
+    sku: Mapped["SKU"] = relationship()

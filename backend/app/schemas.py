@@ -1042,6 +1042,45 @@ class AdviceStockResponse(BaseModel):
     items: list[AdviceStockItem]
 
 
+class AdviceSaleLineIn(BaseModel):
+    source_product_id: str = Field(..., min_length=1, max_length=100)
+    # Negative books a return back onto the shelf. Zero is meaningless and
+    # rejected so a client bug cannot masquerade as a successful report.
+    quantity: int
+
+    @field_validator("quantity")
+    @classmethod
+    def _non_zero(cls, v: int) -> int:
+        if v == 0:
+            raise ValueError("quantity mag niet 0 zijn")
+        return v
+
+
+class AdviceSaleRequest(BaseModel):
+    sale_id: str = Field(..., min_length=1, max_length=100)
+    channel: Literal["pos", "web"] = "pos"
+    occurred_at: datetime | None = None
+    lines: list[AdviceSaleLineIn] = Field(..., min_length=1)
+
+
+class AdviceSaleAppliedLine(BaseModel):
+    source_product_id: str
+    sku_code: str
+    quantity: int
+    quantity_available: int
+
+
+class AdviceSaleResponse(BaseModel):
+    sale_id: str
+    # Lines booked by *this* call. A retry reports its lines under `duplicate`
+    # instead, so the caller can tell a first delivery from a repeat.
+    applied: list[AdviceSaleAppliedLine]
+    duplicate: list[str]
+    # Product ids with no linked bottle SKU. The sale is still accepted for the
+    # rest; run the advice product sync and re-post to book these too.
+    unmatched: list[str]
+
+
 class InventoryOverviewItem(BaseModel):
     sku_id: int
     sku_code: str = ""

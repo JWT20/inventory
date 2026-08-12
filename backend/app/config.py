@@ -128,6 +128,9 @@ class Settings(BaseSettings):
     # server-side so callers can never select a different merchant.
     advice_stock_api_key: str = ""
     advice_stock_organization_id: int | None = None
+    # Inbound sale reports (shop counter + webshop). A third key so the write
+    # direction can be revoked without closing the read feeds.
+    advice_sales_api_key: str = ""
     # Hourly pull of the advice app's complete bottle-product snapshot. A
     # separate outbound key keeps read access in each direction independently
     # revocable. Empty base URL/key or interval 0 disables the puller.
