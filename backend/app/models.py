@@ -32,6 +32,7 @@ VALID_PRODUCT_TYPES = ("barcode", "vision")
 VALID_SHIPMENT_STATUSES = ("draft", "booked")
 VALID_INBOUND_UPLOAD_STATUSES = ("processing", "needs_action", "draft", "booked", "failed")
 VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count", "sale")
+VALID_INVENTORY_LOCATIONS = ("warehouse", "store")
 VALID_DISCOUNT_TYPES = ("percentage", "fixed")
 VALID_DELIVERY_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday")
 DEFAULT_DELIVERY_DAYS = ("wednesday", "thursday", "friday")
@@ -499,6 +500,12 @@ class Order(Base):
     channel: Mapped[str] = mapped_column(
         String(20), default="manual", server_default=text("'manual'"), nullable=False
     )
+    # Snapshot of the physical stock pool this order fulfils from. Existing and
+    # normal Dockscan orders are warehouse work; future source integrations may
+    # route a newly-created order explicitly without moving older orders.
+    inventory_location: Mapped[str] = mapped_column(
+        String(20), default="warehouse", server_default=text("'warehouse'"), nullable=False
+    )
     # The order id at the source channel (Shopify/bol). NULL for manual orders.
     # Unique per (organization, channel) via uq_orders_org_channel_external.
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -654,6 +661,9 @@ class InboundShipment(Base):
     supplier_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft")
+    inventory_location: Mapped[str] = mapped_column(
+        String(20), default="warehouse", server_default=text("'warehouse'"), nullable=False
+    )
     document_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now()
@@ -816,12 +826,22 @@ class ProductAttributeValue(Base):
 
 class InventoryBalance(Base):
     __tablename__ = "inventory_balances"
-    __table_args__ = (UniqueConstraint("sku_id", "organization_id"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "sku_id",
+            "organization_id",
+            "inventory_location",
+            name="uq_inventory_balances_sku_org_location",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
     organization_id: Mapped[int | None] = mapped_column(
         ForeignKey("organizations.id"), nullable=True
+    )
+    inventory_location: Mapped[str] = mapped_column(
+        String(20), default="warehouse", server_default=text("'warehouse'"), nullable=False
     )
     quantity_on_hand: Mapped[int] = mapped_column(Integer, default=0)
     quantity_reserved: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
@@ -844,6 +864,9 @@ class StockMovement(Base):
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id"))
     organization_id: Mapped[int | None] = mapped_column(
         ForeignKey("organizations.id"), nullable=True
+    )
+    inventory_location: Mapped[str] = mapped_column(
+        String(20), default="warehouse", server_default=text("'warehouse'"), nullable=False
     )
     movement_type: Mapped[str] = mapped_column(String(20))
     quantity: Mapped[int] = mapped_column(Integer)
@@ -1018,9 +1041,12 @@ class AdviceSale(Base):
     organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"))
     # The advice app's own order id. Opaque here; only used to recognise a retry.
     sale_id: Mapped[str] = mapped_column(String(100))
-    # "pos" (shop counter) or "web" (webshop). Provenance for reporting only —
-    # both book off stock the same way.
+    # Counter sales have already left the shop and therefore book the store
+    # pool directly. Web pickup orders use AdviceReservation below instead.
     channel: Mapped[str] = mapped_column(String(20))
+    inventory_location: Mapped[str] = mapped_column(
+        String(20), default="store", server_default=text("'store'"), nullable=False
+    )
     occurred_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime, nullable=True
     )
@@ -1059,4 +1085,67 @@ class AdviceSaleLine(Base):
     )
 
     sale: Mapped["AdviceSale"] = relationship(back_populates="lines")
+    sku: Mapped["SKU"] = relationship()
+
+
+class AdviceReservation(Base):
+    """Store-stock hold for one pickup order owned by wijnadvies1.
+
+    It deliberately is not a Dockscan Order: pickup orders stay out of Scan &
+    Boek. The source order id is the idempotency key for reserve, collect and
+    release operations.
+    """
+
+    __tablename__ = "advice_reservations"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "external_order_id",
+            name="uq_advice_reservations_org_external_order",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE")
+    )
+    external_order_id: Mapped[str] = mapped_column(String(100))
+    order_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    fulfillment_method: Mapped[str] = mapped_column(
+        String(20), default="pickup", server_default=text("'pickup'"), nullable=False
+    )
+    inventory_location: Mapped[str] = mapped_column(
+        String(20), default="store", server_default=text("'store'"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default=text("'active'"), nullable=False
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    collected_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+    released_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    organization: Mapped["Organization"] = relationship()
+    lines: Mapped[list["AdviceReservationLine"]] = relationship(
+        back_populates="reservation", cascade="all, delete-orphan"
+    )
+
+
+class AdviceReservationLine(Base):
+    __tablename__ = "advice_reservation_lines"
+    __table_args__ = (
+        UniqueConstraint(
+            "reservation_id", "sku_id", name="uq_advice_reservation_lines_reservation_sku"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    reservation_id: Mapped[int] = mapped_column(
+        ForeignKey("advice_reservations.id", ondelete="CASCADE")
+    )
+    sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="RESTRICT"))
+    quantity: Mapped[int] = mapped_column(Integer)
+
+    reservation: Mapped["AdviceReservation"] = relationship(back_populates="lines")
     sku: Mapped["SKU"] = relationship()

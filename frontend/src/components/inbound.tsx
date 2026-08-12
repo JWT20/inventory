@@ -398,6 +398,7 @@ export function InboundPage() {
   const [selectedLineIndex, setSelectedLineIndex] = useState<number | null>(null);
   const [supplierName, setSupplierName] = useState("");
   const [documentType, setDocumentType] = useState<"pakbon" | "invoice" | "unknown">("unknown");
+  const [inventoryLocation, setInventoryLocation] = useState<"warehouse" | "store">("warehouse");
   const [skuOptions, setSkuOptions] = useState<SKUOption[]>([]);
   const [selectedSkuByLine, setSelectedSkuByLine] = useState<Record<number, number>>({});
   const [inputMode, setInputMode] = useState<"file" | "text">("file");
@@ -641,6 +642,7 @@ export function InboundPage() {
           reference: preview.reference || null,
           document_sha256: preview.document_sha256 ?? null,
           upload_attempt_id: preview.upload_attempt_id ?? null,
+          inventory_location: inventoryLocation,
           lines,
         });
       } catch (err: unknown) {
@@ -665,6 +667,7 @@ export function InboundPage() {
             document_sha256: preview.document_sha256 ?? null,
             upload_attempt_id: preview.upload_attempt_id ?? null,
             force: true,
+            inventory_location: inventoryLocation,
             lines,
           });
         } else {
@@ -902,6 +905,29 @@ export function InboundPage() {
               <SelectItem value="invoice">Factuur</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            Voorraadlocatie
+          </label>
+          <Select
+            value={inventoryLocation}
+            onValueChange={(value) =>
+              setInventoryLocation(value as "warehouse" | "store")
+            }
+          >
+            <SelectTrigger className="text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="warehouse">Magazijn</SelectItem>
+              <SelectItem value="store">Winkel</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="mt-1 text-xs text-muted-foreground">
+            De volledige pakbon wordt op deze locatie bijgeboekt.
+          </p>
         </div>
 
         <div className="inline-flex rounded-md border border-border p-0.5 text-sm">
