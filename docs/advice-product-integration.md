@@ -93,6 +93,14 @@ blijven aanwezig met voorraad nul. Beschikbare voorraad is
 doosvoorraad. Deze feed toont uitsluitend de locatie `store`: de webshop is nu
 alleen afhalen en mag geen magazijnvoorraad verkopen.
 
+Migratie 054 verplaatst daarom de bestaande voorraad van álle fles-SKU's naar
+`store`; doosvoorraad blijft in het magazijn. Flessen zijn winkelvoorraad: de
+toonbank en de webshop verkopen ze, Dockscan picked ze niet. Zonder die
+verplaatsing zou de feed direct na de deploy voor elke wijn nul teruggeven en
+zou de webshop volledig op uitverkocht staan. De bewegingshistorie blijft op de
+oude locatie staan, zodat het audittrail blijft kloppen met wat er destijds
+gebeurde.
+
 ## Verkopen naar Dockscan
 
 De advies-app meldt een afgeronde toonbankverkoop en Dockscan boekt die direct
@@ -162,8 +170,11 @@ Authorization: Bearer <ADVICE_SALES_API_KEY>
 
 Onbekende producten of onvoldoende winkelvoorraad weigeren de volledige
 reservering met HTTP 409; de betaling mag dan niet starten. Een retry met
-dezelfde order en dezelfde regels is een succesvolle no-op. Dezelfde order-ID
-met andere regels wordt geweigerd.
+dezelfde order en dezelfde regels is een succesvolle no-op zolang de
+reservering nog `active` is. Dezelfde order-ID met andere regels wordt
+geweigerd, en een al afgehaalde of vrijgegeven reservering ook: die houdt geen
+flessen meer apart, dus een tweede betaling zou tegen niet-gereserveerde
+voorraad starten.
 
 Bij fysiek afhalen verbruikt één idempotente handeling de reservering én boekt
 de flessen af, in dezelfde databasetransactie:

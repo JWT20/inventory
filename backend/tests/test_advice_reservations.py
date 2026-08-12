@@ -1,7 +1,10 @@
 """Pickup reservations owned by wijnadvies1 but held in store inventory."""
 
+from sqlalchemy import event
+
 from app.config import settings
 from app.models import AdviceReservation, InventoryBalance, SKU, StockMovement
+from app.routers.integrations import _locked_reservation
 
 
 API_KEY = "test-advice-write-key"
@@ -170,3 +173,49 @@ def test_release_frees_only_reservation_and_is_idempotent(
     balance = _balance(db, sku.id, "store")
     assert (balance.quantity_on_hand, balance.quantity_reserved) == (8, 0)
     assert db.query(StockMovement).filter_by(sku_id=sku.id).count() == 0
+
+
+def test_finished_reservation_never_answers_a_retry_as_a_no_op(
+    client, db, sample_org, monkeypatch
+):
+    """A retry may only be a no-op while stock is actually being held."""
+    _configure(monkeypatch, sample_org.id)
+    sku = _bottle(db, sample_org, "prd_a")
+    client.post(BASE_URL, json=_payload(), headers=_headers())
+    client.post(f"{BASE_URL}/order_123/release", headers=_headers())
+
+    after_release = client.post(BASE_URL, json=_payload(), headers=_headers())
+
+    assert after_release.status_code == 409
+    db.expire_all()
+    assert _balance(db, sku.id, "store").quantity_reserved == 0
+
+    client.post(BASE_URL, json=_payload(external_order_id="order_9"), headers=_headers())
+    client.post(f"{BASE_URL}/order_9/collect", headers=_headers())
+    after_collect = client.post(
+        BASE_URL, json=_payload(external_order_id="order_9"), headers=_headers()
+    )
+
+    assert after_collect.status_code == 409
+
+
+def test_reservation_lock_never_locks_an_outer_join(db):
+    """PostgreSQL refuses FOR UPDATE on the nullable side of an outer join.
+
+    The suite runs on SQLite, which drops FOR UPDATE silently, so assert on the
+    statement the lock helper actually emits instead of on its result.
+    """
+    statements: list[str] = []
+    bind = db.get_bind()
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(bind, "before_cursor_execute", record)
+    try:
+        _locked_reservation(db, 1, "order_123")
+    finally:
+        event.remove(bind, "before_cursor_execute", record)
+
+    assert statements
+    assert "OUTER JOIN" not in statements[-1].upper()

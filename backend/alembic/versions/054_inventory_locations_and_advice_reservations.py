@@ -72,6 +72,20 @@ def upgrade() -> None:
         ),
     )
 
+    # Bottles live on the shop shelf, not in the warehouse: the advice app sells
+    # them at the counter and in the webshop. Without this the store feed reads
+    # zero for every wine on the first request after deploy. Balances move
+    # wholesale; the movement log is left untouched so the audit trail keeps
+    # saying where the stock actually came from.
+    op.execute(
+        """
+        UPDATE inventory_balances
+        SET inventory_location = 'store'
+        WHERE inventory_location = 'warehouse'
+          AND sku_id IN (SELECT id FROM skus WHERE is_bottle IS TRUE)
+        """
+    )
+
     op.create_table(
         "advice_reservations",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -134,6 +148,35 @@ def downgrade() -> None:
     op.drop_column("inbound_shipments", "inventory_location")
     op.drop_column("orders", "inventory_location")
     op.drop_column("stock_movements", "inventory_location")
+    # Collapsing the two pools back into one would violate the restored
+    # (sku_id, organization_id) uniqueness, so fold every extra location into
+    # the lowest-id row for that SKU first.
+    op.execute(
+        """
+        UPDATE inventory_balances AS keep
+        SET quantity_on_hand = totals.on_hand,
+            quantity_reserved = totals.reserved
+        FROM (
+            SELECT sku_id,
+                   organization_id,
+                   MIN(id) AS keep_id,
+                   SUM(quantity_on_hand) AS on_hand,
+                   SUM(quantity_reserved) AS reserved
+            FROM inventory_balances
+            GROUP BY sku_id, organization_id
+        ) AS totals
+        WHERE keep.id = totals.keep_id
+        """
+    )
+    op.execute(
+        """
+        DELETE FROM inventory_balances
+        WHERE id NOT IN (
+            SELECT MIN(id) FROM inventory_balances
+            GROUP BY sku_id, organization_id
+        )
+        """
+    )
     with op.batch_alter_table("inventory_balances") as batch_op:
         batch_op.drop_constraint(
             "uq_inventory_balances_sku_org_location", type_="unique"

@@ -5,7 +5,7 @@ import secrets
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlalchemy import and_, func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
@@ -297,9 +297,11 @@ def _reservation_response(
 def _locked_reservation(
     db: Session, organization_id: int, external_order_id: str
 ) -> AdviceReservation | None:
+    # Lock the bare reservation row only. Eager-loading the lines here would put
+    # FOR UPDATE on the nullable side of an outer join, which PostgreSQL rejects
+    # outright; the lines load lazily from the same open session afterwards.
     return (
         db.query(AdviceReservation)
-        .options(joinedload(AdviceReservation.lines).joinedload(AdviceReservationLine.sku))
         .filter(
             AdviceReservation.organization_id == organization_id,
             AdviceReservation.external_order_id == external_order_id,
@@ -334,6 +336,14 @@ def reserve_advice_pickup(
             raise HTTPException(
                 409,
                 "Deze order-ID bestaat al met andere productregels",
+            )
+        # Only an active hold may answer a retry as a no-op. A collected or
+        # released reservation holds nothing, so replying "duplicate" would let
+        # the caller start a payment against stock nobody is keeping aside.
+        if existing.status != "active":
+            raise HTTPException(
+                409,
+                f"Deze reservering is al afgehandeld ({existing.status})",
             )
         return _reservation_response(existing, duplicate=True)
 
