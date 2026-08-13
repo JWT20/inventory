@@ -471,3 +471,43 @@ def test_history_reports_no_location_when_nothing_was_booked(
     assert history.status_code == 200
     assert history.json()[0]["shipment_id"] is None
     assert history.json()[0]["inventory_location"] is None
+
+
+def test_history_hides_location_while_shipment_is_still_a_draft(
+    client, db, owner_token, sample_org
+):
+    """Choosing a destination on a draft does not mean stock landed there."""
+    sku = SKU(
+        sku_code="HISTORY-DRAFT-LOC",
+        name="Conceptlocatiewijn",
+        organization_id=sample_org.id,
+    )
+    attempt = InboundUploadAttempt(
+        organization_id=sample_org.id,
+        source_type="text",
+        status="needs_action",
+        line_count=1,
+        bookable_line_count=1,
+    )
+    db.add_all([sku, attempt])
+    db.commit()
+
+    created = client.post(
+        "/api/shipments",
+        headers=auth_header(owner_token),
+        json={
+            "upload_attempt_id": attempt.id,
+            "supplier_name": "Vojacek",
+            "reference": "PKB-CONCEPT-WINKEL",
+            "inventory_location": "store",
+            "lines": [{"sku_id": sku.id, "quantity": 2}],
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    history = client.get("/api/inbound-uploads", headers=auth_header(owner_token))
+
+    assert history.status_code == 200, history.text
+    row = next(item for item in history.json() if item["shipment_id"] == created.json()["id"])
+    assert row["status"] == "draft"
+    assert row["inventory_location"] is None
