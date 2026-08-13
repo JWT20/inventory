@@ -265,6 +265,7 @@ interface InboundUploadAttempt {
   error_stage: string | null;
   error_message: string | null;
   shipment_id: number | null;
+  inventory_location: "warehouse" | "store" | null;
   line_count: number;
   bookable_line_count: number;
   booked_line_count: number;
@@ -1295,6 +1296,13 @@ export function InboundPage() {
                           timeStyle: "short",
                         })}
                         {attempt.shipment_id ? ` · Pakbon #${attempt.shipment_id}` : ""}
+                        {attempt.inventory_location
+                          ? ` · ${
+                              attempt.inventory_location === "store"
+                                ? "Winkel"
+                                : "Magazijn"
+                            }`
+                          : ""}
                       </p>
                     </div>
                     <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-medium ${status.className}`}>
