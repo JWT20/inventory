@@ -366,3 +366,93 @@ class TestReservedInventory:
         )
 
         assert resp.status_code == 409
+
+
+class TestCourierStaysOnWarehouseStock:
+    """The shop shelf belongs to the merchant; couriers move warehouse goods.
+
+    Couriers are already kept out of the inbound document flow because they
+    have no organization of their own. The location parameter arrived later and
+    reopened the same door, this time onto Jurjen's shop shelf.
+    """
+
+    def test_courier_may_read_warehouse_stock(
+        self, client, db, courier_token, sample_org
+    ):
+        _make_stock(db, sample_org, on_hand=8, reserved=3)
+
+        resp = client.get(
+            f"/api/inventory?organization_id={sample_org.id}"
+            "&inventory_location=warehouse",
+            headers=auth_header(courier_token),
+        )
+
+        assert resp.status_code == 200
+
+    def test_courier_may_not_read_store_stock(
+        self, client, db, courier_token, sample_org
+    ):
+        _make_stock(db, sample_org, on_hand=8, reserved=3)
+
+        for url in (
+            f"/api/inventory?organization_id={sample_org.id}&inventory_location=store",
+            f"/api/inventory/overview?organization_id={sample_org.id}"
+            "&inventory_location=store",
+        ):
+            resp = client.get(url, headers=auth_header(courier_token))
+
+            assert resp.status_code == 403, url
+
+    def test_courier_may_not_write_store_stock(
+        self, client, db, courier_token, sample_org
+    ):
+        sku = _make_stock(db, sample_org, on_hand=8)
+
+        adjust = client.post(
+            "/api/inventory/adjust",
+            json={
+                "sku_id": sku.id,
+                "quantity": 1,
+                "organization_id": sample_org.id,
+                "inventory_location": "store",
+            },
+            headers=auth_header(courier_token),
+        )
+        count = client.post(
+            "/api/inventory/count",
+            json={
+                "sku_id": sku.id,
+                "counted_quantity": 99,
+                "organization_id": sample_org.id,
+                "inventory_location": "store",
+            },
+            headers=auth_header(courier_token),
+        )
+
+        assert adjust.status_code == 403
+        assert count.status_code == 403
+        db.expire_all()
+        assert (
+            db.query(InventoryBalance)
+            .filter_by(sku_id=sku.id, inventory_location="store")
+            .first()
+            is None
+        )
+
+    def test_merchant_still_reaches_both_pools(
+        self, client, db, owner_token, sample_org
+    ):
+        sku = _make_stock(db, sample_org, on_hand=8)
+
+        resp = client.post(
+            "/api/inventory/adjust",
+            json={
+                "sku_id": sku.id,
+                "quantity": 2,
+                "inventory_location": "store",
+            },
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["inventory_location"] == "store"

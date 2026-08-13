@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session
 from app.models import SKU, InventoryBalance, StockMovement
 
 
+DEFAULT_INVENTORY_LOCATION = "warehouse"
+
+
 def apply_stock_movement(
     db: Session,
     *,
@@ -24,6 +27,7 @@ def apply_stock_movement(
     note: str | None = None,
     performed_by: int | None,
     allow_negative: bool = False,
+    inventory_location: str = DEFAULT_INVENTORY_LOCATION,
 ) -> StockMovement:
     """Create a stock movement and update the inventory balance.
 
@@ -41,6 +45,7 @@ def apply_stock_movement(
         .filter(
             InventoryBalance.sku_id == sku_id,
             InventoryBalance.organization_id == organization_id,
+            InventoryBalance.inventory_location == inventory_location,
         )
         .with_for_update()
         .first()
@@ -49,6 +54,7 @@ def apply_stock_movement(
         balance = InventoryBalance(
             sku_id=sku_id,
             organization_id=organization_id,
+            inventory_location=inventory_location,
             quantity_on_hand=0,
         )
         db.add(balance)
@@ -75,6 +81,7 @@ def apply_stock_movement(
     movement = StockMovement(
         sku_id=sku_id,
         organization_id=organization_id,
+        inventory_location=inventory_location,
         movement_type=movement_type,
         quantity=quantity,
         reference_type=reference_type,
@@ -88,7 +95,13 @@ def apply_stock_movement(
 
 
 def adjust_reservation(
-    db: Session, *, sku_id: int, organization_id: int, delta: int
+    db: Session,
+    *,
+    sku_id: int,
+    organization_id: int,
+    delta: int,
+    inventory_location: str = DEFAULT_INVENTORY_LOCATION,
+    require_available: bool = False,
 ) -> int:
     """Adjust reserved stock by ``delta`` (no physical movement, no movement row).
 
@@ -112,6 +125,7 @@ def adjust_reservation(
         .filter(
             InventoryBalance.sku_id == sku_id,
             InventoryBalance.organization_id == organization_id,
+            InventoryBalance.inventory_location == inventory_location,
         )
         .with_for_update()
         .first()
@@ -120,10 +134,21 @@ def adjust_reservation(
         if delta < 0:
             return 0  # nothing reserved to release
         balance = InventoryBalance(
-            sku_id=sku_id, organization_id=organization_id, quantity_on_hand=0
+            sku_id=sku_id,
+            organization_id=organization_id,
+            inventory_location=inventory_location,
+            quantity_on_hand=0,
         )
         db.add(balance)
         db.flush()
     before = balance.quantity_reserved
+    if delta > 0 and require_available and delta > balance.quantity_available:
+        sku = db.get(SKU, sku_id)
+        sku_code = sku.sku_code if sku else str(sku_id)
+        raise HTTPException(
+            409,
+            f"Onvoldoende voorraad voor {sku_code}: "
+            f"{balance.quantity_available} beschikbaar, {delta} nodig",
+        )
     balance.quantity_reserved = max(0, before + delta)
     return balance.quantity_reserved - before

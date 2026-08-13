@@ -33,7 +33,10 @@ def _bottle(db, org, *, product_id: str, code: str, on_hand: int = 10) -> SKU:
     db.flush()
     db.add(
         InventoryBalance(
-            sku_id=sku.id, organization_id=org.id, quantity_on_hand=on_hand
+            sku_id=sku.id,
+            organization_id=org.id,
+            inventory_location="store",
+            quantity_on_hand=on_hand,
         )
     )
     db.commit()

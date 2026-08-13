@@ -66,6 +66,7 @@ def compute_allocation(
         .filter(
             InventoryBalance.sku_id == sku_id,
             InventoryBalance.organization_id == organization_id,
+            InventoryBalance.inventory_location == "warehouse",
         )
         .first()
     )

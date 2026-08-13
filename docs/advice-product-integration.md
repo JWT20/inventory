@@ -90,14 +90,29 @@ geconfigureerde organisatie. Een nog niet gekoppelde fles heeft
 `source_product_id: null`; de advies-app negeert die regel. Inactieve flessen
 blijven aanwezig met voorraad nul. Beschikbare voorraad is
 `max(quantity_on_hand - quantity_reserved, 0)` en wordt nooit aangevuld vanuit
-doosvoorraad.
+doosvoorraad. Deze feed toont standaard de locatie `store`: de webshop is nu
+alleen afhalen en mag geen magazijnvoorraad verkopen.
+
+De locatie is een parameter, `?inventory_location=warehouse`. Vandaag heeft
+niemand hem nodig. Zodra er bezorgorders komen die de koerier uit het magazijn
+picked, verkoopt de advies-app uit twee potten en moet hij per aanvraag zeggen
+welke hij bedoelt. De parameter staat er daarom vanaf het begin in: dan is dat
+later een wijziging bij de aanroeper in plaats van een breuk in een contract
+dat dan al live staat.
+
+Migratie 054 verplaatst daarom de bestaande voorraad van álle fles-SKU's naar
+`store`; doosvoorraad blijft in het magazijn. Flessen zijn winkelvoorraad: de
+toonbank en de webshop verkopen ze, Dockscan picked ze niet. Zonder die
+verplaatsing zou de feed direct na de deploy voor elke wijn nul teruggeven en
+zou de webshop volledig op uitverkocht staan. De bewegingshistorie blijft op de
+oude locatie staan, zodat het audittrail blijft kloppen met wat er destijds
+gebeurde.
 
 ## Verkopen naar Dockscan
 
-De advies-app meldt een afgeronde verkoop — aan de toonbank of in de webshop —
-en Dockscan boekt die direct van de voorraad af. Anders dan bij een
-kanaalorder is er geen pickstap om op te wachten: de flessen zijn de deur al
-uit.
+De advies-app meldt een afgeronde toonbankverkoop en Dockscan boekt die direct
+van de winkelvoorraad af. Een webshoporder gebruikt de reserveringsstroom
+hieronder: betaald is nog niet hetzelfde als fysiek afgehaald.
 
 ```http
 POST /api/integrations/advice/sales
@@ -133,11 +148,71 @@ Idempotent op `(organisatie, sale_id)` en per regel op `(verkoop, SKU)`, want
 een kassa op slechte wifi herhaalt zijn verzoek. Dubbele regels voor hetzelfde
 product binnen één verkoop worden opgeteld tot één boeking. Elke geboekte regel
 levert een `stock_movement` van het type `sale` met `reference_type`
-`advice_sale`, en duwt de nieuwe beschikbare voorraad naar de live
-verkoopkanalen.
+`advice_sale` op locatie `store`.
 
 De sleutel staat los van de twee leessleutels, zodat schrijfrechten apart
 ingetrokken kunnen worden.
+
+## Webshop afhalen
+
+Een order uit wijnadvies1 blijft in wijnadvies1 en verschijnt niet in Scan &
+Boek. Vóór de Rabo-betaalpagina wordt de winkelvoorraad atomair gereserveerd:
+
+```http
+POST /api/integrations/advice/reservations
+Authorization: Bearer <ADVICE_SALES_API_KEY>
+```
+
+```json
+{
+  "external_order_id": "order_01J...",
+  "order_reference": "JUR-2026-000123",
+  "fulfillment_method": "pickup",
+  "inventory_location": "store",
+  "lines": [
+    { "source_product_id": "prd_01H8...", "quantity": 2 }
+  ]
+}
+```
+
+Onbekende producten of onvoldoende winkelvoorraad weigeren de volledige
+reservering met HTTP 409; de betaling mag dan niet starten. Een retry met
+dezelfde order en dezelfde regels is een succesvolle no-op zolang de
+reservering nog `active` is. Dezelfde order-ID met andere regels wordt
+geweigerd, en een al afgehaalde of vrijgegeven reservering ook: die houdt geen
+flessen meer apart, dus een tweede betaling zou tegen niet-gereserveerde
+voorraad starten.
+
+Bij fysiek afhalen verbruikt één idempotente handeling de reservering én boekt
+de flessen af, in dezelfde databasetransactie:
+
+```http
+POST /api/integrations/advice/reservations/{order-id}/collect
+```
+
+Bij definitief annuleren of terugbetalen vóór afhalen wordt alleen de
+reservering vrijgegeven:
+
+```http
+POST /api/integrations/advice/reservations/{order-id}/release
+```
+
+De reservering bewaart `fulfillment_method` en `inventory_location` als
+snapshot, en `collect` en `release` rekenen af tegen precies die locatie. De
+route is dus geen vaste waarde in de code maar een eigenschap van de order:
+nieuwe bezorgorders kunnen als `dockscan` + `warehouse` worden aangemeld zonder
+dat bestaande afhaalorders meebewegen.
+
+De twee waarden horen bij elkaar en worden ook zo afgedwongen: `pickup` gaat
+over de toonbank en hoort bij `store`, `dockscan` verlaat het magazijn en hoort
+bij `warehouse`. Een gekruiste combinatie wordt geweigerd met HTTP 422, en een
+bestaande order-ID opnieuw aanmelden met een andere route geeft 409 — anders
+zou de tweede aanvraag een andere pot reserveren dan de eerste vasthoudt.
+
+Let op: een `dockscan`-reservering houdt alleen magazijnvoorraad vast. Er komt
+geen Dockscan-order van, dus de koerier ziet hem niet in Scan & Boek. Zolang
+die stroom niet bestaat, is `pickup` de enige route die in de praktijk gebruikt
+wordt.
 
 ## Handmatig synchroniseren
 

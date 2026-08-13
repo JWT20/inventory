@@ -163,7 +163,7 @@ CHANNEL_CREDENTIAL_ENCRYPTION_KEY=${CHANNEL_CREDENTIAL_ENCRYPTION_KEY}
 VELOYD_API_KEY=${VELOYD_API_KEY:-}
 VELOYD_API_BASE_URL=${VELOYD_API_BASE_URL:-https://app.veloyd.nl/api}
 
-# Wine advice integration: read-only stock feed + inbound sale reports
+# Wine advice integration: store stock feed + counter sales/pickup reservations
 ADVICE_STOCK_API_KEY=${ADVICE_STOCK_API_KEY:-}
 ADVICE_SALES_API_KEY=${ADVICE_SALES_API_KEY:-}
 ADVICE_STOCK_ORGANIZATION_ID=${ADVICE_STOCK_ORGANIZATION_ID:-}

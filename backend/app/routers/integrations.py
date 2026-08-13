@@ -1,24 +1,35 @@
 """Server-to-server integration endpoints."""
 
 import secrets
+from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Response
-from sqlalchemy import and_
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from sqlalchemy import and_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models import AdviceSale, AdviceSaleLine, InventoryBalance, Organization, SKU
+from app.models import (
+    AdviceReservation,
+    AdviceReservationLine,
+    AdviceSale,
+    AdviceSaleLine,
+    InventoryBalance,
+    Organization,
+    SKU,
+)
 from app.schemas import (
+    AdviceReservationLineResponse,
+    AdviceReservationRequest,
+    AdviceReservationResponse,
     AdviceSaleAppliedLine,
     AdviceSaleRequest,
     AdviceSaleResponse,
     AdviceStockItem,
     AdviceStockResponse,
 )
-from app.services.inventory_sync import push_inventory_to_channels
-from app.services.stock import apply_stock_movement
+from app.services.stock import adjust_reservation, apply_stock_movement
 
 router = APIRouter(prefix="/integrations/advice", tags=["integrations"])
 
@@ -59,10 +70,18 @@ def _authenticate_advice_sales_request(
 @router.get("/stock", response_model=AdviceStockResponse)
 def advice_stock(
     response: Response,
+    inventory_location: Literal["warehouse", "store"] = "store",
     db: Session = Depends(get_db),
     organization_id: int = Depends(_authenticate_advice_stock_request),
 ) -> AdviceStockResponse:
-    """Return available bottle stock for the configured organization."""
+    """Return available bottle stock for the configured organization.
+
+    Today every advice-app order is a shop pickup, so the feed defaults to the
+    store pool. Once picked delivery orders exist they will sell warehouse
+    stock, and the advice app has to ask for the pool it is selling from — the
+    parameter is here from the start so that day is a caller change instead of
+    a breaking change to a live contract.
+    """
     if db.get(Organization, organization_id) is None:
         raise HTTPException(
             503,
@@ -82,6 +101,7 @@ def advice_stock(
             and_(
                 InventoryBalance.sku_id == SKU.id,
                 InventoryBalance.organization_id == organization_id,
+                InventoryBalance.inventory_location == inventory_location,
             ),
         )
         .filter(
@@ -122,11 +142,10 @@ def advice_stock(
 @router.post("/sales", response_model=AdviceSaleResponse)
 def advice_sale(
     payload: AdviceSaleRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     organization_id: int = Depends(_authenticate_advice_sales_request),
 ) -> AdviceSaleResponse:
-    """Book a completed advice-app sale off stock.
+    """Book a completed counter sale off store stock.
 
     Deliberately fail-open: the shop counter reports a sale that already
     happened, so an unknown product or a short balance never rejects the whole
@@ -225,6 +244,7 @@ def advice_sale(
             note=f"{payload.channel} {payload.sale_id}",
             performed_by=None,
             allow_negative=True,
+            inventory_location="store",
         )
         db.add(
             AdviceSaleLine(
@@ -242,12 +262,10 @@ def advice_sale(
         balance.sku_id: balance.quantity_available
         for balance in db.query(InventoryBalance).filter(
             InventoryBalance.organization_id == organization_id,
+            InventoryBalance.inventory_location == "store",
             InventoryBalance.sku_id.in_([sku.id for _, sku, _ in applied] or [0]),
         )
     }
-    for _, sku, _quantity in applied:
-        background_tasks.add_task(push_inventory_to_channels, sku.id, organization_id)
-
     return AdviceSaleResponse(
         sale_id=payload.sale_id,
         applied=[
@@ -262,3 +280,232 @@ def advice_sale(
         duplicate=duplicate,
         unmatched=unmatched,
     )
+
+
+def _reservation_response(
+    reservation: AdviceReservation, *, duplicate: bool
+) -> AdviceReservationResponse:
+    # Echo the stored routing, never a literal: a reservation is settled against
+    # the pool it was taken from, whatever the current default happens to be.
+    return AdviceReservationResponse(
+        external_order_id=reservation.external_order_id,
+        order_reference=reservation.order_reference,
+        fulfillment_method=reservation.fulfillment_method,
+        inventory_location=reservation.inventory_location,
+        status=reservation.status,
+        duplicate=duplicate,
+        lines=[
+            AdviceReservationLineResponse(
+                source_product_id=line.sku.source_product_id,
+                sku_code=line.sku.sku_code,
+                quantity=line.quantity,
+            )
+            for line in sorted(reservation.lines, key=lambda item: item.sku.sku_code)
+        ],
+    )
+
+
+def _locked_reservation(
+    db: Session, organization_id: int, external_order_id: str
+) -> AdviceReservation | None:
+    # Lock the bare reservation row only. Eager-loading the lines here would put
+    # FOR UPDATE on the nullable side of an outer join, which PostgreSQL rejects
+    # outright; the lines load lazily from the same open session afterwards.
+    return (
+        db.query(AdviceReservation)
+        .filter(
+            AdviceReservation.organization_id == organization_id,
+            AdviceReservation.external_order_id == external_order_id,
+        )
+        .with_for_update()
+        .first()
+    )
+
+
+@router.post("/reservations", response_model=AdviceReservationResponse)
+def reserve_advice_pickup(
+    payload: AdviceReservationRequest,
+    db: Session = Depends(get_db),
+    organization_id: int = Depends(_authenticate_advice_sales_request),
+) -> AdviceReservationResponse:
+    """Hold bottles for one advice-app order before its online payment starts.
+
+    The caller states the routing and it is stored on the reservation, so
+    collect and release settle against that pool rather than today's default.
+    """
+    if db.get(Organization, organization_id) is None:
+        raise HTTPException(503, "Advice stock organization is not configured correctly")
+
+    requested: dict[str, int] = {}
+    for line in payload.lines:
+        requested[line.source_product_id] = (
+            requested.get(line.source_product_id, 0) + line.quantity
+        )
+
+    existing = _locked_reservation(db, organization_id, payload.external_order_id)
+    if existing:
+        existing_lines = {
+            line.sku.source_product_id: line.quantity for line in existing.lines
+        }
+        if existing_lines != requested:
+            raise HTTPException(
+                409,
+                "Deze order-ID bestaat al met andere productregels",
+            )
+        if (
+            existing.fulfillment_method != payload.fulfillment_method
+            or existing.inventory_location != payload.inventory_location
+        ):
+            raise HTTPException(
+                409,
+                "Deze order-ID bestaat al met een andere route",
+            )
+        # Only an active hold may answer a retry as a no-op. A collected or
+        # released reservation holds nothing, so replying "duplicate" would let
+        # the caller start a payment against stock nobody is keeping aside.
+        if existing.status != "active":
+            raise HTTPException(
+                409,
+                f"Deze reservering is al afgehandeld ({existing.status})",
+            )
+        return _reservation_response(existing, duplicate=True)
+
+    skus = {
+        sku.source_product_id: sku
+        for sku in db.query(SKU)
+        .filter(
+            SKU.organization_id == organization_id,
+            SKU.is_bottle.is_(True),
+            SKU.active.is_(True),
+            SKU.source_product_id.in_(list(requested)),
+        )
+        .all()
+    }
+    missing = sorted(product_id for product_id in requested if product_id not in skus)
+    if missing:
+        raise HTTPException(
+            409,
+            {"code": "unmatched_products", "source_product_ids": missing},
+        )
+
+    reservation = AdviceReservation(
+        organization_id=organization_id,
+        external_order_id=payload.external_order_id,
+        order_reference=payload.order_reference,
+        fulfillment_method=payload.fulfillment_method,
+        inventory_location=payload.inventory_location,
+        status="active",
+    )
+    db.add(reservation)
+    try:
+        db.flush()
+        for product_id in sorted(requested):
+            sku = skus[product_id]
+            quantity = requested[product_id]
+            adjust_reservation(
+                db,
+                sku_id=sku.id,
+                organization_id=organization_id,
+                inventory_location=reservation.inventory_location,
+                delta=quantity,
+                require_available=True,
+            )
+            db.add(
+                AdviceReservationLine(
+                    reservation_id=reservation.id,
+                    sku_id=sku.id,
+                    quantity=quantity,
+                )
+            )
+        db.commit()
+    except HTTPException:
+        # A short balance must roll back both the reservation row and every
+        # earlier line hold from this request; FastAPI's yielded session does
+        # not implicitly end that transaction before the next request.
+        db.rollback()
+        raise
+    except IntegrityError:
+        db.rollback()
+        existing = _locked_reservation(db, organization_id, payload.external_order_id)
+        if existing:
+            return _reservation_response(existing, duplicate=True)
+        raise
+
+    reservation = _locked_reservation(db, organization_id, payload.external_order_id)
+    if reservation is None:  # pragma: no cover - the committed row cannot disappear here
+        raise RuntimeError("Reservering verdween na opslaan")
+    return _reservation_response(reservation, duplicate=False)
+
+
+@router.post(
+    "/reservations/{external_order_id}/collect",
+    response_model=AdviceReservationResponse,
+)
+def collect_advice_pickup(
+    external_order_id: str,
+    db: Session = Depends(get_db),
+    organization_id: int = Depends(_authenticate_advice_sales_request),
+) -> AdviceReservationResponse:
+    """Consume one reservation when the customer receives the bottles."""
+    reservation = _locked_reservation(db, organization_id, external_order_id)
+    if not reservation:
+        raise HTTPException(404, "Reservering niet gevonden")
+    if reservation.status == "collected":
+        return _reservation_response(reservation, duplicate=True)
+    if reservation.status == "released":
+        raise HTTPException(409, "Deze reservering is al vrijgegeven")
+
+    for line in reservation.lines:
+        adjust_reservation(
+            db,
+            sku_id=line.sku_id,
+            organization_id=organization_id,
+            inventory_location=reservation.inventory_location,
+            delta=-line.quantity,
+        )
+        apply_stock_movement(
+            db,
+            sku_id=line.sku_id,
+            organization_id=organization_id,
+            inventory_location=reservation.inventory_location,
+            quantity=-line.quantity,
+            movement_type="sale",
+            reference_type="advice_pickup",
+            reference_id=reservation.id,
+            note=f"{reservation.fulfillment_method} {external_order_id}",
+            performed_by=None,
+        )
+    reservation.status = "collected"
+    reservation.collected_at = func.now()
+    db.commit()
+    return _reservation_response(reservation, duplicate=False)
+
+
+@router.post(
+    "/reservations/{external_order_id}/release",
+    response_model=AdviceReservationResponse,
+)
+def release_advice_pickup(
+    external_order_id: str,
+    db: Session = Depends(get_db),
+    organization_id: int = Depends(_authenticate_advice_sales_request),
+) -> AdviceReservationResponse:
+    """Release held stock for a cancelled/refunded advice-app order."""
+    reservation = _locked_reservation(db, organization_id, external_order_id)
+    if not reservation:
+        raise HTTPException(404, "Reservering niet gevonden")
+    if reservation.status in {"released", "collected"}:
+        return _reservation_response(reservation, duplicate=True)
+
+    for line in reservation.lines:
+        adjust_reservation(
+            db,
+            sku_id=line.sku_id,
+            organization_id=organization_id,
+            inventory_location=reservation.inventory_location,
+            delta=-line.quantity,
+        )
+    reservation.status = "released"
+    reservation.released_at = func.now()
+    db.commit()
+    return _reservation_response(reservation, duplicate=False)

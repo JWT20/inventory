@@ -539,6 +539,7 @@ export const api = {
     document_sha256?: string | null;
     upload_attempt_id?: number | null;
     force?: boolean;
+    inventory_location?: "warehouse" | "store";
     lines: { sku_id: number; quantity: number; supplier_code?: string | null }[];
   }) => json("/shipments", "POST", data),
   bookShipment: (shipmentId: number) =>
@@ -574,12 +575,14 @@ export const api = {
     quantity: number,
     note: string | null,
     organizationId: number | null = null,
+    inventoryLocation: "warehouse" | "store" = "warehouse",
   ) =>
     json("/inventory/adjust", "POST", {
       sku_id: skuId,
       quantity,
       note,
       organization_id: organizationId,
+      inventory_location: inventoryLocation,
     }),
 
   // Vision (ad-hoc)
