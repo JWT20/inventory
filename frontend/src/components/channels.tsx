@@ -113,6 +113,8 @@ export function ChannelsPage() {
   const [recon, setRecon] = useState<Reconciliation | null>(null);
   const [bolRecon, setBolRecon] = useState<Reconciliation | null>(null);
   const [adviceHolds, setAdviceHolds] = useState<AdviceReservation[]>([]);
+  const [adviceHoldsLoading, setAdviceHoldsLoading] = useState(false);
+  const [adviceHoldsError, setAdviceHoldsError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [bolConnecting, setBolConnecting] = useState(false);
@@ -152,12 +154,17 @@ export function ChannelsPage() {
     }
     // The advice app is a separate integration with its own key, so a
     // deployment without it must not turn the channel page into an error.
+    setAdviceHoldsLoading(true);
+    setAdviceHoldsError(false);
     try {
       setAdviceHolds(
         await api.listAdviceReservations(`?organization_id=${orgId}&status=active`),
       );
     } catch {
       setAdviceHolds([]);
+      setAdviceHoldsError(true);
+    } finally {
+      setAdviceHoldsLoading(false);
     }
   }, [orgId]);
 
@@ -700,7 +707,15 @@ export function ChannelsPage() {
               in de wijnadvies-app; die geeft de voorraad hier vanzelf vrij.
             </p>
 
-            {adviceHolds.length === 0 ? (
+            {adviceHoldsLoading ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                Reserveringen laden...
+              </p>
+            ) : adviceHoldsError ? (
+              <p className="py-6 text-center text-sm text-red-700">
+                Reserveringen konden niet worden geladen. Probeer het opnieuw.
+              </p>
+            ) : adviceHolds.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">
                 Er ligt niets apart voor de webshop.
               </p>

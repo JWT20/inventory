@@ -10,6 +10,7 @@ vi.mock("@/lib/api", () => ({
     listOrganizations: vi.fn(),
     channelReconciliation: vi.fn(),
     bolChannelReconciliation: vi.fn(),
+    listAdviceReservations: vi.fn(),
     bolChannelConnect: vi.fn(),
     bolChannelSync: vi.fn(),
     bolChannelSetMode: vi.fn(),
@@ -39,6 +40,7 @@ describe("bol Admin channel card", () => {
     ]);
     vi.mocked(api.channelReconciliation).mockResolvedValue(emptyRecon);
     vi.mocked(api.bolChannelReconciliation).mockResolvedValue(emptyRecon);
+    vi.mocked(api.listAdviceReservations).mockResolvedValue([]);
     vi.mocked(api.bolChannelConnect).mockResolvedValue({
       connected: true,
       shop_domain: null,
@@ -147,5 +149,18 @@ describe("bol Admin channel card", () => {
     );
 
     await waitFor(() => expect(api.bolChannelPushInventory).toHaveBeenCalledWith(2));
+  });
+
+  it("distinguishes a reservation load failure from an empty reservation list", async () => {
+    vi.mocked(api.listAdviceReservations).mockRejectedValue(
+      new Error("reservation service unavailable"),
+    );
+
+    render(<ChannelsPage />);
+
+    expect(
+      await screen.findByText("Reserveringen konden niet worden geladen. Probeer het opnieuw."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Er ligt niets apart voor de webshop.")).toBeNull();
   });
 });
