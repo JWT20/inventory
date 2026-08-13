@@ -10,6 +10,7 @@ vi.mock("@/lib/api", () => ({
     listOrganizations: vi.fn(),
     channelReconciliation: vi.fn(),
     bolChannelReconciliation: vi.fn(),
+    listAdviceReservations: vi.fn(),
     bolChannelConnect: vi.fn(),
     bolChannelSync: vi.fn(),
     bolChannelSetMode: vi.fn(),
@@ -39,6 +40,7 @@ describe("bol Admin channel card", () => {
     ]);
     vi.mocked(api.channelReconciliation).mockResolvedValue(emptyRecon);
     vi.mocked(api.bolChannelReconciliation).mockResolvedValue(emptyRecon);
+    vi.mocked(api.listAdviceReservations).mockResolvedValue([]);
     vi.mocked(api.bolChannelConnect).mockResolvedValue({
       connected: true,
       shop_domain: null,
@@ -147,5 +149,52 @@ describe("bol Admin channel card", () => {
     );
 
     await waitFor(() => expect(api.bolChannelPushInventory).toHaveBeenCalledWith(2));
+  });
+
+  it("distinguishes a reservation load failure from an empty reservation list", async () => {
+    vi.mocked(api.listAdviceReservations).mockRejectedValue(
+      new Error("reservation service unavailable"),
+    );
+
+    render(<ChannelsPage />);
+
+    expect(
+      await screen.findByText("Reserveringen konden niet worden geladen. Probeer het opnieuw."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Er ligt niets apart voor de webshop.")).toBeNull();
+  });
+
+  it("loads the configured advice organization without a channel organization", async () => {
+    vi.mocked(api.listOrganizations).mockResolvedValue([
+      { id: 1, name: "Jurjen", enabled_modules: ["inventory", "orders"] },
+    ]);
+    vi.mocked(api.listAdviceReservations).mockResolvedValue([
+      {
+        id: 10,
+        external_order_id: "order_10",
+        order_reference: "JUR-2026-000010",
+        fulfillment_method: "pickup",
+        inventory_location: "store",
+        status: "active",
+        created_at: "2026-08-13T10:00:00Z",
+        total_quantity: 2,
+        lines: [
+          {
+            sku_id: 5,
+            sku_code: "FLES-ROOD",
+            sku_name: "Rode wijn",
+            source_product_id: "prd_rood",
+            quantity: 2,
+          },
+        ],
+      },
+    ]);
+
+    render(<ChannelsPage />);
+
+    expect(await screen.findByText("JUR-2026-000010")).toBeTruthy();
+    expect(api.listAdviceReservations).toHaveBeenCalledWith("?status=active");
+    expect(api.channelReconciliation).not.toHaveBeenCalled();
+    expect(screen.getByText(/Geen organisaties voor Shopify of bol/)).toBeTruthy();
   });
 });

@@ -1129,6 +1129,32 @@ class AdviceReservationResponse(BaseModel):
     lines: list[AdviceReservationLineResponse]
 
 
+class AdviceReservationAdminLine(BaseModel):
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    source_product_id: str | None = None
+    quantity: int
+
+
+class AdviceReservationAdminItem(BaseModel):
+    """One advice-app hold, as the merchant sees it in Dockscan."""
+
+    id: int
+    external_order_id: str
+    # The human order number from the advice app ("JUR-2026-000123"). This is
+    # what the merchant can actually look up on the other side.
+    order_reference: str | None = None
+    fulfillment_method: Literal["pickup", "dockscan"] = "pickup"
+    inventory_location: Literal["warehouse", "store"] = "store"
+    status: Literal["active", "collected", "released"]
+    created_at: datetime
+    collected_at: datetime | None = None
+    released_at: datetime | None = None
+    total_quantity: int
+    lines: list[AdviceReservationAdminLine]
+
+
 class InventoryOverviewItem(BaseModel):
     sku_id: int
     sku_code: str = ""

@@ -197,6 +197,17 @@ reservering vrijgegeven:
 POST /api/integrations/advice/reservations/{order-id}/release
 ```
 
+## Reserveringen in Dockscan zelf
+
+De bovenstaande endpoints zijn machine-naar-machine. Onder **Kanalen** staat
+naast Shopify en bol nu ook een kopje `wijnadvies`: welke flessen liggen apart,
+voor welk ordernummer, en hoe lang al.
+
+Alleen lezen, met opzet. Een reservering hier opheffen zou Dockscan laten
+denken dat de flessen vrij zijn terwijl wijnadvies1 ze nog aan een klant heeft
+beloofd. Annuleren hoort dus in de advies-app; die stuurt `release` en dan komt
+de voorraad hier vanzelf vrij.
+
 De reservering bewaart `fulfillment_method` en `inventory_location` als
 snapshot, en `collect` en `release` rekenen af tegen precies die locatie. De
 route is dus geen vaste waarde in de code maar een eigenschap van de order:
