@@ -218,7 +218,12 @@ def _inbound_upload_to_response(
                 _booked_skus_for_shipment(attempt.shipment)
                 if attempt.status == "booked" and attempt.shipment
                 else []
-            )
+            ),
+            # The attempt itself never chose a location; the shipment it created
+            # did. Reading it back keeps the two from drifting apart.
+            "inventory_location": (
+                attempt.shipment.inventory_location if attempt.shipment else None
+            ),
         }
     )
 

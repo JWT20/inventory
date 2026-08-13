@@ -403,3 +403,71 @@ def test_stale_processing_attempt_is_marked_failed(db, owner_user):
     db.refresh(attempt)
     assert attempt.status == "failed"
     assert attempt.error_message == "Verwerking onderbroken"
+
+
+def test_history_shows_which_pool_the_goods_landed_in(client, db, owner_token, sample_org):
+    """A pakbon can go to the shop or the warehouse; afterwards you must be
+    able to see which. Without it the only way to tell is to go count."""
+    sku = SKU(sku_code="HISTORY-LOC", name="Locatiewijn", organization_id=sample_org.id)
+    db.add(sku)
+    db.commit()
+
+    def _book(location: str, reference: str) -> dict:
+        attempt = InboundUploadAttempt(
+            organization_id=sample_org.id,
+            source_type="text",
+            status="needs_action",
+            line_count=1,
+            bookable_line_count=1,
+        )
+        db.add(attempt)
+        db.commit()
+        created = client.post(
+            "/api/shipments",
+            headers=auth_header(owner_token),
+            json={
+                "upload_attempt_id": attempt.id,
+                "supplier_name": "Vojacek",
+                "reference": reference,
+                "inventory_location": location,
+                "lines": [{"sku_id": sku.id, "quantity": 2}],
+            },
+        )
+        assert created.status_code == 201, created.text
+        booked = client.post(
+            f'/api/shipments/{created.json()["id"]}/book',
+            headers=auth_header(owner_token),
+        )
+        assert booked.status_code == 200, booked.text
+        return created.json()
+
+    store_shipment = _book("store", "PKB-WINKEL")
+    warehouse_shipment = _book("warehouse", "PKB-MAGAZIJN")
+
+    history = client.get("/api/inbound-uploads", headers=auth_header(owner_token))
+
+    assert history.status_code == 200, history.text
+    by_shipment = {
+        row["shipment_id"]: row["inventory_location"] for row in history.json()
+    }
+    assert by_shipment[store_shipment["id"]] == "store"
+    assert by_shipment[warehouse_shipment["id"]] == "warehouse"
+
+
+def test_history_reports_no_location_when_nothing_was_booked(
+    client, db, owner_token, tmp_path
+):
+    """An attempt that never produced a pakbon booked nothing anywhere, so
+    naming a location would be a guess."""
+    with patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(owner_token),
+            files={"file": ("leeg.pdf", b"", "application/pdf")},
+        )
+
+    history = client.get("/api/inbound-uploads", headers=auth_header(owner_token))
+
+    assert history.status_code == 200
+    assert history.json()[0]["shipment_id"] is None
+    assert history.json()[0]["inventory_location"] is None

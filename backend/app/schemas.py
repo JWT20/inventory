@@ -976,6 +976,9 @@ class InboundUploadAttemptResponse(BaseModel):
     error_stage: str | None = None
     error_message: str | None = None
     shipment_id: int | None = None
+    # Which pool the goods landed in, taken from the booked shipment. NULL while
+    # an attempt has no shipment yet — nothing was booked anywhere.
+    inventory_location: Literal["warehouse", "store"] | None = None
     line_count: int = 0
     bookable_line_count: int = 0
     booked_line_count: int = 0
