@@ -25,6 +25,24 @@ interface ChannelStatus {
   last_synced_at: string | null;
 }
 
+interface AdviceReservationLine {
+  sku_id: number;
+  sku_code: string;
+  sku_name: string;
+  quantity: number;
+}
+
+interface AdviceReservation {
+  id: number;
+  external_order_id: string;
+  order_reference: string | null;
+  inventory_location: "warehouse" | "store";
+  status: "active" | "collected" | "released";
+  created_at: string;
+  total_quantity: number;
+  lines: AdviceReservationLine[];
+}
+
 interface ReconRow {
   order_id: number | null;
   external_id: string;
@@ -94,6 +112,7 @@ export function ChannelsPage() {
   const [orgId, setOrgId] = useState<number | null>(null);
   const [recon, setRecon] = useState<Reconciliation | null>(null);
   const [bolRecon, setBolRecon] = useState<Reconciliation | null>(null);
+  const [adviceHolds, setAdviceHolds] = useState<AdviceReservation[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [bolConnecting, setBolConnecting] = useState(false);
@@ -130,6 +149,15 @@ export function ChannelsPage() {
       toast.error("Kan kanaaloverzicht niet laden");
     } finally {
       setLoading(false);
+    }
+    // The advice app is a separate integration with its own key, so a
+    // deployment without it must not turn the channel page into an error.
+    try {
+      setAdviceHolds(
+        await api.listAdviceReservations(`?organization_id=${orgId}&status=active`),
+      );
+    } catch {
+      setAdviceHolds([]);
     }
   }, [orgId]);
 
@@ -663,8 +691,58 @@ export function ChannelsPage() {
             )}
           </Card>
 
+          <h3 className="text-base font-semibold pt-3">wijnadvies</h3>
+          <Card className="p-4">
+            <p className="text-xs text-muted-foreground">
+              Flessen die apart liggen voor een betaalde webshopbestelling. Ze
+              staan nog in de winkelvoorraad maar zijn niet meer beschikbaar,
+              tot de klant ze afhaalt of de bestelling vervalt. Annuleren gebeurt
+              in de wijnadvies-app; die geeft de voorraad hier vanzelf vrij.
+            </p>
+
+            {adviceHolds.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                Er ligt niets apart voor de webshop.
+              </p>
+            ) : (
+              <div className="mt-3 divide-y divide-border">
+                {adviceHolds.map((hold) => (
+                  <div key={hold.id} className="flex justify-between gap-4 py-2">
+                    <div>
+                      <p className="text-sm font-medium">
+                        {hold.order_reference || hold.external_order_id}
+                        <span className="ml-2 text-xs font-normal text-muted-foreground">
+                          {hold.inventory_location === "store"
+                            ? "winkel"
+                            : "magazijn"}{" "}
+                          · {daysWaiting(hold.created_at)}
+                        </span>
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {hold.lines
+                          .map((line) => `${line.quantity}× ${line.sku_code}`)
+                          .join(", ")}
+                      </p>
+                    </div>
+                    <p className="shrink-0 text-sm tabular-nums">
+                      {hold.total_quantity}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+
         </>
       )}
     </div>
   );
+}
+
+function daysWaiting(createdAt: string) {
+  const days = Math.floor(
+    (Date.now() - new Date(createdAt).getTime()) / (24 * 60 * 60 * 1000),
+  );
+  if (days < 1) return "vandaag";
+  return days === 1 ? "1 dag" : `${days} dagen`;
 }
