@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
 import { useAuth, hasModule } from "@/lib/auth";
@@ -53,6 +53,11 @@ interface Organization {
 }
 
 const LOW_STOCK_THRESHOLD = 3;
+
+export function parseTransferQuantity(value: string): number | null {
+  const quantity = Number(value);
+  return Number.isInteger(quantity) && quantity > 0 ? quantity : null;
+}
 
 function thumbnailSrcSet(url: string) {
   const largeUrl = url.replace("/api/thumbnails/112/", "/api/thumbnails/224/");
@@ -334,6 +339,7 @@ function InventoryDetailDialog({
   const [transferValue, setTransferValue] = useState("");
   const [transferNoteValue, setTransferNoteValue] = useState("");
   const [savingTransfer, setSavingTransfer] = useState(false);
+  const transferInFlight = useRef(false);
 
   useEffect(() => {
     if (item) {
@@ -352,9 +358,9 @@ function InventoryDetailDialog({
   if (!item) return null;
 
   async function saveTransfer() {
-    if (!item) return;
-    const quantity = parseInt(transferValue, 10);
-    if (!Number.isFinite(quantity) || quantity <= 0) {
+    if (!item || transferInFlight.current) return;
+    const quantity = parseTransferQuantity(transferValue);
+    if (quantity == null) {
       toast.error("Vul een aantal groter dan 0 in");
       return;
     }
@@ -364,6 +370,7 @@ function InventoryDetailDialog({
       );
       return;
     }
+    transferInFlight.current = true;
     setSavingTransfer(true);
     try {
       await api.transferInventory(
@@ -384,6 +391,7 @@ function InventoryDetailDialog({
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Verplaatsen mislukt");
     } finally {
+      transferInFlight.current = false;
       setSavingTransfer(false);
     }
   }
@@ -605,6 +613,7 @@ function InventoryDetailDialog({
                   min="1"
                   value={transferValue}
                   onChange={(e) => setTransferValue(e.target.value)}
+                  disabled={savingTransfer}
                   className="h-8 text-sm"
                   placeholder="bv. 6"
                   autoFocus
@@ -617,6 +626,7 @@ function InventoryDetailDialog({
                   type="text"
                   value={transferNoteValue}
                   onChange={(e) => setTransferNoteValue(e.target.value)}
+                  disabled={savingTransfer}
                   className="h-8 text-sm"
                   placeholder="Reden (optioneel)"
                   onKeyDown={(e) => {
