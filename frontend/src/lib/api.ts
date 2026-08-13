@@ -570,6 +570,22 @@ export const api = {
     json(`/customers/${customerId}/skus/${skuId}/price`, "PUT", { unit_price: unitPrice }),
   updateCustomerSKUDiscount: (customerId: number, skuId: number, discountType: string | null, discountValue: number | null) =>
     json(`/customers/${customerId}/skus/${skuId}/discount`, "PUT", { discount_type: discountType, discount_value: discountValue }),
+  transferInventory: (
+    skuId: number,
+    quantity: number,
+    fromLocation: "warehouse" | "store",
+    toLocation: "warehouse" | "store",
+    note: string | null,
+    organizationId: number | null = null,
+  ) =>
+    json("/inventory/transfer", "POST", {
+      sku_id: skuId,
+      quantity,
+      from_location: fromLocation,
+      to_location: toLocation,
+      note,
+      organization_id: organizationId,
+    }),
   adjustInventory: (
     skuId: number,
     quantity: number,

@@ -1173,6 +1173,38 @@ class InventoryAdjustRequest(BaseModel):
     inventory_location: Literal["warehouse", "store"] = "warehouse"
 
 
+class InventoryTransferRequest(BaseModel):
+    sku_id: int
+    quantity: int = Field(..., gt=0)
+    from_location: Literal["warehouse", "store"]
+    to_location: Literal["warehouse", "store"]
+    note: str | None = None
+    organization_id: int | None = None
+
+    @model_validator(mode="after")
+    def _check_locations(self) -> "InventoryTransferRequest":
+        if self.from_location == self.to_location:
+            raise ValueError("Bron en bestemming moeten verschillen")
+        return self
+
+
+class InventoryTransferBalance(BaseModel):
+    inventory_location: Literal["warehouse", "store"]
+    quantity_on_hand: int
+    quantity_reserved: int
+    quantity_available: int
+
+
+class InventoryTransferResponse(BaseModel):
+    sku_id: int
+    quantity: int
+    from_location: Literal["warehouse", "store"]
+    to_location: Literal["warehouse", "store"]
+    # Both sides after the move, so the caller never has to guess what the
+    # other pool now holds.
+    balances: list[InventoryTransferBalance]
+
+
 class InventoryCountRequest(BaseModel):
     sku_id: int = Field(..., gt=0)
     counted_quantity: int = Field(..., ge=0)

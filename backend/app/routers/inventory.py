@@ -51,6 +51,9 @@ from app.schemas import (
     InventoryBalanceResponse,
     InventoryCountRequest,
     InventoryOverviewItem,
+    InventoryTransferBalance,
+    InventoryTransferRequest,
+    InventoryTransferResponse,
     InboundBookedSKUResponse,
     InboundUploadAttemptResponse,
     SupplierMappingResponse,
@@ -1558,6 +1561,114 @@ def adjust_inventory(
     )
 
     return movement
+
+
+LOCATION_LABELS = {"warehouse": "magazijn", "store": "winkel"}
+
+
+@router.post("/inventory/transfer", response_model=InventoryTransferResponse)
+def transfer_inventory(
+    data: InventoryTransferRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_merchant_inbound),
+):
+    """Move stock between the warehouse and the shop in one booking.
+
+    Doing this as two separate adjustments can strand halfway and lose the goods
+    on paper, and leaves two unrelated rows in the movement log. Here both sides
+    live or die together and point at each other.
+
+    Couriers are excluded on purpose: they may not decide to move goods onto the
+    merchant's shop shelf.
+    """
+    sku = db.get(SKU, data.sku_id)
+    if not sku:
+        raise HTTPException(404, "SKU niet gevonden")
+
+    organization_id = _resolve_inventory_org_id(db, user, data.organization_id)
+    if sku.organization_id != organization_id:
+        raise HTTPException(403, "Geen toegang tot deze SKU")
+
+    note = (data.note or "").strip() or None
+    quantities = {data.from_location: -data.quantity, data.to_location: data.quantity}
+    directions = {
+        data.from_location: f"Verplaatst naar {LOCATION_LABELS[data.to_location]}",
+        data.to_location: f"Verplaatst uit {LOCATION_LABELS[data.from_location]}",
+    }
+
+    movements: dict[str, StockMovement] = {}
+    try:
+        # Always touch the two pools in the same order, whichever way the goods
+        # are going, so two opposite transfers of the same SKU cannot deadlock
+        # on each other's row lock.
+        for location in sorted(quantities):
+            movements[location] = apply_stock_movement(
+                db,
+                sku_id=data.sku_id,
+                organization_id=organization_id,
+                quantity=quantities[location],
+                movement_type="transfer",
+                reference_type="transfer",
+                note=f"{directions[location]}{f' — {note}' if note else ''}",
+                performed_by=user.id,
+                inventory_location=location,
+            )
+        db.flush()
+        # Each half records the other, so the log can never show one leg alone.
+        source = movements[data.from_location]
+        destination = movements[data.to_location]
+        source.reference_id = destination.id
+        destination.reference_id = source.id
+        db.commit()
+    except HTTPException:
+        # A short balance must undo the half that already succeeded, including
+        # any empty destination row it created. The yielded session does not
+        # implicitly end that transaction before the next request.
+        db.rollback()
+        raise
+
+    # Only warehouse availability is mirrored to Shopify/bol, and a transfer
+    # always changes it. Wine has no EAN, so for bottles this is a no-op.
+    background_tasks.add_task(push_inventory_to_channels, data.sku_id, organization_id)
+
+    publish_event(
+        "inventory_transferred",
+        details={
+            "sku_code": sku.sku_code,
+            "quantity": data.quantity,
+            "from_location": data.from_location,
+            "to_location": data.to_location,
+            "note": note,
+        },
+        user=user,
+        resource_type="inventory",
+        resource_id=source.id,
+    )
+
+    balances = (
+        db.query(InventoryBalance)
+        .filter(
+            InventoryBalance.sku_id == data.sku_id,
+            InventoryBalance.organization_id == organization_id,
+        )
+        .all()
+    )
+    return InventoryTransferResponse(
+        sku_id=data.sku_id,
+        quantity=data.quantity,
+        from_location=data.from_location,
+        to_location=data.to_location,
+        balances=[
+            InventoryTransferBalance(
+                inventory_location=balance.inventory_location,
+                quantity_on_hand=balance.quantity_on_hand,
+                quantity_reserved=balance.quantity_reserved,
+                quantity_available=balance.quantity_available,
+            )
+            for balance in sorted(balances, key=lambda b: b.inventory_location)
+        ],
+    )
 
 
 @router.post("/inventory/count", response_model=StockMovementResponse)
