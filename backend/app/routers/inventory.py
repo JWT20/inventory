@@ -268,6 +268,20 @@ def _resolve_inventory_org_id(
     raise HTTPException(403, "Geen toegang tot voorraad")
 
 
+def _resolve_inventory_location(
+    user: User, requested_location: str
+) -> str:
+    """Couriers work the warehouse; the shop shelf is the merchant's own.
+
+    Refuse rather than silently substituting: a courier who thinks they are
+    counting the shop while they are correcting the warehouse produces exactly
+    the kind of quiet drift this split is meant to prevent.
+    """
+    if user.role == "courier" and requested_location != "warehouse":
+        raise HTTPException(403, "Koeriers werken alleen met magazijnvoorraad")
+    return requested_location
+
+
 def _upsert_supplier_mapping(
     db: Session,
     *,
@@ -1160,6 +1174,7 @@ def list_inventory(
     user: User = Depends(get_current_user),
 ):
     org_id = _resolve_inventory_org_id(db, user, organization_id)
+    inventory_location = _resolve_inventory_location(user, inventory_location)
     query = (
         db.query(InventoryBalance)
         .join(SKU, InventoryBalance.sku_id == SKU.id)
@@ -1199,6 +1214,7 @@ def inventory_overview(
 ):
     """Full inventory overview for merchants: stock, attributes, prices per customer."""
     org_id = _resolve_inventory_org_id(db, user, organization_id)
+    inventory_location = _resolve_inventory_location(user, inventory_location)
 
     # Start from SKU with LEFT JOIN to InventoryBalance so all products show up
     query = (
@@ -1477,7 +1493,9 @@ def list_movements(
 ):
     query = db.query(StockMovement).filter(
         StockMovement.sku_id == sku_id,
-        StockMovement.inventory_location == inventory_location,
+        StockMovement.inventory_location == _resolve_inventory_location(
+            user, inventory_location
+        ),
     )
     if user.is_platform_admin:
         if organization_id:
@@ -1505,6 +1523,7 @@ def adjust_inventory(
         raise HTTPException(404, "SKU niet gevonden")
 
     organization_id = _resolve_inventory_org_id(db, user, data.organization_id)
+    _resolve_inventory_location(user, data.inventory_location)
     if sku.organization_id != organization_id:
         raise HTTPException(403, "Geen toegang tot deze SKU")
 
@@ -1554,6 +1573,7 @@ def count_inventory(
         raise HTTPException(404, "SKU niet gevonden")
 
     organization_id = _resolve_inventory_org_id(db, user, data.organization_id)
+    _resolve_inventory_location(user, data.inventory_location)
     if sku.organization_id != organization_id:
         raise HTTPException(403, "Geen toegang tot deze SKU")
 

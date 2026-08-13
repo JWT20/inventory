@@ -275,3 +275,62 @@ def test_stock_endpoint_fails_for_unknown_configured_organization(
     response = client.get("/api/integrations/advice/stock", headers=_headers())
 
     assert response.status_code == 503
+
+
+def test_stock_endpoint_defaults_to_store_but_can_ask_for_warehouse(
+    client, db, sample_org, monkeypatch
+):
+    """The pool is a parameter so picked delivery orders do not break the feed.
+
+    Every advice-app order is a shop pickup today, so the default has to stay
+    `store`. Adding the parameter now means the day warehouse-picked orders
+    arrive is a caller change, not a breaking change to a deployed contract.
+    """
+    _configure(monkeypatch, sample_org.id)
+    bottle = SKU(
+        sku_code="ROUTE-FLES",
+        name="Routewijn",
+        organization_id=sample_org.id,
+        is_bottle=True,
+        source_product_id="prd_route",
+    )
+    db.add(bottle)
+    db.flush()
+    db.add_all(
+        [
+            InventoryBalance(
+                sku_id=bottle.id,
+                organization_id=sample_org.id,
+                inventory_location="store",
+                quantity_on_hand=4,
+            ),
+            InventoryBalance(
+                sku_id=bottle.id,
+                organization_id=sample_org.id,
+                inventory_location="warehouse",
+                quantity_on_hand=40,
+            ),
+        ]
+    )
+    db.commit()
+
+    default = client.get("/api/integrations/advice/stock", headers=_headers())
+    warehouse = client.get(
+        "/api/integrations/advice/stock?inventory_location=warehouse",
+        headers=_headers(),
+    )
+    bogus = client.get(
+        "/api/integrations/advice/stock?inventory_location=truck",
+        headers=_headers(),
+    )
+
+    def _available(response):
+        return next(
+            item["quantity_available"]
+            for item in response.json()["items"]
+            if item["source_product_id"] == "prd_route"
+        )
+
+    assert _available(default) == 4
+    assert _available(warehouse) == 40
+    assert bogus.status_code == 422

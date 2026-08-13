@@ -1,6 +1,7 @@
 """Server-to-server integration endpoints."""
 
 import secrets
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlalchemy import and_, func
@@ -69,10 +70,18 @@ def _authenticate_advice_sales_request(
 @router.get("/stock", response_model=AdviceStockResponse)
 def advice_stock(
     response: Response,
+    inventory_location: Literal["warehouse", "store"] = "store",
     db: Session = Depends(get_db),
     organization_id: int = Depends(_authenticate_advice_stock_request),
 ) -> AdviceStockResponse:
-    """Return available bottle stock for the configured organization."""
+    """Return available bottle stock for the configured organization.
+
+    Today every advice-app order is a shop pickup, so the feed defaults to the
+    store pool. Once picked delivery orders exist they will sell warehouse
+    stock, and the advice app has to ask for the pool it is selling from — the
+    parameter is here from the start so that day is a caller change instead of
+    a breaking change to a live contract.
+    """
     if db.get(Organization, organization_id) is None:
         raise HTTPException(
             503,
@@ -92,7 +101,7 @@ def advice_stock(
             and_(
                 InventoryBalance.sku_id == SKU.id,
                 InventoryBalance.organization_id == organization_id,
-                InventoryBalance.inventory_location == "store",
+                InventoryBalance.inventory_location == inventory_location,
             ),
         )
         .filter(
@@ -276,11 +285,13 @@ def advice_sale(
 def _reservation_response(
     reservation: AdviceReservation, *, duplicate: bool
 ) -> AdviceReservationResponse:
+    # Echo the stored routing, never a literal: a reservation is settled against
+    # the pool it was taken from, whatever the current default happens to be.
     return AdviceReservationResponse(
         external_order_id=reservation.external_order_id,
         order_reference=reservation.order_reference,
-        fulfillment_method="pickup",
-        inventory_location="store",
+        fulfillment_method=reservation.fulfillment_method,
+        inventory_location=reservation.inventory_location,
         status=reservation.status,
         duplicate=duplicate,
         lines=[
@@ -317,7 +328,11 @@ def reserve_advice_pickup(
     db: Session = Depends(get_db),
     organization_id: int = Depends(_authenticate_advice_sales_request),
 ) -> AdviceReservationResponse:
-    """Reserve store bottles before wijnadvies1 starts the online payment."""
+    """Hold bottles for one advice-app order before its online payment starts.
+
+    The caller states the routing and it is stored on the reservation, so
+    collect and release settle against that pool rather than today's default.
+    """
     if db.get(Organization, organization_id) is None:
         raise HTTPException(503, "Advice stock organization is not configured correctly")
 
@@ -336,6 +351,14 @@ def reserve_advice_pickup(
             raise HTTPException(
                 409,
                 "Deze order-ID bestaat al met andere productregels",
+            )
+        if (
+            existing.fulfillment_method != payload.fulfillment_method
+            or existing.inventory_location != payload.inventory_location
+        ):
+            raise HTTPException(
+                409,
+                "Deze order-ID bestaat al met een andere route",
             )
         # Only an active hold may answer a retry as a no-op. A collected or
         # released reservation holds nothing, so replying "duplicate" would let
@@ -369,8 +392,8 @@ def reserve_advice_pickup(
         organization_id=organization_id,
         external_order_id=payload.external_order_id,
         order_reference=payload.order_reference,
-        fulfillment_method="pickup",
-        inventory_location="store",
+        fulfillment_method=payload.fulfillment_method,
+        inventory_location=payload.inventory_location,
         status="active",
     )
     db.add(reservation)
@@ -383,7 +406,7 @@ def reserve_advice_pickup(
                 db,
                 sku_id=sku.id,
                 organization_id=organization_id,
-                inventory_location="store",
+                inventory_location=reservation.inventory_location,
                 delta=quantity,
                 require_available=True,
             )
@@ -423,7 +446,7 @@ def collect_advice_pickup(
     db: Session = Depends(get_db),
     organization_id: int = Depends(_authenticate_advice_sales_request),
 ) -> AdviceReservationResponse:
-    """Consume one pickup reservation when the customer receives the bottles."""
+    """Consume one reservation when the customer receives the bottles."""
     reservation = _locked_reservation(db, organization_id, external_order_id)
     if not reservation:
         raise HTTPException(404, "Reservering niet gevonden")
@@ -437,19 +460,19 @@ def collect_advice_pickup(
             db,
             sku_id=line.sku_id,
             organization_id=organization_id,
-            inventory_location="store",
+            inventory_location=reservation.inventory_location,
             delta=-line.quantity,
         )
         apply_stock_movement(
             db,
             sku_id=line.sku_id,
             organization_id=organization_id,
-            inventory_location="store",
+            inventory_location=reservation.inventory_location,
             quantity=-line.quantity,
             movement_type="sale",
             reference_type="advice_pickup",
             reference_id=reservation.id,
-            note=f"pickup {external_order_id}",
+            note=f"{reservation.fulfillment_method} {external_order_id}",
             performed_by=None,
         )
     reservation.status = "collected"
@@ -467,7 +490,7 @@ def release_advice_pickup(
     db: Session = Depends(get_db),
     organization_id: int = Depends(_authenticate_advice_sales_request),
 ) -> AdviceReservationResponse:
-    """Release store stock for a cancelled/refunded pickup order."""
+    """Release held stock for a cancelled/refunded advice-app order."""
     reservation = _locked_reservation(db, organization_id, external_order_id)
     if not reservation:
         raise HTTPException(404, "Reservering niet gevonden")
@@ -479,7 +502,7 @@ def release_advice_pickup(
             db,
             sku_id=line.sku_id,
             organization_id=organization_id,
-            inventory_location="store",
+            inventory_location=reservation.inventory_location,
             delta=-line.quantity,
         )
     reservation.status = "released"

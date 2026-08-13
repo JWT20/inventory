@@ -1093,9 +1093,24 @@ class AdviceReservationLineIn(BaseModel):
 class AdviceReservationRequest(BaseModel):
     external_order_id: str = Field(..., min_length=1, max_length=100)
     order_reference: str | None = Field(default=None, max_length=100)
-    fulfillment_method: Literal["pickup"] = "pickup"
-    inventory_location: Literal["store"] = "store"
+    # Counter sales are always store stock; an advice-app order is store stock
+    # while it is a shop pickup, and warehouse stock once it is picked and
+    # delivered. The caller decides per order and the choice is stored, so a
+    # reservation is always settled against the pool it was taken from.
+    fulfillment_method: Literal["pickup", "dockscan"] = "pickup"
+    inventory_location: Literal["warehouse", "store"] = "store"
     lines: list[AdviceReservationLineIn] = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def _check_route(self) -> "AdviceReservationRequest":
+        # A pickup is handed over at the counter and a picked order leaves the
+        # warehouse. Crossing them would reserve a pool nobody serves from.
+        expected = "store" if self.fulfillment_method == "pickup" else "warehouse"
+        if self.inventory_location != expected:
+            raise ValueError(
+                f"{self.fulfillment_method} hoort bij voorraadlocatie {expected}"
+            )
+        return self
 
 
 class AdviceReservationLineResponse(BaseModel):
@@ -1107,8 +1122,8 @@ class AdviceReservationLineResponse(BaseModel):
 class AdviceReservationResponse(BaseModel):
     external_order_id: str
     order_reference: str | None = None
-    fulfillment_method: Literal["pickup"] = "pickup"
-    inventory_location: Literal["store"] = "store"
+    fulfillment_method: Literal["pickup", "dockscan"] = "pickup"
+    inventory_location: Literal["warehouse", "store"] = "store"
     status: Literal["active", "collected", "released"]
     duplicate: bool = False
     lines: list[AdviceReservationLineResponse]

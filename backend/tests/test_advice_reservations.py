@@ -199,6 +199,73 @@ def test_finished_reservation_never_answers_a_retry_as_a_no_op(
     assert after_collect.status_code == 409
 
 
+def test_route_is_stored_and_settled_against_the_pool_it_was_taken_from(
+    client, db, sample_org, monkeypatch
+):
+    """Today every order is a pickup; the routing must still come from the row.
+
+    Picked delivery orders will sell warehouse stock, and a reservation made
+    then has to be collected off the warehouse even though `store` is the
+    default. Hardcoding the location would book the wrong shelf.
+    """
+    _configure(monkeypatch, sample_org.id)
+    sku = _bottle(db, sample_org, "prd_a")
+
+    reserved = client.post(
+        BASE_URL,
+        json=_payload(
+            external_order_id="order_picked",
+            fulfillment_method="dockscan",
+            inventory_location="warehouse",
+        ),
+        headers=_headers(),
+    )
+
+    assert reserved.status_code == 200
+    assert reserved.json()["fulfillment_method"] == "dockscan"
+    assert reserved.json()["inventory_location"] == "warehouse"
+    db.expire_all()
+    assert _balance(db, sku.id, "warehouse").quantity_reserved == 2
+    assert _balance(db, sku.id, "store").quantity_reserved == 0
+
+    collected = client.post(f"{BASE_URL}/order_picked/collect", headers=_headers())
+
+    assert collected.status_code == 200
+    assert collected.json()["inventory_location"] == "warehouse"
+    db.expire_all()
+    warehouse = _balance(db, sku.id, "warehouse")
+    assert (warehouse.quantity_on_hand, warehouse.quantity_reserved) == (97, 0)
+    store = _balance(db, sku.id, "store")
+    assert (store.quantity_on_hand, store.quantity_reserved) == (8, 0)
+    movements = db.query(StockMovement).filter_by(sku_id=sku.id).all()
+    assert [(row.inventory_location, row.quantity) for row in movements] == [
+        ("warehouse", -2)
+    ]
+
+
+def test_route_must_match_the_pool_it_claims(client, db, sample_org, monkeypatch):
+    _configure(monkeypatch, sample_org.id)
+    _bottle(db, sample_org, "prd_a")
+
+    crossed = client.post(
+        BASE_URL,
+        json=_payload(fulfillment_method="pickup", inventory_location="warehouse"),
+        headers=_headers(),
+    )
+    changed_route = client.post(BASE_URL, json=_payload(), headers=_headers())
+    reroute_attempt = client.post(
+        BASE_URL,
+        json=_payload(
+            fulfillment_method="dockscan", inventory_location="warehouse"
+        ),
+        headers=_headers(),
+    )
+
+    assert crossed.status_code == 422
+    assert changed_route.status_code == 200
+    assert reroute_attempt.status_code == 409
+
+
 def test_reservation_lock_never_locks_an_outer_join(db):
     """PostgreSQL refuses FOR UPDATE on the nullable side of an outer join.
 

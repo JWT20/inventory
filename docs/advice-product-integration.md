@@ -90,8 +90,15 @@ geconfigureerde organisatie. Een nog niet gekoppelde fles heeft
 `source_product_id: null`; de advies-app negeert die regel. Inactieve flessen
 blijven aanwezig met voorraad nul. Beschikbare voorraad is
 `max(quantity_on_hand - quantity_reserved, 0)` en wordt nooit aangevuld vanuit
-doosvoorraad. Deze feed toont uitsluitend de locatie `store`: de webshop is nu
+doosvoorraad. Deze feed toont standaard de locatie `store`: de webshop is nu
 alleen afhalen en mag geen magazijnvoorraad verkopen.
+
+De locatie is een parameter, `?inventory_location=warehouse`. Vandaag heeft
+niemand hem nodig. Zodra er bezorgorders komen die de koerier uit het magazijn
+picked, verkoopt de advies-app uit twee potten en moet hij per aanvraag zeggen
+welke hij bedoelt. De parameter staat er daarom vanaf het begin in: dan is dat
+later een wijziging bij de aanroeper in plaats van een breuk in een contract
+dat dan al live staat.
 
 Migratie 054 verplaatst daarom de bestaande voorraad van álle fles-SKU's naar
 `store`; doosvoorraad blijft in het magazijn. Flessen zijn winkelvoorraad: de
@@ -190,10 +197,22 @@ reservering vrijgegeven:
 POST /api/integrations/advice/reservations/{order-id}/release
 ```
 
-De reservering bewaart `fulfillment_method=pickup` en
-`inventory_location=store` als snapshots. Een latere bezorgstroom kan daardoor
-nieuwe orders als `warehouse + dockscan` routeren zonder bestaande afhaalorders
-te verplaatsen.
+De reservering bewaart `fulfillment_method` en `inventory_location` als
+snapshot, en `collect` en `release` rekenen af tegen precies die locatie. De
+route is dus geen vaste waarde in de code maar een eigenschap van de order:
+nieuwe bezorgorders kunnen als `dockscan` + `warehouse` worden aangemeld zonder
+dat bestaande afhaalorders meebewegen.
+
+De twee waarden horen bij elkaar en worden ook zo afgedwongen: `pickup` gaat
+over de toonbank en hoort bij `store`, `dockscan` verlaat het magazijn en hoort
+bij `warehouse`. Een gekruiste combinatie wordt geweigerd met HTTP 422, en een
+bestaande order-ID opnieuw aanmelden met een andere route geeft 409 — anders
+zou de tweede aanvraag een andere pot reserveren dan de eerste vasthoudt.
+
+Let op: een `dockscan`-reservering houdt alleen magazijnvoorraad vast. Er komt
+geen Dockscan-order van, dus de koerier ziet hem niet in Scan & Boek. Zolang
+die stroom niet bestaat, is `pickup` de enige route die in de praktijk gebruikt
+wordt.
 
 ## Handmatig synchroniseren
 

@@ -90,6 +90,8 @@ export function InventoryPage() {
   const [selected, setSelected] = useState<InventoryItem | null>(null);
   const needsOrganizationSelection = !!user && (user.is_platform_admin || user.role === "courier");
   const canViewPrices = !!user && user.role !== "courier";
+  // The shop shelf is the merchant's own; couriers only ever work the warehouse.
+  const canSwitchLocation = !!user && user.role !== "courier";
   // EAN orgs scan a barcode into the search box, so advertise it in the hint.
   const canBarcode = hasModule(user, "barcode_picking");
 
@@ -157,23 +159,25 @@ export function InventoryPage() {
         </div>
       )}
 
-      <div className="mb-4">
-        <Select
-          value={inventoryLocation}
-          onValueChange={(value) => {
-            setInventoryLocation(value as "warehouse" | "store");
-            setSelected(null);
-          }}
-        >
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="warehouse">Magazijnvoorraad</SelectItem>
-            <SelectItem value="store">Winkelvoorraad</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+      {canSwitchLocation && (
+        <div className="mb-4">
+          <Select
+            value={inventoryLocation}
+            onValueChange={(value) => {
+              setInventoryLocation(value as "warehouse" | "store");
+              setSelected(null);
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="warehouse">Magazijnvoorraad</SelectItem>
+              <SelectItem value="store">Winkelvoorraad</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       <Input
         placeholder={
