@@ -1,6 +1,7 @@
 """The merchant's view on stock the advice app is holding."""
 
 from app.auth import hash_password
+from app.config import settings
 from app.models import (
     AdviceReservation,
     AdviceReservationLine,
@@ -73,6 +74,20 @@ def test_merchant_sees_which_order_holds_which_bottles(
     assert rows[0]["order_reference"] == "JUR-2026-order_a"
     assert rows[0]["total_quantity"] == 2
     assert rows[0]["lines"][0]["sku_code"] == "HOLD-A"
+
+
+def test_admin_defaults_to_configured_advice_org_without_channel_module(
+    client, db, admin_token, sample_org, monkeypatch
+):
+    sample_org.modules = ["inventory", "orders"]
+    sku = _bottle(db, sample_org, "HOLD-CONFIGURED", reserved=2)
+    _reservation(db, sample_org, sku, order_id="configured")
+    monkeypatch.setattr(settings, "advice_stock_organization_id", sample_org.id)
+
+    resp = client.get(BASE_URL, headers=auth_header(admin_token))
+
+    assert resp.status_code == 200
+    assert [row["external_order_id"] for row in resp.json()] == ["configured"]
 
 
 def test_listing_defaults_to_active_and_can_widen(
