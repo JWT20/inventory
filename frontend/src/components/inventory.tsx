@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
 import { useAuth, hasModule } from "@/lib/auth";
@@ -53,6 +53,11 @@ interface Organization {
 }
 
 const LOW_STOCK_THRESHOLD = 3;
+
+export function parseTransferQuantity(value: string): number | null {
+  const quantity = Number(value);
+  return Number.isInteger(quantity) && quantity > 0 ? quantity : null;
+}
 
 function thumbnailSrcSet(url: string) {
   const largeUrl = url.replace("/api/thumbnails/112/", "/api/thumbnails/224/");
@@ -313,6 +318,11 @@ function InventoryDetailDialog({
       user.role === "courier") &&
     (!needsOrganizationSelection || organizationId != null);
   const canManagePrices = canViewPrices && canAdjustStock;
+  // Couriers work the warehouse; deciding what goes onto the shop shelf is the
+  // merchant's call, so they never get the move action.
+  const canTransferStock = canAdjustStock && !!user && user.role !== "courier";
+  const destination = item?.inventory_location === "store" ? "warehouse" : "store";
+  const destinationLabel = destination === "store" ? "winkel" : "magazijn";
 
   const [editingDefaultPrice, setEditingDefaultPrice] = useState(false);
   const [defaultPriceValue, setDefaultPriceValue] = useState("");
@@ -325,6 +335,11 @@ function InventoryDetailDialog({
   const [stockDeltaValue, setStockDeltaValue] = useState("");
   const [stockNoteValue, setStockNoteValue] = useState("");
   const [savingStock, setSavingStock] = useState(false);
+  const [movingStock, setMovingStock] = useState(false);
+  const [transferValue, setTransferValue] = useState("");
+  const [transferNoteValue, setTransferNoteValue] = useState("");
+  const [savingTransfer, setSavingTransfer] = useState(false);
+  const transferInFlight = useRef(false);
 
   useEffect(() => {
     if (item) {
@@ -334,10 +349,52 @@ function InventoryDetailDialog({
       setEditingStock(false);
       setStockDeltaValue("");
       setStockNoteValue("");
+      setMovingStock(false);
+      setTransferValue("");
+      setTransferNoteValue("");
     }
   }, [item]);
 
   if (!item) return null;
+
+  async function saveTransfer() {
+    if (!item || transferInFlight.current) return;
+    const quantity = parseTransferQuantity(transferValue);
+    if (quantity == null) {
+      toast.error("Vul een aantal groter dan 0 in");
+      return;
+    }
+    if (quantity > item.quantity_available) {
+      toast.error(
+        `Er zijn maar ${item.quantity_available} beschikbaar; de rest is gereserveerd`,
+      );
+      return;
+    }
+    transferInFlight.current = true;
+    setSavingTransfer(true);
+    try {
+      await api.transferInventory(
+        item.sku_id,
+        quantity,
+        item.inventory_location,
+        destination,
+        transferNoteValue.trim() || null,
+        organizationId,
+      );
+      setMovingStock(false);
+      setTransferValue("");
+      setTransferNoteValue("");
+      toast.success(`${quantity} verplaatst naar ${destinationLabel}`);
+      // Both pools changed, and the list only shows one of them.
+      onRefresh();
+      onClose();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Verplaatsen mislukt");
+    } finally {
+      transferInFlight.current = false;
+      setSavingTransfer(false);
+    }
+  }
 
   async function saveStockAdjustment() {
     if (!item) return;
@@ -449,17 +506,31 @@ function InventoryDetailDialog({
             <div className="flex justify-between items-start">
               <span className="text-sm text-muted-foreground">Voorraad</span>
               <div className="flex items-center gap-3">
-                {canAdjustStock && !editingStock && (
-                  <button
-                    onClick={() => {
-                      setStockDeltaValue("");
-                      setStockNoteValue("");
-                      setEditingStock(true);
-                    }}
-                    className="text-sm text-primary hover:underline"
-                  >
-                    Aanpassen
-                  </button>
+                {canAdjustStock && !editingStock && !movingStock && (
+                  <>
+                    <button
+                      onClick={() => {
+                        setStockDeltaValue("");
+                        setStockNoteValue("");
+                        setEditingStock(true);
+                      }}
+                      className="text-sm text-primary hover:underline"
+                    >
+                      Aanpassen
+                    </button>
+                    {canTransferStock && (
+                      <button
+                        onClick={() => {
+                          setTransferValue("");
+                          setTransferNoteValue("");
+                          setMovingStock(true);
+                        }}
+                        className="text-sm text-primary hover:underline"
+                      >
+                        Verplaatsen
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -523,6 +594,59 @@ function InventoryDetailDialog({
                   <button
                     onClick={() => setEditingStock(false)}
                     disabled={savingStock}
+                    className="text-sm text-muted-foreground hover:underline disabled:opacity-50"
+                  >
+                    Annuleren
+                  </button>
+                </div>
+              </div>
+            )}
+            {canTransferStock && movingStock && (
+              <div className="rounded-md border border-border p-3 space-y-2">
+                <label className="text-xs text-muted-foreground block">
+                  Aantal naar {destinationLabel} (max {item.quantity_available}{" "}
+                  beschikbaar)
+                </label>
+                <Input
+                  type="number"
+                  step="1"
+                  min="1"
+                  value={transferValue}
+                  onChange={(e) => setTransferValue(e.target.value)}
+                  disabled={savingTransfer}
+                  className="h-8 text-sm"
+                  placeholder="bv. 6"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveTransfer();
+                    if (e.key === "Escape") setMovingStock(false);
+                  }}
+                />
+                <Input
+                  type="text"
+                  value={transferNoteValue}
+                  onChange={(e) => setTransferNoteValue(e.target.value)}
+                  disabled={savingTransfer}
+                  className="h-8 text-sm"
+                  placeholder="Reden (optioneel)"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveTransfer();
+                    if (e.key === "Escape") setMovingStock(false);
+                  }}
+                />
+                <div className="flex items-center gap-3 pt-1">
+                  <button
+                    onClick={saveTransfer}
+                    disabled={savingTransfer}
+                    className="text-sm text-primary hover:underline disabled:opacity-50"
+                  >
+                    {savingTransfer
+                      ? "Verplaatsen..."
+                      : `Naar ${destinationLabel}`}
+                  </button>
+                  <button
+                    onClick={() => setMovingStock(false)}
+                    disabled={savingTransfer}
                     className="text-sm text-muted-foreground hover:underline disabled:opacity-50"
                   >
                     Annuleren
