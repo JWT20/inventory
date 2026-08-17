@@ -512,6 +512,7 @@ export const api = {
   // Inventory
   listInventoryOverview: (qs = "") => request(`/inventory/overview${qs}`),
   listAdviceReservations: (qs = "") => request(`/advice-reservations${qs}`),
+  listAdviceOrders: (qs = "") => request(`/advice-orders${qs}`),
   extractShipmentPreview: (
     blob: Blob,
     supplierName = "",
