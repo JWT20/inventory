@@ -560,6 +560,11 @@ class Order(Base):
     bookings: Mapped[list["Booking"]] = relationship(
         back_populates="order", cascade="all, delete-orphan"
     )
+    # Only a delivery order has one. See OrderDeliveryAddress for why it is not
+    # a set of columns here.
+    delivery_address: Mapped["OrderDeliveryAddress | None"] = relationship(
+        back_populates="order", cascade="all, delete-orphan", uselist=False
+    )
 
     def mark_finalized(self) -> None:
         """Stamp ``finalized_at`` the first time the order reaches a terminal
@@ -1149,3 +1154,47 @@ class AdviceReservationLine(Base):
 
     reservation: Mapped["AdviceReservation"] = relationship(back_populates="lines")
     sku: Mapped["SKU"] = relationship()
+
+
+class OrderDeliveryAddress(Base):
+    """Where a delivery order must be shipped.
+
+    A separate table rather than eight nullable columns on ``orders``: these are
+    the only personal details Dockscan keeps about a webshop customer, and
+    holding them apart means the retention question has one answer and one place
+    to act on it. Only advice-app delivery orders have a row; Shopify and bol
+    labels are printed at the channel, which keeps its own address.
+
+    A snapshot, like the advice app's own copy. A customer who moves house must
+    never rewrite the address of a parcel that already carries a label.
+    """
+
+    __tablename__ = "order_delivery_addresses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("orders.id", ondelete="CASCADE"), unique=True
+    )
+    recipient_name: Mapped[str] = mapped_column(String(200))
+    street: Mapped[str] = mapped_column(String(200))
+    house_number: Mapped[str] = mapped_column(String(20))
+    # Separate from ``house_number`` because carriers ask for them separately:
+    # "12" plus "B" is a different delivery than "12B".
+    house_number_suffix: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    postal_code: Mapped[str] = mapped_column(String(20))
+    city: Mapped[str] = mapped_column(String(120))
+    # ISO 3166-1 alpha-2, stored per order rather than an assumed "NL" so a first
+    # delivery across the border needs no migration.
+    country: Mapped[str] = mapped_column(
+        String(2), default="NL", server_default=text("'NL'"), nullable=False
+    )
+    # The number the carrier calls at the door.
+    phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    order: Mapped["Order"] = relationship(back_populates="delivery_address")
