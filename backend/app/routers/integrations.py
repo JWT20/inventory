@@ -1,6 +1,9 @@
 """Server-to-server integration endpoints."""
 
+import datetime
+import json
 import secrets
+import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
@@ -15,11 +18,18 @@ from app.models import (
     AdviceReservationLine,
     AdviceSale,
     AdviceSaleLine,
+    ChannelSyncLog,
     InventoryBalance,
+    Order,
+    OrderDeliveryAddress,
+    OrderLine,
     Organization,
     SKU,
 )
 from app.schemas import (
+    AdviceOrderMatchedLine,
+    AdviceOrderRequest,
+    AdviceOrderResponse,
     AdviceReservationLineResponse,
     AdviceReservationRequest,
     AdviceReservationResponse,
@@ -28,6 +38,13 @@ from app.schemas import (
     AdviceSaleResponse,
     AdviceStockItem,
     AdviceStockResponse,
+    DeliveryAddressIn,
+)
+from app.services.advice_channel import (
+    ADVICE_CHANNEL,
+    AdviceChannelNotObserving,
+    advice_connection,
+    assert_advice_observing,
 )
 from app.services.stock import adjust_reservation, apply_stock_movement
 
@@ -509,3 +526,203 @@ def release_advice_pickup(
     reservation.released_at = func.now()
     db.commit()
     return _reservation_response(reservation, duplicate=False)
+
+
+def _write_delivery_address(
+    order: Order, address: DeliveryAddressIn
+) -> OrderDeliveryAddress:
+    """Attach or refresh the shipping address of a delivery order."""
+    stored = order.delivery_address or OrderDeliveryAddress(order_id=order.id)
+    stored.recipient_name = address.recipient_name.strip()
+    stored.street = address.street.strip()
+    stored.house_number = address.house_number.strip()
+    stored.house_number_suffix = (
+        address.house_number_suffix.strip() if address.house_number_suffix else None
+    )
+    stored.postal_code = address.postal_code.strip()
+    stored.city = address.city.strip()
+    stored.country = address.country
+    stored.phone = address.phone.strip() if address.phone else None
+    order.delivery_address = stored
+    return stored
+
+
+@router.post("/orders", response_model=AdviceOrderResponse)
+def receive_advice_order(
+    payload: AdviceOrderRequest,
+    db: Session = Depends(get_db),
+    organization_id: int = Depends(_authenticate_advice_sales_request),
+) -> AdviceOrderResponse:
+    """Take in one paid delivery order from the advice app, to observe.
+
+    Picking and the shipping-label gate both hang off an ``Order`` row, so a
+    delivery order has to become one here. It is born ``observed``: visible in
+    Kanalen, and filtered out of the order list, Scan & Boek and the week
+    planning. Nothing reserves or deducts stock — that is what observing means,
+    and it is why this can ship before a delivery flow exists.
+
+    Idempotent on ``(organization, channel, external_order_id)``: the advice app
+    retries. A retry refreshes the address and the lines while the order is still
+    observed, because until someone acts on it the newest version is the true
+    one. Once it is no longer observed the order is left exactly as it is — by
+    then a human is working on it, and overwriting under their hands is worse than
+    a stale address they can see.
+
+    Personal data: ``delivery_address`` is the only customer detail Dockscan keeps
+    about a webshop buyer. It is here because a parcel cannot be addressed without
+    it, it lives in its own table so it can be purged on its own, and it is never
+    used for anything but this shipment.
+    """
+    if db.get(Organization, organization_id) is None:
+        raise HTTPException(
+            503,
+            "Advice stock organization is not configured correctly",
+        )
+
+    connection = advice_connection(db, organization_id)
+    try:
+        assert_advice_observing(connection)
+    except AdviceChannelNotObserving as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    # One product may arrive on several lines. Collapse them so the order books
+    # one line per product, the same way a counter sale does.
+    requested: dict[str, int] = {}
+    product_order: list[str] = []
+    for line in payload.lines:
+        if line.source_product_id not in requested:
+            product_order.append(line.source_product_id)
+            requested[line.source_product_id] = 0
+        requested[line.source_product_id] += line.quantity
+
+    skus = {
+        sku.source_product_id: sku
+        for sku in db.query(SKU)
+        .filter(
+            SKU.organization_id == organization_id,
+            SKU.is_bottle.is_(True),
+            SKU.source_product_id.in_(list(requested)),
+        )
+        .all()
+    }
+
+    def _load_order() -> Order | None:
+        return (
+            db.query(Order)
+            .filter(
+                Order.organization_id == organization_id,
+                Order.channel == ADVICE_CHANNEL,
+                Order.external_id == payload.external_order_id,
+            )
+            .with_for_update()
+            .first()
+        )
+
+    order = _load_order()
+    created = order is None
+    if order is None:
+        candidate = Order(
+            organization_id=organization_id,
+            channel=ADVICE_CHANNEL,
+            external_id=payload.external_order_id,
+            reference=f"ADV-{uuid.uuid4().hex[:8].upper()}",
+            channel_reference=payload.order_reference,
+            status="observed",
+            inventory_location=payload.inventory_location,
+            ordered_at=payload.ordered_at,
+            created_by=None,
+            delivery_week=None,
+        )
+        try:
+            with db.begin_nested():
+                db.add(candidate)
+                db.flush()
+            order = candidate
+        except IntegrityError:
+            # Two retries of the same order raced on the unique
+            # (organization, channel, external_id) index; the other one won.
+            # Rolling back the savepoint already made the loser transient.
+            order = _load_order()
+            if order is None:
+                raise
+            created = False
+
+    writable = created or order.status == "observed"
+    if writable:
+        order.channel_reference = payload.order_reference
+        if payload.ordered_at is not None:
+            order.ordered_at = payload.ordered_at
+        _write_delivery_address(order, payload.delivery_address)
+
+    matched: list[AdviceOrderMatchedLine] = []
+    unmatched: list[str] = []
+    lines_by_sku = {line.sku_id: line for line in order.lines}
+    seen_sku_ids: set[int] = set()
+    for product_id in product_order:
+        sku = skus.get(product_id)
+        if sku is None:
+            unmatched.append(product_id)
+            continue
+        quantity = requested[product_id]
+        matched.append(
+            AdviceOrderMatchedLine(
+                source_product_id=product_id,
+                sku_code=sku.sku_code,
+                quantity=quantity,
+            )
+        )
+        seen_sku_ids.add(sku.id)
+        if not writable:
+            continue
+        line = lines_by_sku.get(sku.id)
+        if line is None:
+            line = OrderLine(order_id=order.id, sku_id=sku.id)
+            db.add(line)
+        line.quantity = quantity
+        # Channel orders carry the buyer's name without a Dockscan customer row;
+        # there is no account here to point at.
+        line.klant = payload.delivery_address.recipient_name.strip()
+        line.customer_id = None
+    if writable:
+        for sku_id, line in lines_by_sku.items():
+            if sku_id not in seen_sku_ids:
+                db.delete(line)
+
+    # The reconciliation view under Kanalen reads sync logs, not orders, so an
+    # order the catalogue could not fully match still has to leave a trace. Upsert
+    # rather than append: a retry must not grow the table.
+    log = (
+        db.query(ChannelSyncLog)
+        .filter(
+            ChannelSyncLog.organization_id == organization_id,
+            ChannelSyncLog.channel == ADVICE_CHANNEL,
+            ChannelSyncLog.external_id == payload.external_order_id,
+        )
+        .first()
+    )
+    if log is None:
+        log = ChannelSyncLog(
+            organization_id=organization_id,
+            channel=ADVICE_CHANNEL,
+            external_id=payload.external_order_id,
+        )
+        db.add(log)
+    log.action = "created" if created else "updated"
+    log.matched_lines = len(matched)
+    # The column is named for EANs because Shopify and bol match on them. Advice
+    # products are matched on their product id instead; the view only prints the
+    # values, so they go in the same field rather than a near-duplicate column.
+    log.unmatched_eans = json.dumps(unmatched)
+    log.synced_at = datetime.datetime.utcnow()
+    connection.last_synced_at = datetime.datetime.utcnow()
+
+    db.commit()
+    return AdviceOrderResponse(
+        external_order_id=payload.external_order_id,
+        order_id=order.id,
+        reference=order.reference,
+        status=order.status,
+        duplicate=not created,
+        matched=matched,
+        unmatched=unmatched,
+    )

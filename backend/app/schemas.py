@@ -1158,6 +1158,89 @@ class AdviceReservationAdminItem(BaseModel):
     lines: list[AdviceReservationAdminLine]
 
 
+class DeliveryAddressIn(BaseModel):
+    """Where a delivery order goes, as the advice app hands it over.
+
+    Every field is a snapshot taken when the order was placed. House number and
+    suffix stay apart because carriers ask for them separately.
+    """
+
+    recipient_name: str = Field(..., min_length=1, max_length=200)
+    street: str = Field(..., min_length=1, max_length=200)
+    house_number: str = Field(..., min_length=1, max_length=20)
+    house_number_suffix: str | None = Field(default=None, max_length=20)
+    postal_code: str = Field(..., min_length=1, max_length=20)
+    city: str = Field(..., min_length=1, max_length=120)
+    # ISO 3166-1 alpha-2. Defaulted rather than required: today every delivery is
+    # domestic, and a caller that omits it means the Netherlands.
+    country: str = Field(default="NL", min_length=2, max_length=2)
+    phone: str | None = Field(default=None, max_length=40)
+
+    @field_validator("country")
+    @classmethod
+    def _upper_country(cls, value: str) -> str:
+        return value.upper()
+
+
+class DeliveryAddressResponse(BaseModel):
+    recipient_name: str
+    street: str
+    house_number: str
+    house_number_suffix: str | None = None
+    postal_code: str
+    city: str
+    country: str
+    phone: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class AdviceOrderLineIn(BaseModel):
+    source_product_id: str = Field(..., min_length=1, max_length=100)
+    quantity: int = Field(..., gt=0)
+
+
+class AdviceOrderRequest(BaseModel):
+    """One paid delivery order from the advice app.
+
+    Deliveries only. A pickup order stays in the advice app and reserves store
+    stock through ``/reservations``; giving it an order here would put it in the
+    pick list, which is exactly what that design avoids.
+    """
+
+    external_order_id: str = Field(..., min_length=1, max_length=100)
+    # The number the customer sees ("JUR-2026-8CERZC"). Optional for the same
+    # reason as on a reservation, but this is what a merchant looks the order up
+    # by, and later what a shipping label carries as its reference.
+    order_reference: str | None = Field(default=None, max_length=100)
+    fulfillment_method: Literal["dockscan"] = "dockscan"
+    inventory_location: Literal["warehouse"] = "warehouse"
+    # When the customer placed the order, not when Dockscan heard about it. The
+    # reconciliation view sorts on this.
+    ordered_at: datetime | None = None
+    delivery_address: DeliveryAddressIn
+    lines: list[AdviceOrderLineIn] = Field(..., min_length=1)
+
+
+class AdviceOrderMatchedLine(BaseModel):
+    source_product_id: str
+    sku_code: str
+    quantity: int
+
+
+class AdviceOrderResponse(BaseModel):
+    external_order_id: str
+    order_id: int
+    # Dockscan's own reference ("ADV-1A2B3C4D"), distinct from the advice app's.
+    reference: str
+    status: str
+    duplicate: bool = False
+    matched: list[AdviceOrderMatchedLine]
+    # Products the catalogue does not know. The order still lands, so the
+    # operator can link the product and re-post rather than lose the order.
+    unmatched: list[str]
+
+
 class InventoryOverviewItem(BaseModel):
     sku_id: int
     sku_code: str = ""
