@@ -23,9 +23,11 @@ not recognise (``services/autosync.py``).
 
 from __future__ import annotations
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models import ChannelConnection
+from app.config import settings
+from app.models import ChannelConnection, Organization, User
 
 #: The channel name for advice-app orders, as stored on ``Order.channel`` and
 #: ``ChannelSyncLog.channel``. Deliberately not "wijnadvies": the surrounding
@@ -35,6 +37,31 @@ ADVICE_CHANNEL = "advice"
 
 class AdviceChannelNotObserving(RuntimeError):
     """The advice connection is live, and nothing here implements live yet."""
+
+
+def resolve_advice_organization(
+    db: Session, user: User, requested_org_id: int | None
+) -> int:
+    """Owner/member see their own merchant; platform admins the advice one.
+
+    There is exactly one organization bound to the advice app, so an admin who
+    names none gets that one rather than an error about a choice with a single
+    possible answer. Shared by every read-only advice view, so they cannot drift
+    apart on who may see what.
+    """
+    if user.is_platform_admin:
+        org_id = requested_org_id or settings.advice_stock_organization_id
+        if not org_id:
+            raise HTTPException(400, "Geen advies-organisatie geconfigureerd")
+        if not db.get(Organization, org_id):
+            raise HTTPException(404, "Organisatie niet gevonden")
+        return org_id
+
+    if not user.organization_id:
+        raise HTTPException(403, "Geen toegang tot de wijnadvies-koppeling")
+    if requested_org_id and requested_org_id != user.organization_id:
+        raise HTTPException(403, "Geen toegang tot deze organisatie")
+    return user.organization_id
 
 
 def advice_connection(db: Session, organization_id: int) -> ChannelConnection:

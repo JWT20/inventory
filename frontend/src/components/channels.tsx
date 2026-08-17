@@ -43,6 +43,31 @@ interface AdviceReservation {
   lines: AdviceReservationLine[];
 }
 
+export interface DeliveryAddress {
+  recipient_name: string;
+  street: string;
+  house_number: string;
+  house_number_suffix: string | null;
+  postal_code: string;
+  city: string;
+  country: string;
+  phone: string | null;
+}
+
+interface AdviceOrder {
+  order_id: number;
+  reference: string;
+  external_order_id: string | null;
+  order_reference: string | null;
+  status: string;
+  ordered_at: string | null;
+  created_at: string;
+  total_quantity: number;
+  delivery_address: DeliveryAddress | null;
+  lines: AdviceReservationLine[];
+  unmatched_products: string[];
+}
+
 interface ReconRow {
   order_id: number | null;
   external_id: string;
@@ -115,6 +140,9 @@ export function ChannelsPage() {
   const [adviceHolds, setAdviceHolds] = useState<AdviceReservation[]>([]);
   const [adviceHoldsLoading, setAdviceHoldsLoading] = useState(false);
   const [adviceHoldsError, setAdviceHoldsError] = useState(false);
+  const [adviceOrders, setAdviceOrders] = useState<AdviceOrder[]>([]);
+  const [adviceOrdersLoading, setAdviceOrdersLoading] = useState(false);
+  const [adviceOrdersError, setAdviceOrdersError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [bolConnecting, setBolConnecting] = useState(false);
@@ -173,6 +201,21 @@ export function ChannelsPage() {
     }
   }, []);
 
+  const loadAdviceOrders = useCallback(async () => {
+    // Same isolation as the holds above: its own loader and its own error, so a
+    // deployment without the advice integration keeps the rest of the page usable.
+    setAdviceOrdersLoading(true);
+    setAdviceOrdersError(false);
+    try {
+      setAdviceOrders(await api.listAdviceOrders("?status=observed"));
+    } catch {
+      setAdviceOrders([]);
+      setAdviceOrdersError(true);
+    } finally {
+      setAdviceOrdersLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     load();
   }, [load]);
@@ -180,6 +223,10 @@ export function ChannelsPage() {
   useEffect(() => {
     loadAdviceHolds();
   }, [loadAdviceHolds]);
+
+  useEffect(() => {
+    loadAdviceOrders();
+  }, [loadAdviceOrders]);
 
   // Show a toast when we return from the Shopify OAuth redirect.
   useEffect(() => {
@@ -757,8 +804,91 @@ export function ChannelsPage() {
           </div>
         )}
       </Card>
+
+      <Card className="p-4">
+        <p className="text-xs text-muted-foreground">
+          Bezorgbestellingen uit de wijnadvies-app. Ze worden hier alleen
+          bijgehouden: ze staan niet in Scan &amp; Boek en niet in de
+          weekplanning, en ze raken de voorraad niet. Het label maak je zelf aan
+          bij de vervoerder. Wijzigen of annuleren gebeurt in de wijnadvies-app.
+        </p>
+
+        {adviceOrdersLoading ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            Bezorgbestellingen laden...
+          </p>
+        ) : adviceOrdersError ? (
+          <p className="py-6 text-center text-sm text-red-700">
+            Bezorgbestellingen konden niet worden geladen. Probeer het opnieuw.
+          </p>
+        ) : adviceOrders.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            Geen bezorgbestellingen om te verzenden.
+          </p>
+        ) : (
+          <div className="mt-3 divide-y divide-border">
+            {adviceOrders.map((order) => (
+              <div
+                key={order.order_id}
+                className="flex flex-wrap justify-between gap-4 py-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">
+                    {order.order_reference || order.external_order_id}
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      {ORDER_STATUS_LABELS[order.status] ?? order.status} ·{" "}
+                      {daysWaiting(order.created_at)}
+                    </span>
+                  </p>
+                  {order.delivery_address ? (
+                    <p className="text-xs text-muted-foreground">
+                      {addressLines(order.delivery_address).join(" · ")}
+                      {order.delivery_address.phone
+                        ? ` · ${order.delivery_address.phone}`
+                        : ""}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-amber-600">Geen bezorgadres bekend</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    {order.lines
+                      .map((line) => `${line.quantity}× ${line.sku_code}`)
+                      .join(", ")}
+                  </p>
+                  {order.unmatched_products.length > 0 && (
+                    <p className="text-xs text-amber-600">
+                      Niet gekoppeld: {order.unmatched_products.join(", ")}
+                    </p>
+                  )}
+                </div>
+                <p className="shrink-0 text-sm tabular-nums">
+                  {order.total_quantity}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
     </div>
   );
+}
+
+/**
+ * The address on one line each, as it belongs on a label. The country only shows
+ * when the parcel leaves the Netherlands — a domestic label does not name its own
+ * country, and printing it invites a carrier to treat the parcel as foreign.
+ */
+export function addressLines(address: DeliveryAddress): string[] {
+  const number = address.house_number_suffix
+    ? `${address.house_number} ${address.house_number_suffix}`
+    : address.house_number;
+  const lines = [
+    address.recipient_name,
+    `${address.street} ${number}`,
+    `${address.postal_code} ${address.city}`,
+  ];
+  if (address.country.toUpperCase() !== "NL") lines.push(address.country.toUpperCase());
+  return lines.map((line) => line.trim()).filter((line) => line.length > 0);
 }
 
 function daysWaiting(createdAt: string) {

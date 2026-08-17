@@ -27,6 +27,7 @@ from app.services.langfuse_client import get_langfuse, shutdown_langfuse
 from app.services.push_notifications import push_dispatch_loop
 from app.services.storage import storage, LocalStorage
 from app.routers import (
+    advice_orders,
     advice_reservations,
     auth,
     channels,
@@ -238,6 +239,7 @@ app.include_router(locations.router, prefix="/api")
 app.include_router(push.router, prefix="/api")
 app.include_router(integrations.router, prefix="/api")
 app.include_router(advice_reservations.router, prefix="/api")
+app.include_router(advice_orders.router, prefix="/api")
 
 
 @app.get("/api/health")

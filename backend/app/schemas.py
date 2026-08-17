@@ -1241,6 +1241,32 @@ class AdviceOrderResponse(BaseModel):
     unmatched: list[str]
 
 
+class AdviceOrderAdminLine(BaseModel):
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    quantity: int
+
+
+class AdviceOrderAdminItem(BaseModel):
+    """One advice-app delivery order, as the merchant sees it in Kanalen."""
+
+    order_id: int
+    # Dockscan's own reference; the advice app's number is `order_reference`.
+    reference: str
+    external_order_id: str | None = None
+    order_reference: str | None = None
+    status: str
+    ordered_at: datetime | None = None
+    created_at: datetime
+    total_quantity: int
+    delivery_address: DeliveryAddressResponse | None = None
+    lines: list[AdviceOrderAdminLine]
+    # Products the advice app sent that the catalogue does not know. They have no
+    # order line, so without this the order would look complete but ship short.
+    unmatched_products: list[str] = []
+
+
 class InventoryOverviewItem(BaseModel):
     sku_id: int
     sku_code: str = ""
