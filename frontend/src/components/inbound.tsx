@@ -28,6 +28,16 @@ interface ExtractedLine {
   matched_sku_code: string | null;
   matched_sku_name: string | null;
   is_bottle: boolean;
+  // Alle producten die deze leverancierscode kent — dezelfde wijn staat vaak
+  // als doos én als losse fles in het systeem.
+  candidate_matches?: MatchCandidate[];
+}
+
+interface MatchCandidate {
+  sku_id: number;
+  sku_code: string;
+  sku_name: string;
+  is_bottle: boolean;
 }
 
 const BOTTLES_PER_BOX = 6;
@@ -390,6 +400,59 @@ export function UnmatchedProductActions({
   );
 }
 
+/** Reason the inbound flow may not start yet, or null when it may. */
+export function supplierGateMessage(
+  supplierName: string,
+  { picker }: { picker: boolean },
+): string | null {
+  if (!picker) return null;
+  if (supplierName.trim()) return null;
+  return "Kies eerst een leverancier — de koppelingen worden onder die naam onthouden.";
+}
+
+/**
+ * Leverancier voor een inbound. Kiezen uit de eigen leverancierslijst zodat de
+ * onthouden supplier-code-koppelingen altijd onder dezelfde naam landen: een
+ * tweede spelling ("Anfors" naast "Anfors-Imperial") splitst dat geheugen en
+ * laat pakbonregels onnodig handmatig koppelen. Zonder leverancierslijst
+ * (module uit, of nog niets ingevoerd) valt hij terug op vrije tekst.
+ */
+export function SupplierPicker({
+  suppliers,
+  value,
+  onChange,
+}: {
+  suppliers: string[];
+  value: string;
+  onChange: (name: string) => void;
+}) {
+  if (suppliers.length === 0) {
+    return (
+      <Input
+        className="text-sm"
+        placeholder="Leverancier (optioneel)"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
+
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="text-sm" aria-label="Leverancier">
+        <SelectValue placeholder="Kies leverancier" />
+      </SelectTrigger>
+      <SelectContent>
+        {suppliers.map((name) => (
+          <SelectItem key={name} value={name}>
+            {name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 export function InboundPage() {
   const { user } = useAuth();
   const adviceSyncAvailable = Boolean(user?.advice_products_sync_available);
@@ -398,6 +461,9 @@ export function InboundPage() {
   const [preview, setPreview] = useState<ExtractPreview | null>(null);
   const [selectedLineIndex, setSelectedLineIndex] = useState<number | null>(null);
   const [supplierName, setSupplierName] = useState("");
+  // Namen uit de leverancierslijst van de handelaar. Leeg = lijst niet
+  // beschikbaar (module uit of nog niets ingevoerd) → vrije tekst.
+  const [supplierNames, setSupplierNames] = useState<string[]>([]);
   const [documentType, setDocumentType] = useState<"pakbon" | "invoice" | "unknown">("unknown");
   const [inventoryLocation, setInventoryLocation] = useState<"warehouse" | "store">("warehouse");
   const [skuOptions, setSkuOptions] = useState<SKUOption[]>([]);
@@ -495,6 +561,34 @@ export function InboundPage() {
     setEditing(lineIndex, true);
   }
 
+  /**
+   * Kies een van de producten die deze leverancierscode al kent. De koppeling
+   * bestaat al, dus hier wordt niets opgeslagen — alleen de regel omgezet, met
+   * het aantal herberekend als de besteleenheid wisselt (doos ↔ fles).
+   */
+  function chooseCandidate(lineIndex: number, candidate: MatchCandidate) {
+    setPreview((prev) => {
+      if (!prev) return prev;
+      const line = prev.lines[lineIndex];
+      if (!line || line.matched_sku_id === candidate.sku_id) return prev;
+      const unitChanged = line.is_bottle !== candidate.is_bottle;
+      const nextLines = [...prev.lines];
+      nextLines[lineIndex] = {
+        ...line,
+        matched_sku_id: candidate.sku_id,
+        matched_sku_code: candidate.sku_code,
+        matched_sku_name: candidate.sku_name,
+        is_bottle: candidate.is_bottle,
+        quantity_boxes: unitChanged
+          ? resolveQuantityForUnit(line.quantity, line.quantity_unit, candidate.is_bottle)
+          : line.quantity_boxes,
+      };
+      return { ...prev, lines: nextLines };
+    });
+    clearRemainderDecision(lineIndex);
+    setEditing(lineIndex, false);
+  }
+
   async function unlinkLine(lineIndex: number) {
     if (!preview) return;
     const line = preview.lines[lineIndex];
@@ -507,9 +601,14 @@ export function InboundPage() {
         const mappings = (await api.listSupplierMappings(supplierName)) as {
           id: number;
           supplier_code: string;
+          sku_id: number;
         }[];
+        // Eén code kan meerdere producten kennen (doos én fles); ontkoppel
+        // alleen het product dat op deze regel stond.
         const match = (mappings || []).find(
-          (m) => m.supplier_code.toUpperCase() === supplierCode.toUpperCase(),
+          (m) =>
+            m.supplier_code.toUpperCase() === supplierCode.toUpperCase() &&
+            m.sku_id === line.matched_sku_id,
         );
         if (match) await api.deleteSupplierMapping(match.id);
       } catch (err: unknown) {
@@ -549,7 +648,20 @@ export function InboundPage() {
     toast.success("Ontkoppeld — kies een nieuw SKU of zet de regel op niet boeken");
   }
 
+  useEffect(() => {
+    api.listSuppliers()
+      .then((rows: { name: string }[]) =>
+        setSupplierNames(rows.map((row) => row.name).filter(Boolean)),
+      )
+      .catch(() => setSupplierNames([]));
+  }, []);
+
   async function extractFromFile(file: File) {
+    const gate = supplierGateMessage(supplierName, { picker: supplierNames.length > 0 });
+    if (gate) {
+      toast.error(gate);
+      return;
+    }
     setLastBookedInbound(null);
     setLoading(true);
     try {
@@ -572,6 +684,11 @@ export function InboundPage() {
     const text = pasteText.trim();
     if (!text) {
       toast.error("Plak eerst de besteltekst.");
+      return;
+    }
+    const gate = supplierGateMessage(supplierName, { picker: supplierNames.length > 0 });
+    if (gate) {
+      toast.error(gate);
       return;
     }
     setLastBookedInbound(null);
@@ -887,11 +1004,10 @@ export function InboundPage() {
 
       <Card className="p-3 space-y-3">
         <div className="grid grid-cols-2 gap-2">
-          <Input
-            className="text-sm"
-            placeholder="Leverancier (optioneel)"
+          <SupplierPicker
+            suppliers={supplierNames}
             value={supplierName}
-            onChange={(e) => setSupplierName(e.target.value)}
+            onChange={setSupplierName}
           />
           <Select
             value={documentType}
@@ -1141,6 +1257,29 @@ export function InboundPage() {
                             </Button>
                           </>
                         )}
+                      </div>
+                    )}
+                    {(line.candidate_matches?.length ?? 0) > 1 && !ignored && (
+                      <div
+                        className="mt-2 flex flex-wrap items-center gap-1 text-xs"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <span className="text-muted-foreground">
+                          Deze code kent meer producten:
+                        </span>
+                        {line.candidate_matches?.map((candidate) => (
+                          <Button
+                            key={candidate.sku_id}
+                            type="button"
+                            variant={
+                              candidate.sku_id === line.matched_sku_id ? "default" : "outline"
+                            }
+                            className="h-6 text-xs"
+                            onClick={() => chooseCandidate(idx, candidate)}
+                          >
+                            {candidate.sku_name} · {candidate.is_bottle ? "fles" : "doos"}
+                          </Button>
+                        ))}
                       </div>
                     )}
                     <div className="flex items-center gap-2 mt-1">

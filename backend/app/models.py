@@ -749,16 +749,21 @@ class InboundUploadAttempt(Base):
 class SupplierSKUMapping(Base):
     __tablename__ = "supplier_sku_mappings"
     __table_args__ = (
+        # sku_id is part of the key: one supplier code may legitimately carry
+        # both the case and the loose-bottle product of the same wine. Inbound
+        # offers the alternatives instead of overwriting the earlier link.
         UniqueConstraint(
             "organization_id",
             "supplier_name",
             "supplier_code",
-            name="uq_supplier_sku_mapping_org_supplier_code",
+            "sku_id",
+            name="uq_supplier_sku_mapping_org_supplier_code_sku",
         ),
         Index(
             "uq_supplier_sku_mapping_global_supplier_code",
             "supplier_name",
             "supplier_code",
+            "sku_id",
             unique=True,
             postgresql_where=text("organization_id IS NULL"),
             sqlite_where=text("organization_id IS NULL"),

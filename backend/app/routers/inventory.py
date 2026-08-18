@@ -60,6 +60,7 @@ from app.schemas import (
     ShipmentCreate,
     ShipmentExtractPreviewResponse,
     ShipmentExtractedLine,
+    ShipmentMatchCandidate,
     ShipmentLineResponse,
     ShipmentResponse,
     ShipmentTextExtractRequest,
@@ -300,17 +301,27 @@ def _upsert_supplier_mapping(
     supplier_code: str,
     sku_id: int,
 ) -> None:
+    """Remember that this supplier code delivered this product.
+
+    A code may map to several products at once — the same wine is often stocked
+    as a case and as a loose bottle, and the supplier ships both under one
+    article number. So an existing link to another product is left alone
+    instead of being overwritten; the newest link simply becomes the default
+    the next preview proposes, with the others offered beside it.
+    """
     existing_mapping = (
         db.query(SupplierSKUMapping)
         .filter(
             SupplierSKUMapping.organization_id == organization_id,
             SupplierSKUMapping.supplier_name == supplier_name,
             SupplierSKUMapping.supplier_code == supplier_code,
+            SupplierSKUMapping.sku_id == sku_id,
         )
         .first()
     )
     if existing_mapping:
-        existing_mapping.sku_id = sku_id
+        # Touch it so re-confirming an older link makes it the default again.
+        existing_mapping.updated_at = _utcnow()
         return
 
     try:
@@ -328,11 +339,12 @@ def _upsert_supplier_mapping(
                 SupplierSKUMapping.organization_id == organization_id,
                 SupplierSKUMapping.supplier_name == supplier_name,
                 SupplierSKUMapping.supplier_code == supplier_code,
+                SupplierSKUMapping.sku_id == sku_id,
             )
             .first()
         )
         if concurrent_mapping:
-            concurrent_mapping.sku_id = sku_id
+            concurrent_mapping.updated_at = _utcnow()
         else:
             raise
 
@@ -357,9 +369,12 @@ async def _build_preview_lines(
         or _normalize_supplier_name(extracted_supplier)
     )
 
-    mapping_lookup: dict[tuple[str, str], tuple[int, str, str]] = {}
-    mappings_by_supplier_code: dict[str, dict[int, tuple[int, str, str]]] = {}
-    unique_supplier_code_lookup: dict[str, tuple[int, str, str]] = {}
+    # One supplier code can carry several products on purpose (case + loose
+    # bottle of the same wine), so every lookup yields a list. The list is kept
+    # newest-first: the most recently confirmed link is what the preview
+    # proposes, the rest ride along as one-click alternatives.
+    mapping_lookup: dict[tuple[str, str], list[ShipmentMatchCandidate]] = {}
+    mappings_by_supplier_code: dict[str, dict[int, ShipmentMatchCandidate]] = {}
     is_bottle_by_id: dict[int, bool] = {}
     if normalized_supplier:
         mappings = db.query(SupplierSKUMapping, SKU).join(
@@ -371,20 +386,24 @@ async def _build_preview_lines(
             )
         else:
             mappings = mappings.filter(SupplierSKUMapping.organization_id.is_(None))
-        for mapping, sku in mappings.all():
-            normalized_mapping = (sku.id, sku.sku_code, sku.name)
+        for mapping, sku in mappings.order_by(
+            SupplierSKUMapping.updated_at.desc(), SupplierSKUMapping.id.desc()
+        ).all():
+            candidate = ShipmentMatchCandidate(
+                sku_id=sku.id,
+                sku_code=sku.sku_code,
+                sku_name=sku.name,
+                is_bottle=sku.is_bottle,
+            )
             mapping_supplier = _normalize_supplier_name(mapping.supplier_name)
             mapping_code = _normalize_supplier_code(mapping.supplier_code)
-            mapping_lookup[(mapping_supplier, mapping_code)] = normalized_mapping
-            mappings_by_supplier_code.setdefault(mapping_code, {})[
-                sku.id
-            ] = normalized_mapping
+            mapping_lookup.setdefault((mapping_supplier, mapping_code), []).append(
+                candidate
+            )
+            mappings_by_supplier_code.setdefault(mapping_code, {}).setdefault(
+                sku.id, candidate
+            )
             is_bottle_by_id[sku.id] = sku.is_bottle
-        unique_supplier_code_lookup = {
-            code: next(iter(sku_matches.values()))
-            for code, sku_matches in mappings_by_supplier_code.items()
-            if len(sku_matches) == 1
-        }
 
     lines: list[ShipmentExtractedLine] = []
     for row in extracted.get("lines", []):
@@ -401,17 +420,30 @@ async def _build_preview_lines(
         # verifies the quantity before booking.
         needs_confirmation = (not code) or qty_unit == "unknown"
         match_source = "unresolved"
+        candidates: list[ShipmentMatchCandidate] = []
         if code:
-            # Prefer the exact supplier mapping. If the uploaded supplier name
-            # differs, only fall back when this code identifies exactly one SKU
-            # across all supplier mappings in the organization.
             normalized_code = _normalize_supplier_code(code)
-            hit = mapping_lookup.get((normalized_supplier, normalized_code))
-            if not hit:
-                hit = unique_supplier_code_lookup.get(normalized_code)
-            if hit:
-                matched_id, matched_code, matched_name = hit
+            # Products learned under this exact supplier name win: the newest
+            # link is proposed, any others ride along as one-click alternatives.
+            exact = mapping_lookup.get((normalized_supplier, normalized_code), [])
+            candidates = list(exact)
+            if not candidates:
+                # Uploaded name differs from the one the code was learned under
+                # (a supplier spelling itself two ways). A single product is
+                # still an unambiguous match; several are offered as a choice
+                # rather than dropped, which is what used to force a manual
+                # search on every such line.
+                candidates = list(
+                    mappings_by_supplier_code.get(normalized_code, {}).values()
+                )
+            if exact or len(candidates) == 1:
+                chosen = candidates[0]
+                matched_id = chosen.sku_id
+                matched_code = chosen.sku_code
+                matched_name = chosen.sku_name
                 match_source = "supplier_mapping"
+            elif candidates:
+                needs_confirmation = True
 
         # Re-resolve the quantity once the matched SKU's unit is known: a
         # bottle SKU counts pieces one-to-one and flags box quantities as
@@ -434,7 +466,7 @@ async def _build_preview_lines(
             is_bottle=bool(matched_id is not None and is_bottle_by_id.get(matched_id)),
             needs_confirmation=needs_confirmation,
             match_source=match_source,
-            candidate_matches=[],
+            candidate_matches=candidates,
         ))
     return lines
 
@@ -994,6 +1026,7 @@ def confirm_line_match(
             SupplierSKUMapping.organization_id == org_id,
             SupplierSKUMapping.supplier_name == normalized_supplier_name,
             SupplierSKUMapping.supplier_code == normalized_supplier_code,
+            SupplierSKUMapping.sku_id == sku.id,
         )
         .first()
     )
