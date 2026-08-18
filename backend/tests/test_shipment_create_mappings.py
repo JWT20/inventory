@@ -44,7 +44,8 @@ def test_create_shipment_persists_supplier_mappings(client, db, owner_token, own
     assert mapping.sku_id == sku.id
 
 
-def test_create_shipment_updates_existing_mapping(client, db, owner_token, owner_user):
+def test_create_shipment_keeps_both_products_for_one_code(client, db, owner_token, owner_user):
+    """One supplier code may carry the case and the loose bottle of one wine."""
     sku_old = SKU(sku_code="SKU-OLD", name="Old", organization_id=owner_user.organization_id)
     sku_new = SKU(sku_code="SKU-NEW", name="New", organization_id=owner_user.organization_id)
     db.add_all([sku_old, sku_new])
@@ -68,16 +69,18 @@ def test_create_shipment_updates_existing_mapping(client, db, owner_token, owner
     )
     assert resp.status_code == 201
 
-    mapping = (
+    mappings = (
         db.query(SupplierSKUMapping)
         .filter(
             SupplierSKUMapping.organization_id == owner_user.organization_id,
             SupplierSKUMapping.supplier_name == "ANFORS",
             SupplierSKUMapping.supplier_code == "SUP-999",
         )
-        .one()
+        .all()
     )
-    assert mapping.sku_id == sku_new.id
+    # The earlier link survives instead of being overwritten; both are offered
+    # as a choice on the next pakbon.
+    assert {m.sku_id for m in mappings} == {sku_old.id, sku_new.id}
 
 
 def test_create_shipment_case_collision_reuses_single_mapping(client, db, owner_token, owner_user):
@@ -120,17 +123,25 @@ def test_upsert_supplier_mapping_handles_concurrent_insert(db, owner_user):
     sku_new = SKU(sku_code="SKU-C2", name="C2", organization_id=owner_user.organization_id)
     db.add_all([sku_old, sku_new])
     db.flush()
-    existing = SupplierSKUMapping(
+    already_linked = SupplierSKUMapping(
         organization_id=owner_user.organization_id,
         supplier_name="ANFORS",
         supplier_code="SUP-CONCURRENT",
         sku_id=sku_old.id,
     )
-    db.add(existing)
+    db.add(already_linked)
     db.commit()
 
     @contextmanager
     def _raise_integrity():
+        # Another request wins the race: its row lands first, ours conflicts.
+        db.add(SupplierSKUMapping(
+            organization_id=owner_user.organization_id,
+            supplier_name="ANFORS",
+            supplier_code="SUP-CONCURRENT",
+            sku_id=sku_new.id,
+        ))
+        db.flush()
         raise IntegrityError("insert", {}, Exception("duplicate"))
         yield
 
@@ -143,5 +154,15 @@ def test_upsert_supplier_mapping_handles_concurrent_insert(db, owner_user):
         sku_id=sku_new.id,
     )
     db.commit()
-    db.refresh(existing)
-    assert existing.sku_id == sku_new.id
+
+    # The race resolves to a single row for that product, next to the link that
+    # was already there for the other one.
+    rows = (
+        db.query(SupplierSKUMapping)
+        .filter(
+            SupplierSKUMapping.organization_id == owner_user.organization_id,
+            SupplierSKUMapping.supplier_code == "SUP-CONCURRENT",
+        )
+        .all()
+    )
+    assert sorted(r.sku_id for r in rows) == sorted([sku_old.id, sku_new.id])

@@ -11,9 +11,13 @@ This script folds an alias into the canonical name for one organization:
 
   A. code only under the alias        → renamed to the canonical name
   B. code under both, same SKU        → alias row deleted (redundant)
-  C. code under both, different SKU   → left alone and reported; it needs a
-                                        human decision, resolved by passing
-                                        --keep CODE=canonical|alias
+  C. code under both, different SKU   → both kept under the canonical name and
+                                        reported. One code carrying two
+                                        products is legitimate (the case and
+                                        the loose bottle of one wine), and
+                                        inbound offers them as a choice. Pass
+                                        --keep CODE=canonical|alias only to
+                                        prune a link that is genuinely wrong.
 
 Dry run by default: it prints what it would do and changes nothing. Add --apply
 to commit. Idempotent — re-running after an --apply is a no-op.
@@ -76,7 +80,7 @@ def merge(
     keep: dict[str, str],
     apply_changes: bool,
 ) -> int:
-    """Return the number of conflicts left undecided."""
+    """Return how many codes ended up carrying more than one product."""
     alias_name = _normalize_name(alias)
     canonical_name = _normalize_name(canonical)
     if not alias_name or not canonical_name:
@@ -101,7 +105,7 @@ def merge(
     renamed: list[str] = []
     removed: list[str] = []
     resolved: list[str] = []
-    conflicts: list[str] = []
+    kept_both: list[str] = []
 
     for code, alias_row in sorted(alias_rows.items()):
         canonical_row = canonical_rows.get(code)
@@ -120,11 +124,16 @@ def merge(
 
         decision = keep.get(code)
         if decision is None:
-            conflicts.append(
+            # Two products under one code is allowed now, so the safe default is
+            # to keep both — throwing one away would silently remove the unit
+            # the merchant did not receive this time.
+            kept_both.append(
                 f"  {code}\n"
-                f"      canonical: {_describe(db, canonical_row.sku_id)}\n"
-                f"      alias:     {_describe(db, alias_row.sku_id)}"
+                f"      {_describe(db, canonical_row.sku_id)}\n"
+                f"      {_describe(db, alias_row.sku_id)}"
             )
+            if apply_changes:
+                alias_row.supplier_name = canonical_name
             continue
 
         winner_id = canonical_row.sku_id if decision == "canonical" else alias_row.sku_id
@@ -142,8 +151,8 @@ def merge(
     report("A. Hernoemen naar canonieke naam", renamed)
     report("B. Dubbel, zelfde product — aliasregel verwijderen", removed)
     if resolved:
-        report("C. Conflict, opgelost via --keep", resolved)
-    report("C. Conflict, keuze nodig (overgeslagen)", conflicts)
+        report("C. Meerdere producten, teruggebracht tot één via --keep", resolved)
+    report("C. Meerdere producten per code — beide behouden als keuze", kept_both)
 
     if apply_changes:
         db.commit()
@@ -152,7 +161,7 @@ def merge(
         db.rollback()
         print("Dry run — niets gewijzigd. Voeg --apply toe om door te voeren.")
 
-    return len(conflicts)
+    return len(kept_both)
 
 
 def main() -> None:
@@ -185,9 +194,13 @@ def main() -> None:
     finally:
         db.close()
 
-    # Conflicts left undecided mean the merge is incomplete: those codes keep
-    # blocking auto-matching until someone chooses.
-    sys.exit(1 if remaining else 0)
+    if remaining:
+        print(
+            f"\n{remaining} code(s) houden meerdere producten. Dat is toegestaan: "
+            "inbound laat kiezen. Alleen als een koppeling echt fout is, draai "
+            "opnieuw met --keep CODE=canonical|alias."
+        )
+    sys.exit(0)
 
 
 if __name__ == "__main__":

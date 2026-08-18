@@ -22,9 +22,9 @@ def _mapping(db, org, name: str, code: str, sku: SKU) -> SupplierSKUMapping:
     return mapping
 
 
-def _names(db, org) -> dict[str, str]:
+def _names(db, org) -> dict[tuple[str, int], str]:
     return {
-        m.supplier_code: m.supplier_name
+        (m.supplier_code, m.sku_id): m.supplier_name
         for m in db.query(SupplierSKUMapping).filter_by(organization_id=org.id)
     }
 
@@ -46,8 +46,8 @@ def anfors(db, sample_org):
     return {"oud": oud, "nieuw": nieuw}
 
 
-def test_dry_run_changes_nothing_and_reports_the_conflict(db, sample_org, anfors):
-    conflicts = merge(
+def test_dry_run_changes_nothing_and_reports_the_pair(db, sample_org, anfors):
+    multi = merge(
         db,
         organization_id=sample_org.id,
         alias="Anfors",
@@ -56,8 +56,8 @@ def test_dry_run_changes_nothing_and_reports_the_conflict(db, sample_org, anfors
         apply_changes=False,
     )
 
-    assert conflicts == 1
-    assert _names(db, sample_org)["AAA111"] == "ANFORS"
+    assert multi == 1
+    assert set(_names(db, sample_org).values()) == {"ANFORS", "ANFORS-IMPERIAL"}
     assert db.query(SupplierSKUMapping).count() == 5
 
 
@@ -77,13 +77,16 @@ def test_apply_renames_alias_only_codes_and_drops_redundant_rows(db, sample_org,
     assert ("AAA111", "ANFORS-IMPERIAL") in by_code
     assert ("BBB222", "ANFORS-IMPERIAL") in by_code
     assert ("BBB222", "ANFORS") not in by_code
-    # The undecided conflict is left untouched on purpose.
-    assert ("CCC333", "ANFORS") in by_code
-    assert ("CCC333", "ANFORS-IMPERIAL") in by_code
+    # One code carrying a case and a bottle product is legitimate: both move to
+    # the canonical name and inbound offers them as a choice.
+    assert ("CCC333", "ANFORS") not in by_code
+    ccc = [r for r in rows if r.supplier_code == "CCC333"]
+    assert {r.sku_id for r in ccc} == {anfors["oud"].id, anfors["nieuw"].id}
+    assert {r.supplier_name for r in ccc} == {"ANFORS-IMPERIAL"}
 
 
-def test_keep_alias_resolves_the_conflict_to_the_chosen_product(db, sample_org, anfors):
-    conflicts = merge(
+def test_keep_alias_prunes_a_link_that_is_genuinely_wrong(db, sample_org, anfors):
+    multi = merge(
         db,
         organization_id=sample_org.id,
         alias="Anfors",
@@ -92,7 +95,7 @@ def test_keep_alias_resolves_the_conflict_to_the_chosen_product(db, sample_org, 
         apply_changes=True,
     )
 
-    assert conflicts == 0
+    assert multi == 0
     remaining = (
         db.query(SupplierSKUMapping)
         .filter_by(organization_id=sample_org.id, supplier_code="CCC333")
@@ -114,7 +117,7 @@ def test_rerunning_after_apply_is_a_no_op(db, sample_org, anfors):
     )
     before = _names(db, sample_org)
 
-    conflicts = merge(
+    multi = merge(
         db,
         organization_id=sample_org.id,
         alias="Anfors",
@@ -123,5 +126,5 @@ def test_rerunning_after_apply_is_a_no_op(db, sample_org, anfors):
         apply_changes=True,
     )
 
-    assert conflicts == 0
+    assert multi == 0
     assert _names(db, sample_org) == before

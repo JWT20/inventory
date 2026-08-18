@@ -28,6 +28,16 @@ interface ExtractedLine {
   matched_sku_code: string | null;
   matched_sku_name: string | null;
   is_bottle: boolean;
+  // Alle producten die deze leverancierscode kent — dezelfde wijn staat vaak
+  // als doos én als losse fles in het systeem.
+  candidate_matches?: MatchCandidate[];
+}
+
+interface MatchCandidate {
+  sku_id: number;
+  sku_code: string;
+  sku_name: string;
+  is_bottle: boolean;
 }
 
 const BOTTLES_PER_BOX = 6;
@@ -551,6 +561,34 @@ export function InboundPage() {
     setEditing(lineIndex, true);
   }
 
+  /**
+   * Kies een van de producten die deze leverancierscode al kent. De koppeling
+   * bestaat al, dus hier wordt niets opgeslagen — alleen de regel omgezet, met
+   * het aantal herberekend als de besteleenheid wisselt (doos ↔ fles).
+   */
+  function chooseCandidate(lineIndex: number, candidate: MatchCandidate) {
+    setPreview((prev) => {
+      if (!prev) return prev;
+      const line = prev.lines[lineIndex];
+      if (!line || line.matched_sku_id === candidate.sku_id) return prev;
+      const unitChanged = line.is_bottle !== candidate.is_bottle;
+      const nextLines = [...prev.lines];
+      nextLines[lineIndex] = {
+        ...line,
+        matched_sku_id: candidate.sku_id,
+        matched_sku_code: candidate.sku_code,
+        matched_sku_name: candidate.sku_name,
+        is_bottle: candidate.is_bottle,
+        quantity_boxes: unitChanged
+          ? resolveQuantityForUnit(line.quantity, line.quantity_unit, candidate.is_bottle)
+          : line.quantity_boxes,
+      };
+      return { ...prev, lines: nextLines };
+    });
+    clearRemainderDecision(lineIndex);
+    setEditing(lineIndex, false);
+  }
+
   async function unlinkLine(lineIndex: number) {
     if (!preview) return;
     const line = preview.lines[lineIndex];
@@ -563,9 +601,14 @@ export function InboundPage() {
         const mappings = (await api.listSupplierMappings(supplierName)) as {
           id: number;
           supplier_code: string;
+          sku_id: number;
         }[];
+        // Eén code kan meerdere producten kennen (doos én fles); ontkoppel
+        // alleen het product dat op deze regel stond.
         const match = (mappings || []).find(
-          (m) => m.supplier_code.toUpperCase() === supplierCode.toUpperCase(),
+          (m) =>
+            m.supplier_code.toUpperCase() === supplierCode.toUpperCase() &&
+            m.sku_id === line.matched_sku_id,
         );
         if (match) await api.deleteSupplierMapping(match.id);
       } catch (err: unknown) {
@@ -1214,6 +1257,29 @@ export function InboundPage() {
                             </Button>
                           </>
                         )}
+                      </div>
+                    )}
+                    {(line.candidate_matches?.length ?? 0) > 1 && !ignored && (
+                      <div
+                        className="mt-2 flex flex-wrap items-center gap-1 text-xs"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <span className="text-muted-foreground">
+                          Deze code kent meer producten:
+                        </span>
+                        {line.candidate_matches?.map((candidate) => (
+                          <Button
+                            key={candidate.sku_id}
+                            type="button"
+                            variant={
+                              candidate.sku_id === line.matched_sku_id ? "default" : "outline"
+                            }
+                            className="h-6 text-xs"
+                            onClick={() => chooseCandidate(idx, candidate)}
+                          >
+                            {candidate.sku_name} · {candidate.is_bottle ? "fles" : "doos"}
+                          </Button>
+                        ))}
                       </div>
                     )}
                     <div className="flex items-center gap-2 mt-1">
