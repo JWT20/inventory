@@ -390,6 +390,59 @@ export function UnmatchedProductActions({
   );
 }
 
+/** Reason the inbound flow may not start yet, or null when it may. */
+export function supplierGateMessage(
+  supplierName: string,
+  { picker }: { picker: boolean },
+): string | null {
+  if (!picker) return null;
+  if (supplierName.trim()) return null;
+  return "Kies eerst een leverancier — de koppelingen worden onder die naam onthouden.";
+}
+
+/**
+ * Leverancier voor een inbound. Kiezen uit de eigen leverancierslijst zodat de
+ * onthouden supplier-code-koppelingen altijd onder dezelfde naam landen: een
+ * tweede spelling ("Anfors" naast "Anfors-Imperial") splitst dat geheugen en
+ * laat pakbonregels onnodig handmatig koppelen. Zonder leverancierslijst
+ * (module uit, of nog niets ingevoerd) valt hij terug op vrije tekst.
+ */
+export function SupplierPicker({
+  suppliers,
+  value,
+  onChange,
+}: {
+  suppliers: string[];
+  value: string;
+  onChange: (name: string) => void;
+}) {
+  if (suppliers.length === 0) {
+    return (
+      <Input
+        className="text-sm"
+        placeholder="Leverancier (optioneel)"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
+
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="text-sm" aria-label="Leverancier">
+        <SelectValue placeholder="Kies leverancier" />
+      </SelectTrigger>
+      <SelectContent>
+        {suppliers.map((name) => (
+          <SelectItem key={name} value={name}>
+            {name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 export function InboundPage() {
   const { user } = useAuth();
   const adviceSyncAvailable = Boolean(user?.advice_products_sync_available);
@@ -398,6 +451,9 @@ export function InboundPage() {
   const [preview, setPreview] = useState<ExtractPreview | null>(null);
   const [selectedLineIndex, setSelectedLineIndex] = useState<number | null>(null);
   const [supplierName, setSupplierName] = useState("");
+  // Namen uit de leverancierslijst van de handelaar. Leeg = lijst niet
+  // beschikbaar (module uit of nog niets ingevoerd) → vrije tekst.
+  const [supplierNames, setSupplierNames] = useState<string[]>([]);
   const [documentType, setDocumentType] = useState<"pakbon" | "invoice" | "unknown">("unknown");
   const [inventoryLocation, setInventoryLocation] = useState<"warehouse" | "store">("warehouse");
   const [skuOptions, setSkuOptions] = useState<SKUOption[]>([]);
@@ -549,7 +605,20 @@ export function InboundPage() {
     toast.success("Ontkoppeld — kies een nieuw SKU of zet de regel op niet boeken");
   }
 
+  useEffect(() => {
+    api.listSuppliers()
+      .then((rows: { name: string }[]) =>
+        setSupplierNames(rows.map((row) => row.name).filter(Boolean)),
+      )
+      .catch(() => setSupplierNames([]));
+  }, []);
+
   async function extractFromFile(file: File) {
+    const gate = supplierGateMessage(supplierName, { picker: supplierNames.length > 0 });
+    if (gate) {
+      toast.error(gate);
+      return;
+    }
     setLastBookedInbound(null);
     setLoading(true);
     try {
@@ -572,6 +641,11 @@ export function InboundPage() {
     const text = pasteText.trim();
     if (!text) {
       toast.error("Plak eerst de besteltekst.");
+      return;
+    }
+    const gate = supplierGateMessage(supplierName, { picker: supplierNames.length > 0 });
+    if (gate) {
+      toast.error(gate);
       return;
     }
     setLastBookedInbound(null);
@@ -887,11 +961,10 @@ export function InboundPage() {
 
       <Card className="p-3 space-y-3">
         <div className="grid grid-cols-2 gap-2">
-          <Input
-            className="text-sm"
-            placeholder="Leverancier (optioneel)"
+          <SupplierPicker
+            suppliers={supplierNames}
             value={supplierName}
-            onChange={(e) => setSupplierName(e.target.value)}
+            onChange={setSupplierName}
           />
           <Select
             value={documentType}
