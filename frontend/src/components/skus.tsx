@@ -863,7 +863,10 @@ function SKUDialog({
                       <SelectItem value="none">Geen fles gekoppeld</SelectItem>
                       {bottleOptions.map((o) => (
                         <SelectItem key={o.id} value={String(o.id)}>
-                          {o.name}
+                          {o.name}{" "}
+                          <span className="text-muted-foreground">
+                            ({o.sku_code})
+                          </span>
                         </SelectItem>
                       ))}
                     </SelectContent>

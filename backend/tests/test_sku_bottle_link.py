@@ -274,3 +274,63 @@ def test_deleting_the_bottle_clears_the_link(
 
     db.expire_all()
     assert db.get(SKU, box_sku.id).bottle_sku_id is None
+
+
+class TestCategoryMustMatch:
+    """A box holds bottles of its own kind, so the two sides agree on what
+    kind that is — otherwise a pick turns a case of socks into six wines."""
+
+    def test_a_box_from_another_category_is_refused(
+        self, client, db, owner_token, sample_org, bottle_sku
+    ):
+        bottle_sku.category = "wine"
+        sokken = SKU(
+            sku_code="SOK-001",
+            name="Sokken doos",
+            organization_id=sample_org.id,
+            product_type="barcode",
+            category="textiel",
+            is_bottle=False,
+        )
+        db.add(sokken)
+        db.commit()
+
+        resp = client.patch(
+            f"/api/skus/{sokken.id}",
+            json={"bottle_sku_id": bottle_sku.id},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 400
+        assert "categorie" in resp.json()["detail"]
+
+    def test_the_same_category_is_allowed(
+        self, client, db, owner_token, sample_org, box_sku, bottle_sku
+    ):
+        box_sku.category = "wine"
+        bottle_sku.category = "wine"
+        db.commit()
+
+        resp = client.patch(
+            f"/api/skus/{box_sku.id}",
+            json={"bottle_sku_id": bottle_sku.id},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200, resp.text
+
+    def test_a_product_without_a_category_is_not_a_mismatch(
+        self, client, db, owner_token, box_sku, bottle_sku
+    ):
+        """Missing data is not evidence; refusing there blocks fine links."""
+        box_sku.category = None
+        bottle_sku.category = "wine"
+        db.commit()
+
+        resp = client.patch(
+            f"/api/skus/{box_sku.id}",
+            json={"bottle_sku_id": bottle_sku.id},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200, resp.text

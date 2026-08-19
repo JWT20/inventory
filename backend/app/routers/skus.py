@@ -359,6 +359,7 @@ def _validate_bottle_link(
     organization_id: int | None,
     is_bottle: bool,
     bottle_sku_id: int | None,
+    category: str | None = None,
     self_sku_id: int | None = None,
 ) -> None:
     """Check the box → bottle link against the SKU's *resulting* state.
@@ -383,6 +384,16 @@ def _validate_bottle_link(
         raise HTTPException(400, "Flesproduct niet gevonden bij deze handelaar")
     if not bottle.is_bottle:
         raise HTTPException(400, f"'{bottle.name}' is geen flesproduct")
+    # A box holds bottles of its own kind. Only refuse when both sides actually
+    # name a category: a product that never got one is not evidence of a
+    # mismatch, and refusing there would block links that are perfectly fine.
+    if category and bottle.category and category != bottle.category:
+        raise HTTPException(
+            400,
+            f"'{bottle.name}' hoort bij categorie '{bottle.category}' en dit "
+            f"product bij '{category}'; een doos bevat flessen van zijn eigen "
+            "soort",
+        )
 
 
 def _is_ean_unique_violation(exc: IntegrityError) -> bool:
@@ -626,6 +637,7 @@ def create_sku(
         organization_id=user.organization_id,
         is_bottle=data.is_bottle,
         bottle_sku_id=data.bottle_sku_id,
+        category=data.category,
     )
 
     # For wine: auto-generate sku_code and name from attributes
@@ -754,6 +766,9 @@ def update_sku(
         organization_id=sku.organization_id,
         is_bottle=resulting_is_bottle,
         bottle_sku_id=resulting_bottle_sku_id,
+        # A SKU's category is fixed after creation, so the stored one is
+        # already the resulting one.
+        category=sku.category,
         self_sku_id=sku.id,
     )
     if "bottle_sku_id" in changed_fields:
