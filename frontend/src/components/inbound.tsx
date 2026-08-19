@@ -783,7 +783,7 @@ export function InboundPage() {
             document_sha256: preview.document_sha256 ?? null,
             upload_attempt_id: preview.upload_attempt_id ?? null,
             force: true,
-              lines,
+            lines,
           });
         } else {
           throw err;

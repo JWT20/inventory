@@ -471,6 +471,25 @@ def test_history_shows_which_pool_the_goods_landed_in(client, db, owner_token, s
     assert by_shipment[warehouse_shipment_id] == "warehouse"
 
 
+def test_history_reports_no_location_when_nothing_was_booked(
+    client, db, owner_token, tmp_path
+):
+    """An attempt that never produced a pakbon booked nothing anywhere, so
+    naming a location would be a guess."""
+    with patch("app.routers.inventory.storage", _TmpStorage(tmp_path)):
+        client.post(
+            "/api/shipments/extract-preview",
+            headers=auth_header(owner_token),
+            files={"file": ("leeg.pdf", b"", "application/pdf")},
+        )
+
+    history = client.get("/api/inbound-uploads", headers=auth_header(owner_token))
+
+    assert history.status_code == 200
+    assert history.json()[0]["shipment_id"] is None
+    assert history.json()[0]["inventory_location"] is None
+
+
 def test_history_hides_location_while_shipment_is_still_a_draft(
     client, db, owner_token, sample_org
 ):
