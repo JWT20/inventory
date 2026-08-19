@@ -353,6 +353,36 @@ def _validate_source_product_link(
         )
 
 
+def _validate_bottle_link(
+    db: Session,
+    *,
+    organization_id: int | None,
+    is_bottle: bool,
+    bottle_sku_id: int | None,
+    self_sku_id: int | None = None,
+) -> None:
+    """Check the box → bottle link against the SKU's *resulting* state.
+
+    The link only means something in one direction: a box contains bottles.
+    Allowing it on a bottle (or pointing it at another box) would produce a
+    conversion nobody can interpret at pick time, so both are refused here
+    rather than left to fail later in the warehouse.
+    """
+    if bottle_sku_id is None:
+        return
+    if is_bottle:
+        raise HTTPException(
+            400, "Alleen een doosproduct kan aan een fles gekoppeld worden"
+        )
+    if self_sku_id is not None and bottle_sku_id == self_sku_id:
+        raise HTTPException(400, "Een product kan niet aan zichzelf gekoppeld worden")
+    bottle = db.get(SKU, bottle_sku_id)
+    if bottle is None or bottle.organization_id != organization_id:
+        raise HTTPException(400, "Flesproduct niet gevonden bij deze handelaar")
+    if not bottle.is_bottle:
+        raise HTTPException(400, f"'{bottle.name}' is geen flesproduct")
+
+
 def _is_ean_unique_violation(exc: IntegrityError) -> bool:
     """Whether an IntegrityError is the per-org EAN uniqueness violation.
 
@@ -385,6 +415,9 @@ def _sku_to_response(sku: SKU) -> SKUResponse:
         supplier_id=sku.supplier_id,
         supplier_name=sku.supplier.name if sku.supplier else None,
         is_bottle=sku.is_bottle,
+        bottle_sku_id=sku.bottle_sku_id,
+        bottle_sku_code=sku.bottle_sku.sku_code if sku.bottle_sku else None,
+        bottle_sku_name=sku.bottle_sku.name if sku.bottle_sku else None,
         source_product_id=sku.source_product_id,
         product_type=sku.product_type,
         ean=sku.ean,
@@ -586,6 +619,12 @@ def create_sku(
         source_product_id=source_product_id,
         is_bottle=data.is_bottle,
     )
+    _validate_bottle_link(
+        db,
+        organization_id=user.organization_id,
+        is_bottle=data.is_bottle,
+        bottle_sku_id=data.bottle_sku_id,
+    )
 
     # For wine: auto-generate sku_code and name from attributes
     if data.category == "wine":
@@ -620,6 +659,7 @@ def create_sku(
         organization_id=user.organization_id,
         supplier_id=data.supplier_id,
         is_bottle=data.is_bottle,
+        bottle_sku_id=data.bottle_sku_id,
         source_product_id=source_product_id,
         source_active=data.active if source_product_id else None,
         product_type=data.product_type,
@@ -699,6 +739,23 @@ def update_sku(
         is_bottle=resulting_is_bottle,
         exclude_sku_id=sku.id,
     )
+
+    # Validate the *resulting* pair, so flipping a linked box into a bottle is
+    # refused instead of leaving a link that points the wrong way.
+    resulting_bottle_sku_id = (
+        data.bottle_sku_id
+        if "bottle_sku_id" in changed_fields
+        else sku.bottle_sku_id
+    )
+    _validate_bottle_link(
+        db,
+        organization_id=sku.organization_id,
+        is_bottle=resulting_is_bottle,
+        bottle_sku_id=resulting_bottle_sku_id,
+        self_sku_id=sku.id,
+    )
+    if "bottle_sku_id" in changed_fields:
+        sku.bottle_sku_id = resulting_bottle_sku_id
 
     # Explicit active wins; otherwise it is recomputed below for opted-in orgs.
     active_set_explicitly = data.active is not None
@@ -854,6 +911,13 @@ def delete_sku(
                 409,
                 f"Cannot delete SKU '{sku.sku_code}': still referenced by {', '.join(blockers)}",
             )
+
+    # A box pointing at this bottle must not keep a dangling link. The FK does
+    # this too, but doing it here keeps the behaviour identical on every engine
+    # and makes the intent explicit: the box survives, unlinked.
+    db.query(SKU).filter(SKU.bottle_sku_id == sku_id).update(
+        {SKU.bottle_sku_id: None}, synchronize_session=False
+    )
 
     sku_code = sku.sku_code
     db.delete(sku)

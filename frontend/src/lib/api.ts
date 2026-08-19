@@ -300,6 +300,7 @@ export const api = {
     active?: boolean;
     supplier_id?: number | null;
     is_bottle?: boolean;
+    bottle_sku_id?: number | null;
     source_product_id?: string | null;
     product_type?: "barcode" | "vision";
     ean?: string;

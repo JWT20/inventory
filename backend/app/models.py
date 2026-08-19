@@ -255,6 +255,13 @@ class SKU(Base):
     is_bottle: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false"), nullable=False
     )
+    # The bottle product this box contains. Set on the box only; a box holds
+    # BOTTLES_PER_BOX of it. This is what lets a picked box land as loose
+    # bottles in the shop/webshop pool. NULL means the box is not (yet) linked,
+    # which is the state every existing product starts in.
+    bottle_sku_id: Mapped[int | None] = mapped_column(
+        ForeignKey("skus.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     source_product_id: Mapped[str | None] = mapped_column(
         String(100), nullable=True
     )
@@ -297,6 +304,11 @@ class SKU(Base):
     )
     organization: Mapped["Organization | None"] = relationship()
     supplier: Mapped["Supplier | None"] = relationship()
+    # The bottle inside this box. Self-referencing, so remote_side pins which
+    # end of the join is the "one" side.
+    bottle_sku: Mapped["SKU | None"] = relationship(
+        remote_side="SKU.id", foreign_keys=[bottle_sku_id]
+    )
     # Pick locations this barcode product lives at. Empty for vision/wine
     # products, which are never shelf-picked (enforced in the locations router).
     location_links: Mapped[list["SKULocation"]] = relationship(

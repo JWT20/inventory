@@ -48,10 +48,20 @@ interface SKU {
   supplier_id: number | null;
   supplier_name: string | null;
   is_bottle: boolean;
+  bottle_sku_id: number | null;
+  bottle_sku_code: string | null;
+  bottle_sku_name: string | null;
   source_product_id: string | null;
   product_type: string;
   ean: string | null;
   image_count: number;
+}
+
+interface SKUOptionItem {
+  id: number;
+  sku_code: string;
+  name: string;
+  is_bottle: boolean;
 }
 
 interface RefImage {
@@ -376,6 +386,8 @@ function SKUDialog({
   const [supplierId, setSupplierId] = useState<number | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [isBottle, setIsBottle] = useState(false);
+  const [bottleSkuId, setBottleSkuId] = useState<number | null>(null);
+  const [bottleOptions, setBottleOptions] = useState<SKUOptionItem[]>([]);
   const [sourceProductId, setSourceProductId] = useState("");
   // "vision" = wine (photo + AI); "barcode" = identified by its EAN scan.
   const [productType, setProductType] = useState<"vision" | "barcode">("vision");
@@ -407,6 +419,15 @@ function SKUDialog({
     if (open && canSuppliers) {
       api.listSuppliers().then(setSuppliers).catch(() => {});
     }
+    if (open) {
+      // Only bottles can sit inside a box, so the picker never offers anything else.
+      api
+        .listSKUOptions()
+        .then((options: SKUOptionItem[]) =>
+          setBottleOptions(options.filter((o) => o.is_bottle)),
+        )
+        .catch(() => {});
+    }
     if (open && sku) {
       const a = sku.attributes || {};
       setProducent(a.producent || "");
@@ -415,6 +436,7 @@ function SKUDialog({
       setVolume(a.volume || "");
       setSupplierId(sku.supplier_id ?? null);
       setIsBottle(sku.is_bottle ?? false);
+      setBottleSkuId(sku.bottle_sku_id ?? null);
       setSourceProductId(sku.source_product_id ?? "");
       setProductType(sku.product_type === "barcode" ? "barcode" : "vision");
       setNaam(sku.name ?? "");
@@ -429,6 +451,7 @@ function SKUDialog({
       setVolume("");
       setSupplierId(null);
       setIsBottle(false);
+      setBottleSkuId(null);
       setSourceProductId("");
       setProductType(defaultProductType);
       setNaam("");
@@ -510,6 +533,7 @@ function SKUDialog({
           attributes: getAttributes(),
           supplier_id: supplierId,
           is_bottle: isBottle,
+          bottle_sku_id: isBottle ? null : bottleSkuId,
           source_product_id: sourceProductId.trim() || null,
         });
         toast.success("SKU bijgewerkt");
@@ -519,6 +543,7 @@ function SKUDialog({
           attributes: getAttributes(),
           supplier_id: supplierId,
           is_bottle: isBottle,
+          bottle_sku_id: isBottle ? null : bottleSkuId,
           source_product_id: sourceProductId.trim() || null,
         });
         skuId = created.id;
@@ -818,6 +843,34 @@ function SKUDialog({
                 />
                 <Label className="text-xs">Dit product is een losse fles</Label>
               </div>
+              {!isBottle && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Fles in deze doos</Label>
+                  <Select
+                    value={bottleSkuId ? String(bottleSkuId) : "none"}
+                    onValueChange={(v) =>
+                      setBottleSkuId(v === "none" ? null : Number(v))
+                    }
+                    disabled={isCourier}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Geen fles gekoppeld" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Geen fles gekoppeld</SelectItem>
+                      {bottleOptions.map((o) => (
+                        <SelectItem key={o.id} value={String(o.id)}>
+                          {o.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Nodig om een gepickte doos als losse flessen op voorraad te
+                    zetten in de winkel of webshop.
+                  </p>
+                </div>
+              )}
               {isBottle && (
                 <div className="space-y-1">
                   <Label className="text-xs">Adviesproduct-ID</Label>
