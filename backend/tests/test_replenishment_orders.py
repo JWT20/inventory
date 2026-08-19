@@ -643,3 +643,34 @@ class TestTheLinkHoldsStillWhileUnitsAreBooked:
         )
 
         assert resp.status_code == 200, resp.text
+
+
+def test_replenishment_surfaces_in_the_week_pick_screen(
+    client, db, owner_token, sample_org, box
+):
+    """It belongs to nobody's delivery week, but it still has to be picked.
+
+    Tying it to the week-planning module would hide it from every merchant
+    without that module — including the one who just ordered it.
+    """
+    db.add(ReferenceImage(sku_id=box.id, image_path="doos.jpg", processing_status="done"))
+    sample_org.modules = [m for m in sample_org.modules if m != "week_overview"]
+    db.commit()
+    _stock(db, sample_org, box, 5)
+
+    created = client.post(
+        URL,
+        json={
+            "destination_location": "store",
+            "lines": [{"sku_id": box.id, "quantity": 2}],
+        },
+        headers=auth_header(owner_token),
+    )
+    assert created.status_code == 201, created.text
+
+    resp = client.get(
+        "/api/orders/weekly-pick-photos", headers=auth_header(owner_token)
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert box.id in {item["sku_id"] for item in resp.json()}

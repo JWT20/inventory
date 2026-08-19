@@ -743,6 +743,16 @@ def weekly_pick_photos(
                     Order.created_at >= start_dt,
                     Order.created_at <= end_dt,
                 ),
+                # A replenishment order belongs to nobody's delivery week, but
+                # it does have to be picked. Tying it to the week-planning orgs
+                # would hide it from every merchant without that module, so it
+                # surfaces in the week it was placed regardless.
+                and_(
+                    Order.order_kind == "replenishment",
+                    Order.delivery_week.is_(None),
+                    Order.created_at >= start_dt,
+                    Order.created_at <= end_dt,
+                ),
             ),
         )
     )

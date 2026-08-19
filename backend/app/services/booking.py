@@ -244,6 +244,13 @@ def apply_booking(
     #     warehouse lands in the merchant's own pool, as bottles. Same
     #     transaction as the deduction above, so the goods can never exist in
     #     neither place or in both.
+    #
+    #     The two halves deliberately carry different movement types. The
+    #     warehouse leg is a "pick" because that is what the courier did, and
+    #     because undo restocks it as a positive "pick" that nets out against
+    #     it. The credit is a "transfer": nothing was picked in the destination
+    #     pool, goods arrived there. A report summing picks therefore sees the
+    #     work once, not twice.
     credit = replenishment_credit(db, order, sku_id, quantity)
     if credit is not None:
         credit_sku_id, credit_quantity = credit
