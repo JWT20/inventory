@@ -372,7 +372,9 @@ def _validate_bottle_link(
         return
     if is_bottle:
         raise HTTPException(
-            400, "Alleen een doosproduct kan aan een fles gekoppeld worden"
+            400,
+            "Alleen een doosproduct kan aan een fles gekoppeld worden; "
+            "haal eerst de koppeling weg",
         )
     if self_sku_id is not None and bottle_sku_id == self_sku_id:
         raise HTTPException(400, "Een product kan niet aan zichzelf gekoppeld worden")

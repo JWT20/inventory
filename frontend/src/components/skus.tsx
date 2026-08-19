@@ -533,7 +533,7 @@ function SKUDialog({
           attributes: getAttributes(),
           supplier_id: supplierId,
           is_bottle: isBottle,
-          bottle_sku_id: isBottle ? null : bottleSkuId,
+          bottle_sku_id: bottleSkuId,
           source_product_id: sourceProductId.trim() || null,
         });
         toast.success("SKU bijgewerkt");
@@ -543,7 +543,7 @@ function SKUDialog({
           attributes: getAttributes(),
           supplier_id: supplierId,
           is_bottle: isBottle,
-          bottle_sku_id: isBottle ? null : bottleSkuId,
+          bottle_sku_id: bottleSkuId,
           source_product_id: sourceProductId.trim() || null,
         });
         skuId = created.id;
@@ -843,7 +843,10 @@ function SKUDialog({
                 />
                 <Label className="text-xs">Dit product is een losse fles</Label>
               </div>
-              {!isBottle && (
+              {/* Ook zichtbaar zodra je de schakelaar omzet terwijl er nog een
+                  koppeling ligt: anders zie je de foutmelding wel, maar niet
+                  het veld waarmee je hem oplost. */}
+              {(!isBottle || bottleSkuId !== null) && (
                 <div className="space-y-1">
                   <Label className="text-xs">Fles in deze doos</Label>
                   <Select
@@ -866,8 +869,9 @@ function SKUDialog({
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    Nodig om een gepickte doos als losse flessen op voorraad te
-                    zetten in de winkel of webshop.
+                    {isBottle
+                      ? "Een fles kan zelf geen fles bevatten. Zet dit op 'geen fles gekoppeld' om dit product een losse fles te maken."
+                      : "Nodig om een gepickte doos als losse flessen op voorraad te zetten in de winkel of webshop."}
                   </p>
                 </div>
               )}

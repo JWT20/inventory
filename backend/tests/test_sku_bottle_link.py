@@ -187,6 +187,39 @@ class TestBottleLinkRejections:
         assert resp.status_code == 400
         assert "doosproduct" in resp.json()["detail"]
 
+    def test_the_refusal_says_how_to_get_out_of_it(
+        self, client, db, owner_token, box_sku, bottle_sku
+    ):
+        """The picker of the toggle must not be left guessing what to fix."""
+        box_sku.bottle_sku_id = bottle_sku.id
+        db.commit()
+
+        resp = client.patch(
+            f"/api/skus/{box_sku.id}",
+            json={"is_bottle": True, "bottle_sku_id": bottle_sku.id},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 400
+        assert "haal eerst de koppeling weg" in resp.json()["detail"]
+
+    def test_unlinking_and_flipping_together_is_allowed(
+        self, client, db, owner_token, box_sku, bottle_sku
+    ):
+        """Clearing the link in the same save is the way out, not a loophole."""
+        box_sku.bottle_sku_id = bottle_sku.id
+        db.commit()
+
+        resp = client.patch(
+            f"/api/skus/{box_sku.id}",
+            json={"is_bottle": True, "bottle_sku_id": None},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["is_bottle"] is True
+        assert resp.json()["bottle_sku_id"] is None
+
 
 class TestCreateWithBottleLink:
     def test_create_box_with_link(self, client, owner_token, bottle_sku):
