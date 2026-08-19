@@ -50,6 +50,7 @@ from app.schemas import (
     InventoryAdjustRequest,
     InventoryBalanceResponse,
     InventoryCountRequest,
+    InventoryLocation,
     InventoryOverviewItem,
     InventoryTransferBalance,
     InventoryTransferRequest,
@@ -282,7 +283,7 @@ def _resolve_inventory_org_id(
 def _resolve_inventory_location(
     user: User, requested_location: str
 ) -> str:
-    """Couriers work the warehouse; the shop shelf is the merchant's own.
+    """Couriers work the warehouse; shop and webshop are the merchant's own.
 
     Refuse rather than silently substituting: a courier who thinks they are
     counting the shop while they are correcting the warehouse produces exactly
@@ -1212,7 +1213,7 @@ def delete_shipment(
 @router.get("/inventory", response_model=list[InventoryBalanceResponse])
 def list_inventory(
     organization_id: int | None = None,
-    inventory_location: Literal["warehouse", "store"] = "warehouse",
+    inventory_location: InventoryLocation = "warehouse",
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1247,7 +1248,7 @@ def list_inventory(
 @router.get("/inventory/overview", response_model=list[InventoryOverviewItem])
 def inventory_overview(
     organization_id: int | None = None,
-    inventory_location: Literal["warehouse", "store"] = "warehouse",
+    inventory_location: InventoryLocation = "warehouse",
     search: str | None = None,
     wijntype: str | None = None,
     producent: str | None = None,
@@ -1530,7 +1531,7 @@ def update_customer_sku_discount(
 def list_movements(
     sku_id: int,
     organization_id: int | None = None,
-    inventory_location: Literal["warehouse", "store"] = "warehouse",
+    inventory_location: InventoryLocation = "warehouse",
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1603,7 +1604,7 @@ def adjust_inventory(
     return movement
 
 
-LOCATION_LABELS = {"warehouse": "magazijn", "store": "winkel"}
+LOCATION_LABELS = {"warehouse": "magazijn", "store": "winkel", "webshop": "webshop"}
 
 
 @router.post("/inventory/transfer", response_model=InventoryTransferResponse)

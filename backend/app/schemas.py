@@ -8,6 +8,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.modules import DEFAULT_MODULES
 
+# The physical stock pools, as an API type. Kept in step with
+# ``models.VALID_INVENTORY_LOCATIONS``; a Literal cannot be built from that
+# tuple, so the two are written out separately on purpose.
+InventoryLocation = Literal["warehouse", "store", "webshop"]
+
 
 # --- Auth ---
 class LoginRequest(BaseModel):
@@ -545,7 +550,7 @@ class OrderResponse(BaseModel):
     status: str
     # Order provenance: "manual" (in-app/customer), "shopify" or "bol".
     channel: str = "manual"
-    inventory_location: Literal["warehouse", "store"] = "warehouse"
+    inventory_location: InventoryLocation = "warehouse"
     # How this order is picked: "vision" (camera + AI) or "barcode" (handscanner
     # EAN scan). Derived from the order's products so the courier UI can route to
     # the right scanner.
@@ -985,7 +990,7 @@ class InboundUploadAttemptResponse(BaseModel):
     shipment_id: int | None = None
     # Which pool the goods landed in, taken from the booked shipment. NULL while
     # an attempt has no shipment yet — nothing was booked anywhere.
-    inventory_location: Literal["warehouse", "store"] | None = None
+    inventory_location: InventoryLocation | None = None
     line_count: int = 0
     bookable_line_count: int = 0
     booked_line_count: int = 0
@@ -1036,7 +1041,7 @@ class InventoryBalanceResponse(BaseModel):
     sku_code: str = ""
     sku_name: str = ""
     organization_id: int | None = None
-    inventory_location: Literal["warehouse", "store"] = "warehouse"
+    inventory_location: InventoryLocation = "warehouse"
     quantity_on_hand: int
     quantity_reserved: int = 0
     quantity_available: int = 0
@@ -1283,7 +1288,7 @@ class InventoryOverviewItem(BaseModel):
     # EAN-13 barcode; NULL for vision (wine) products.
     ean: str | None = None
     default_price: float | None = None
-    inventory_location: Literal["warehouse", "store"] = "warehouse"
+    inventory_location: InventoryLocation = "warehouse"
     quantity_on_hand: int = 0
     quantity_reserved: int = 0
     quantity_available: int = 0
@@ -1298,7 +1303,7 @@ class StockMovementResponse(BaseModel):
     id: int
     sku_id: int
     organization_id: int | None = None
-    inventory_location: Literal["warehouse", "store"] = "warehouse"
+    inventory_location: InventoryLocation = "warehouse"
     movement_type: str
     quantity: int
     reference_type: str | None
@@ -1315,7 +1320,7 @@ class InventoryAdjustRequest(BaseModel):
     quantity: int
     note: str | None = None
     organization_id: int | None = None
-    inventory_location: Literal["warehouse", "store"] = "warehouse"
+    inventory_location: InventoryLocation = "warehouse"
 
 
 class InventoryTransferRequest(BaseModel):
@@ -1334,7 +1339,7 @@ class InventoryTransferRequest(BaseModel):
 
 
 class InventoryTransferBalance(BaseModel):
-    inventory_location: Literal["warehouse", "store"]
+    inventory_location: InventoryLocation
     quantity_on_hand: int
     quantity_reserved: int
     quantity_available: int
@@ -1355,7 +1360,7 @@ class InventoryCountRequest(BaseModel):
     counted_quantity: int = Field(..., ge=0)
     note: str | None = None
     organization_id: int | None = None
-    inventory_location: Literal["warehouse", "store"] = "warehouse"
+    inventory_location: InventoryLocation = "warehouse"
 
 
 class UpdateDefaultPriceRequest(BaseModel):

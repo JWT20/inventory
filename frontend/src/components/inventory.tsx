@@ -2,6 +2,11 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
 import { useAuth, hasModule } from "@/lib/auth";
+import {
+  LOCATION_LABELS,
+  LOCATION_TITLES,
+  type InventoryLocation,
+} from "@/lib/inventory-locations";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import {
@@ -38,7 +43,7 @@ interface InventoryItem {
   attributes: Record<string, string>;
   ean: string | null;
   default_price: number | null;
-  inventory_location: "warehouse" | "store";
+  inventory_location: InventoryLocation;
   quantity_on_hand: number;
   quantity_reserved: number;
   quantity_available: number;
@@ -88,7 +93,7 @@ export function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
-  const [inventoryLocation, setInventoryLocation] = useState<"warehouse" | "store">("warehouse");
+  const [inventoryLocation, setInventoryLocation] = useState<InventoryLocation>("warehouse");
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
@@ -169,7 +174,7 @@ export function InventoryPage() {
           <Select
             value={inventoryLocation}
             onValueChange={(value) => {
-              setInventoryLocation(value as "warehouse" | "store");
+              setInventoryLocation(value as InventoryLocation);
               setSelected(null);
             }}
           >
@@ -178,6 +183,7 @@ export function InventoryPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="warehouse">Magazijnvoorraad</SelectItem>
+              <SelectItem value="webshop">Webshopvoorraad</SelectItem>
               <SelectItem value="store">Winkelvoorraad</SelectItem>
             </SelectContent>
           </Select>
@@ -320,9 +326,16 @@ function InventoryDetailDialog({
   const canManagePrices = canViewPrices && canAdjustStock;
   // Couriers work the warehouse; deciding what goes onto the shop shelf is the
   // merchant's call, so they never get the move action.
-  const canTransferStock = canAdjustStock && !!user && user.role !== "courier";
   const destination = item?.inventory_location === "store" ? "warehouse" : "store";
-  const destinationLabel = destination === "store" ? "winkel" : "magazijn";
+  const destinationLabel = LOCATION_LABELS[destination];
+  // Couriers work the warehouse; deciding what goes onto the shop shelf is the
+  // merchant's call, so they never get the move action. The webshop pool has no
+  // move action yet — it gets its own destination picker in the follow-up.
+  const canTransferStock =
+    canAdjustStock &&
+    !!user &&
+    user.role !== "courier" &&
+    item?.inventory_location !== "webshop";
 
   const [editingDefaultPrice, setEditingDefaultPrice] = useState(false);
   const [defaultPriceValue, setDefaultPriceValue] = useState("");
@@ -359,6 +372,10 @@ function InventoryDetailDialog({
 
   async function saveTransfer() {
     if (!item || transferInFlight.current) return;
+    const from = item.inventory_location;
+    // The webshop pool has no move action yet; its destination picker lands in
+    // the follow-up PR.
+    if (from === "webshop") return;
     const quantity = parseTransferQuantity(transferValue);
     if (quantity == null) {
       toast.error("Vul een aantal groter dan 0 in");
@@ -376,7 +393,7 @@ function InventoryDetailDialog({
       await api.transferInventory(
         item.sku_id,
         quantity,
-        item.inventory_location,
+        from,
         destination,
         transferNoteValue.trim() || null,
         organizationId,
@@ -494,7 +511,7 @@ function InventoryDetailDialog({
               {item.sku_code}
             </span>
             <span className="ml-2 text-xs font-normal text-muted-foreground">
-              {item.inventory_location === "store" ? "Winkel" : "Magazijn"}
+              {LOCATION_TITLES[item.inventory_location]}
             </span>
           </DialogTitle>
         </DialogHeader>
