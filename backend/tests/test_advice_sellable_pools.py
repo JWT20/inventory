@@ -306,7 +306,11 @@ class TestDeliveryOrders:
     def test_the_old_warehouse_route_is_still_accepted(
         self, client, db, sample_org, monkeypatch
     ):
-        """Both sides deploy separately; the live caller must not start failing."""
+        """Both sides deploy separately; the live caller must not start failing.
+
+        The old name is folded into the new one, so the same caller lands in the
+        same pool whether it sends the field or leaves it out.
+        """
         from app.models import Order
 
         _configure(monkeypatch, sample_org.id)
@@ -321,7 +325,7 @@ class TestDeliveryOrders:
 
         assert resp.status_code == 200, resp.text
         order = db.query(Order).filter_by(external_id="adv_order_1").one()
-        assert order.inventory_location == "warehouse"
+        assert order.inventory_location == "webshop"
 
 
 def _observing_advice_channel(db, org):
@@ -355,3 +359,93 @@ def _delivery_payload(**overrides) -> dict:
     }
     payload.update(overrides)
     return payload
+
+
+class TestTheOldPoolNameKeepsWorking:
+    """The advice app and Dockscan deploy separately, so one deploy apart the
+    app is still sending the name a delivery used to be routed from."""
+
+    def test_a_delivery_reservation_may_still_say_warehouse(
+        self, client, db, sample_org, monkeypatch
+    ):
+        _configure(monkeypatch, sample_org.id)
+        sku = _bottle(db, sample_org, "prd_a", webshop=10)
+
+        resp = client.post(
+            RESERVATIONS_URL,
+            json=_payload(fulfillment_method="dockscan", inventory_location="warehouse"),
+            headers=_headers(),
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["inventory_location"] == "webshop"
+        db.expire_all()
+        assert _balance(db, sku.id, "webshop").quantity_reserved == 4
+
+    def test_the_old_name_still_spills_over_into_the_shop(
+        self, client, db, sample_org, monkeypatch
+    ):
+        """The point of the change is pooling; the old name must not opt out."""
+        _configure(monkeypatch, sample_org.id)
+        sku = _bottle(db, sample_org, "prd_a", store=1, webshop=3)
+
+        resp = client.post(
+            RESERVATIONS_URL,
+            json=_payload(fulfillment_method="dockscan", inventory_location="warehouse"),
+            headers=_headers(),
+        )
+
+        assert resp.status_code == 200, resp.text
+        db.expire_all()
+        assert _balance(db, sku.id, "webshop").quantity_reserved == 3
+        assert _balance(db, sku.id, "store").quantity_reserved == 1
+
+    def test_a_pickup_may_not_borrow_the_old_delivery_name(
+        self, client, db, sample_org, monkeypatch
+    ):
+        _configure(monkeypatch, sample_org.id)
+        _bottle(db, sample_org, "prd_a", store=10)
+
+        resp = client.post(
+            RESERVATIONS_URL,
+            json=_payload(fulfillment_method="pickup", inventory_location="warehouse"),
+            headers=_headers(),
+        )
+
+        assert resp.status_code == 422
+
+    def test_a_hold_taken_before_the_switch_still_answers_its_retry(
+        self, client, db, sample_org, monkeypatch
+    ):
+        """Its stored pool is "warehouse"; the retry means the same order."""
+        from app.models import AdviceReservation, AdviceReservationLine
+
+        _configure(monkeypatch, sample_org.id)
+        sku = _bottle(db, sample_org, "prd_a", webshop=10)
+        reservation = AdviceReservation(
+            organization_id=sample_org.id,
+            external_order_id="order_123",
+            fulfillment_method="dockscan",
+            inventory_location="warehouse",
+            status="active",
+        )
+        db.add(reservation)
+        db.flush()
+        db.add(
+            AdviceReservationLine(
+                reservation_id=reservation.id,
+                sku_id=sku.id,
+                quantity=4,
+                inventory_location="warehouse",
+            )
+        )
+        db.commit()
+
+        resp = client.post(
+            RESERVATIONS_URL,
+            json=_payload(fulfillment_method="dockscan", inventory_location="warehouse"),
+            headers=_headers(),
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["duplicate"] is True

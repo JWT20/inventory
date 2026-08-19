@@ -1148,20 +1148,25 @@ class AdviceReservationLineIn(BaseModel):
 class AdviceReservationRequest(BaseModel):
     external_order_id: str = Field(..., min_length=1, max_length=100)
     order_reference: str | None = Field(default=None, max_length=100)
-    # Counter sales are always store stock; an advice-app order is store stock
-    # while it is a shop pickup, and warehouse stock once it is picked and
-    # delivered. The caller decides per order and the choice is stored, so a
-    # reservation is always settled against the pool it was taken from.
+    # A counter pickup is handed over from the shop, a delivery is packed from
+    # the webshop shelf. The caller decides per order and the choice is stored,
+    # so a reservation is always settled against the pool it was taken from.
     fulfillment_method: Literal["pickup", "dockscan"] = "pickup"
-    # The pool the route starts from. A counter pickup is handed over from the
-    # shop; a delivery is packed from the webshop shelf. Either may spill over
-    # into the other — they are one sellable pool — so this is a preference,
-    # not a limit, and what is actually held is recorded per line.
-    inventory_location: Literal["store", "webshop"] = "store"
+    # The pool the route starts from. Either may spill over into the other —
+    # they are one sellable pool — so this is a preference, not a limit, and
+    # what is actually held is recorded per line.
+    #
+    # A delivery used to be routed from the warehouse. That name is still
+    # accepted and now means the webshop shelf, so the advice app and Dockscan
+    # can be deployed one at a time instead of in the same breath. Drop it once
+    # no caller sends it any more.
+    inventory_location: Literal["warehouse", "store", "webshop"] = "store"
     lines: list[AdviceReservationLineIn] = Field(..., min_length=1)
 
     @model_validator(mode="after")
     def _check_route(self) -> "AdviceReservationRequest":
+        if self.inventory_location == "warehouse":
+            self.inventory_location = "webshop"
         # Crossing the two would start the search on the far shelf and quietly
         # empty the one the other route depends on first.
         expected = "store" if self.fulfillment_method == "pickup" else "webshop"
@@ -1274,14 +1279,21 @@ class AdviceOrderRequest(BaseModel):
     order_reference: str | None = Field(default=None, max_length=100)
     fulfillment_method: Literal["dockscan"] = "dockscan"
     # A delivery is packed from the webshop shelf. "warehouse" is still accepted
-    # so the advice app keeps working across the two deploys; it is what older
-    # callers send and means the same order, routed the old way.
+    # so the advice app keeps working across the two deploys, and is folded into
+    # "webshop" below — otherwise the same caller would land in two different
+    # pools depending on whether it happened to send the field at all.
     inventory_location: Literal["warehouse", "webshop"] = "webshop"
     # When the customer placed the order, not when Dockscan heard about it. The
     # reconciliation view sorts on this.
     ordered_at: datetime | None = None
     delivery_address: DeliveryAddressIn
     lines: list[AdviceOrderLineIn] = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def _fold_legacy_pool(self) -> "AdviceOrderRequest":
+        if self.inventory_location == "warehouse":
+            self.inventory_location = "webshop"
+        return self
 
 
 class AdviceOrderMatchedLine(BaseModel):

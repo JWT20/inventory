@@ -58,8 +58,24 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Narrowing back to one row per product has to collapse a split hold; the
-    # quantities are summed onto the reservation's own pool so nothing is lost.
+    # Narrowing back to one row per product has to collapse a split hold. Sum
+    # the quantities onto the surviving row first: a hold of three from the
+    # webshop and one from the shop is four bottles, and dropping the second row
+    # before adding it up would release one of them into thin air.
+    op.execute(
+        """
+        UPDATE advice_reservation_lines
+        SET quantity = (
+            SELECT SUM(sibling.quantity)
+            FROM advice_reservation_lines AS sibling
+            WHERE sibling.reservation_id = advice_reservation_lines.reservation_id
+              AND sibling.sku_id = advice_reservation_lines.sku_id
+        )
+        WHERE id IN (
+            SELECT MIN(id) FROM advice_reservation_lines GROUP BY reservation_id, sku_id
+        )
+        """
+    )
     op.execute(
         """
         DELETE FROM advice_reservation_lines

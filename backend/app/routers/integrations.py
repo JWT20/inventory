@@ -324,6 +324,19 @@ def advice_sale(
     )
 
 
+def _same_route(stored: str, requested: str) -> bool:
+    """Whether a retry names the route the hold was actually taken on.
+
+    A delivery used to be routed from the warehouse. Holds taken before that
+    switch are still settled against the pool they really came out of, so their
+    stored name stays "warehouse" — but a caller retrying such an order means
+    the same route whichever of the two names it sends.
+    """
+    if stored == requested:
+        return True
+    return {stored, requested} == {"warehouse", "webshop"}
+
+
 def _pool_preference(inventory_location: str) -> tuple[str, ...]:
     """Which pools this route draws on, best first.
 
@@ -483,9 +496,8 @@ def reserve_advice_pickup(
                 409,
                 "Deze order-ID bestaat al met andere productregels",
             )
-        if (
-            existing.fulfillment_method != payload.fulfillment_method
-            or existing.inventory_location != payload.inventory_location
+        if existing.fulfillment_method != payload.fulfillment_method or not (
+            _same_route(existing.inventory_location, payload.inventory_location)
         ):
             raise HTTPException(
                 409,
