@@ -1524,13 +1524,16 @@ class MonthlyBoxesResponse(BaseModel):
 # --- Pick locations (barcode-only, courier-managed) ------------------------
 
 class LocationSKU(BaseModel):
-    """A barcode product linked to a location."""
+    """A product linked to a location."""
     sku_id: int
     sku_code: str
     name: str
     ean: str | None = None
     organization_name: str | None = None
     is_primary: bool = True
+    # Loose bottles are picked by photo but still live on a shelf, so the pick
+    # screen can show where to walk even though there is no barcode to scan.
+    is_bottle: bool = False
 
 
 class LocationResponse(BaseModel):
@@ -1561,18 +1564,72 @@ class LocationUpdate(BaseModel):
     active: bool | None = None
 
 
+class LocationBulkCreate(BaseModel):
+    """A rectangle of shelves: every row x cabinet x shelf number in the ranges.
+
+    Filling a warehouse one location at a time is hundreds of identical forms,
+    which is both slow and the reason codes end up inconsistent. The code is
+    built from a template so the label on the shelf and the code in the system
+    are decided in the same breath.
+    """
+
+    rijen: list[str] = Field(..., min_length=1, max_length=26)
+    kasten: list[str] = Field(..., min_length=1, max_length=26)
+    plank_van: int = Field(..., ge=0, le=999)
+    plank_tot: int = Field(..., ge=0, le=999)
+    # Placeholders {rij}, {kast} and {plank}. The shelf number is padded to
+    # ``plank_cijfers`` so codes sort the way a human walks the aisle: without
+    # it "10" lands between "1" and "2".
+    code_template: str = Field(default="{rij}-{kast}-{plank}", max_length=50)
+    plank_cijfers: int = Field(default=2, ge=1, le=3)
+    # Preview only — nothing is written. The rectangle is easy to get wrong by
+    # an order of magnitude, and undoing a thousand rows by hand is not a fix.
+    dry_run: bool = True
+
+    @model_validator(mode="after")
+    def _check_range(self) -> "LocationBulkCreate":
+        if self.plank_tot < self.plank_van:
+            raise ValueError("Plank tot moet groter of gelijk zijn aan plank van")
+        placeholders = {"{rij}", "{kast}", "{plank}"}
+        if not any(token in self.code_template for token in placeholders):
+            raise ValueError(
+                "Code-sjabloon moet minstens {rij}, {kast} of {plank} bevatten"
+            )
+        return self
+
+
+class LocationBulkPreviewItem(BaseModel):
+    code: str
+    rij: str
+    kast: str
+    plank: str
+    # True when a location with this code already exists; it is skipped rather
+    # than failing the whole batch, so a partly-filled aisle can be topped up.
+    bestaat_al: bool = False
+
+
+class LocationBulkResponse(BaseModel):
+    dry_run: bool
+    totaal: int = 0
+    aangemaakt: int = 0
+    overgeslagen: int = 0
+    # Capped for the preview; ``totaal`` always counts them all.
+    voorbeeld: list[LocationBulkPreviewItem] = []
+
+
 class LinkSKURequest(BaseModel):
     sku_id: int = Field(..., gt=0)
     is_primary: bool = True
 
 
 class AvailableSKU(BaseModel):
-    """A barcode product that can be linked to a location."""
+    """A product that can be linked to a location."""
     id: int
     sku_code: str
     name: str
     ean: str | None = None
     organization_name: str | None = None
+    is_bottle: bool = False
 
 
 class LocationScanRequest(BaseModel):

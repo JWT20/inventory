@@ -250,7 +250,7 @@ export const api = {
   updateSupplier: (id: number, data: { name: string }) => json(`/suppliers/${id}`, "PATCH", data),
   deleteSupplier: (id: number) => request(`/suppliers/${id}`, { method: "DELETE" }),
 
-  // Pick locations (courier-only, barcode products)
+  // Pick locations (courier-only; barcode products and loose bottles)
   listLocations: () => request("/locations"),
   createLocation: (data: { code: string; rij?: string; kast?: string; plank?: string }) =>
     json("/locations", "POST", data),
@@ -258,6 +258,15 @@ export const api = {
     id: number,
     data: { code?: string; rij?: string; kast?: string; plank?: string; active?: boolean },
   ) => json(`/locations/${id}`, "PATCH", data),
+  bulkCreateLocations: (data: {
+    rijen: string[];
+    kasten: string[];
+    plank_van: number;
+    plank_tot: number;
+    code_template?: string;
+    plank_cijfers?: number;
+    dry_run: boolean;
+  }) => json("/locations/bulk", "POST", data),
   deleteLocation: (id: number) => request(`/locations/${id}`, { method: "DELETE" }),
   linkLocationSku: (locationId: number, skuId: number) =>
     json(`/locations/${locationId}/skus`, "POST", { sku_id: skuId }),

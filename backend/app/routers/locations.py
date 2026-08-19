@@ -1,17 +1,19 @@
 """Pick-location management — courier-only (warehouse worker).
 
-Barcode products get a physical shelf location (row/cabinet/shelf) with a
-scannable code. Vision/wine products are never linked here — they are picked by
-photo, not by shelf. The whole router is gated to platform admin + courier via
-``require_warehouse``; owners/members never see it.
+Products get a physical shelf location (row/cabinet/shelf) with a code printed
+on the shelf. Barcode products are verified against it by scanning; loose
+bottles cannot be scanned but do stand somewhere, so they are linked too and the
+pick screen simply shows where to walk. Whole wine boxes stay out: they are
+matched by photo per order and are never picked off a fixed shelf.
 
-This is PR 1 of 2: the data + management screen. The pick flow itself (scanning
-the location before its EANs) is a follow-up that builds on this.
+The whole router is gated to platform admin + courier via ``require_warehouse``;
+owners/members never see it.
 """
 
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth import require_warehouse
@@ -20,6 +22,9 @@ from app.models import SKU, Location, SKULocation, User
 from app.schemas import (
     AvailableSKU,
     LinkSKURequest,
+    LocationBulkCreate,
+    LocationBulkPreviewItem,
+    LocationBulkResponse,
     LocationCreate,
     LocationResponse,
     LocationSKU,
@@ -35,6 +40,11 @@ router = APIRouter(
 )
 
 
+def _is_shelvable(sku: SKU) -> bool:
+    """Whether this product has a fixed spot in the warehouse at all."""
+    return sku.product_type == "barcode" or sku.is_bottle
+
+
 def _to_response(location: Location) -> LocationResponse:
     skus = [
         LocationSKU(
@@ -44,6 +54,7 @@ def _to_response(location: Location) -> LocationResponse:
             ean=link.sku.ean,
             organization_name=link.sku.organization.name if link.sku.organization else None,
             is_primary=link.is_primary,
+            is_bottle=link.sku.is_bottle,
         )
         for link in location.sku_links
     ]
@@ -108,6 +119,101 @@ def create_location(data: LocationCreate, db: Session = Depends(get_db)):
     return _to_response(_load(db, location.id))
 
 
+# How many generated codes the preview hands back. Enough to check the shape of
+# the first and last aisle without shipping a thousand rows to a phone.
+BULK_PREVIEW_LIMIT = 50
+
+
+@router.post("/bulk", response_model=LocationBulkResponse, status_code=200)
+def create_locations_bulk(data: LocationBulkCreate, db: Session = Depends(get_db)):
+    """Create a whole rectangle of shelves in one go.
+
+    Defaults to a dry run. The rectangle is easy to get wrong by an order of
+    magnitude — two rows times five cabinets times shelves 0 to 100 is a
+    thousand locations, not a hundred — and undoing that by hand is not a fix.
+    So the first call answers with the count and a sample, and only an explicit
+    ``dry_run: false`` writes anything.
+
+    A code that already exists is skipped, not an error: topping up a
+    half-filled aisle has to be repeatable.
+    """
+    rijen = [value.strip() for value in data.rijen if value.strip()]
+    kasten = [value.strip() for value in data.kasten if value.strip()]
+    if not rijen or not kasten:
+        raise HTTPException(400, "Vul minstens één rij en één kast in")
+
+    planned: list[tuple[str, str, str, str]] = []
+    seen: set[str] = set()
+    for rij in rijen:
+        for kast in kasten:
+            for number in range(data.plank_van, data.plank_tot + 1):
+                plank = str(number).zfill(data.plank_cijfers)
+                code = (
+                    data.code_template.replace("{rij}", rij)
+                    .replace("{kast}", kast)
+                    .replace("{plank}", plank)
+                )
+                if len(code) > 50:
+                    raise HTTPException(
+                        400, f"Code '{code}' is langer dan 50 tekens"
+                    )
+                # A template that leaves out a dimension collapses the whole
+                # rectangle onto one code; refuse instead of silently creating
+                # a single location from a thousand intended ones.
+                if code in seen:
+                    raise HTTPException(
+                        400,
+                        "Dit code-sjabloon levert dubbele codes op; gebruik "
+                        "{rij}, {kast} én {plank}",
+                    )
+                seen.add(code)
+                planned.append((code, rij, kast, plank))
+
+    if len(planned) > 2000:
+        raise HTTPException(
+            400,
+            f"Dit patroon levert {len(planned)} locaties op; beperk het bereik "
+            "(maximaal 2000 per keer)",
+        )
+
+    existing = {
+        row[0]
+        for row in db.query(Location.code).filter(Location.code.in_(seen)).all()
+    }
+
+    preview = [
+        LocationBulkPreviewItem(
+            code=code, rij=rij, kast=kast, plank=plank, bestaat_al=code in existing
+        )
+        for code, rij, kast, plank in planned[:BULK_PREVIEW_LIMIT]
+    ]
+    to_create = [item for item in planned if item[0] not in existing]
+
+    if data.dry_run:
+        return LocationBulkResponse(
+            dry_run=True,
+            totaal=len(planned),
+            aangemaakt=0,
+            overgeslagen=len(planned) - len(to_create),
+            voorbeeld=preview,
+        )
+
+    db.add_all(
+        Location(code=code, rij=rij, kast=kast, plank=plank)
+        for code, rij, kast, plank in to_create
+    )
+    db.commit()
+    logger.info("Bulk created %s pick locations", len(to_create))
+
+    return LocationBulkResponse(
+        dry_run=False,
+        totaal=len(planned),
+        aangemaakt=len(to_create),
+        overgeslagen=len(planned) - len(to_create),
+        voorbeeld=preview,
+    )
+
+
 @router.patch("/{location_id}", response_model=LocationResponse)
 def update_location(
     location_id: int, data: LocationUpdate, db: Session = Depends(get_db)
@@ -146,14 +252,21 @@ def delete_location(location_id: int, db: Session = Depends(get_db)):
 def link_sku(
     location_id: int, data: LinkSKURequest, db: Session = Depends(get_db)
 ):
-    """Link a barcode product to this location. Rejects vision/wine products."""
+    """Link a product to this location. Rejects whole wine boxes.
+
+    A barcode product is verified by scanning the shelf code before its EANs. A
+    loose bottle cannot be scanned, but it does stand somewhere, and telling the
+    picker where is worth more than the consistency of only listing scannables.
+    A wine box is matched by photo against the order it belongs to and never
+    lives at a fixed spot, so linking one would only be misleading.
+    """
     location = _load(db, location_id)
     sku = db.get(SKU, data.sku_id)
     if not sku:
         raise HTTPException(404, "Product niet gevonden")
-    if sku.product_type != "barcode":
+    if not _is_shelvable(sku):
         raise HTTPException(
-            400, "Alleen barcode-producten kunnen een locatie krijgen"
+            400, "Alleen barcode-producten en losse flessen kunnen een locatie krijgen"
         )
     existing = (
         db.query(SKULocation)
@@ -191,12 +304,18 @@ def unlink_sku(location_id: int, sku_id: int, db: Session = Depends(get_db)):
 
 @router.get("/available-skus", response_model=list[AvailableSKU])
 def available_skus(q: str = "", db: Session = Depends(get_db)):
-    """Barcode products the courier can link, across all merchants (courier has
-    no org). Vision/wine products are excluded — they are never shelf-picked."""
+    """Products the courier can link, across all merchants (courier has no org).
+
+    Barcode products and loose bottles. Whole wine boxes are excluded — they are
+    matched by photo per order and never picked off a fixed shelf.
+    """
     query = (
         db.query(SKU)
         .options(joinedload(SKU.organization))
-        .filter(SKU.product_type == "barcode", SKU.active.is_(True))
+        .filter(
+            or_(SKU.product_type == "barcode", SKU.is_bottle.is_(True)),
+            SKU.active.is_(True),
+        )
     )
     term = q.strip()
     if term:
@@ -210,6 +329,7 @@ def available_skus(q: str = "", db: Session = Depends(get_db)):
             name=s.name,
             ean=s.ean,
             organization_name=s.organization.name if s.organization else None,
+            is_bottle=s.is_bottle,
         )
         for s in skus
     ]

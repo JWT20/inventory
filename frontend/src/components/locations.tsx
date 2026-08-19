@@ -21,6 +21,7 @@ interface LocationSKU {
   ean: string | null;
   organization_name: string | null;
   is_primary: boolean;
+  is_bottle: boolean;
 }
 
 interface Location {
@@ -40,6 +41,23 @@ interface AvailableSKU {
   name: string;
   ean: string | null;
   organization_name: string | null;
+  is_bottle: boolean;
+}
+
+interface BulkPreviewItem {
+  code: string;
+  rij: string;
+  kast: string;
+  plank: string;
+  bestaat_al: boolean;
+}
+
+interface BulkResult {
+  dry_run: boolean;
+  totaal: number;
+  aangemaakt: number;
+  overgeslagen: number;
+  voorbeeld: BulkPreviewItem[];
 }
 
 function locationSubtitle(l: Location): string {
@@ -54,6 +72,7 @@ function locationSubtitle(l: Location): string {
 export function LocationsPage() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [showNew, setShowNew] = useState(false);
+  const [showBulk, setShowBulk] = useState(false);
   const [manageFor, setManageFor] = useState<Location | null>(null);
 
   const load = useCallback(async () => {
@@ -83,12 +102,18 @@ export function LocationsPage() {
     <>
       <div className="flex justify-between items-center mb-1">
         <h2 className="text-xl font-bold">Locaties</h2>
-        <Button size="sm" onClick={() => setShowNew(true)}>
-          + Locatie
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => setShowBulk(true)}>
+            + Reeks
+          </Button>
+          <Button size="sm" onClick={() => setShowNew(true)}>
+            + Locatie
+          </Button>
+        </div>
       </div>
       <p className="text-sm text-muted-foreground mb-4">
-        Piklocaties voor barcode-producten. Alleen barcode-producten kunnen aan een locatie.
+        Piklocaties voor barcode-producten en losse flessen. Hele wijndozen
+        krijgen geen locatie: die worden per order op foto herkend.
       </p>
 
       <div className="space-y-3 mb-8">
@@ -145,12 +170,193 @@ export function LocationsPage() {
         onClose={() => setShowNew(false)}
         onCreated={load}
       />
+      <BulkLocationDialog
+        open={showBulk}
+        onClose={() => setShowBulk(false)}
+        onCreated={load}
+      />
       <ManageSkusDialog
         location={manageFor}
         onClose={() => setManageFor(null)}
         onChanged={load}
       />
     </>
+  );
+}
+
+function BulkLocationDialog({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [rijen, setRijen] = useState("B, C");
+  const [kasten, setKasten] = useState("A, B, C, D, E");
+  const [plankVan, setPlankVan] = useState("0");
+  const [plankTot, setPlankTot] = useState("9");
+  const [template, setTemplate] = useState("{rij}-{kast}-{plank}");
+  const [cijfers, setCijfers] = useState("2");
+  const [preview, setPreview] = useState<BulkResult | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) setPreview(null);
+  }, [open]);
+
+  const splitList = (value: string) =>
+    value
+      .split(/[,\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+  function body(dryRun: boolean) {
+    return {
+      rijen: splitList(rijen),
+      kasten: splitList(kasten),
+      plank_van: Number(plankVan),
+      plank_tot: Number(plankTot),
+      code_template: template.trim(),
+      plank_cijfers: Number(cijfers),
+      dry_run: dryRun,
+    };
+  }
+
+  async function run(dryRun: boolean) {
+    setBusy(true);
+    try {
+      const result: BulkResult = await api.bulkCreateLocations(body(dryRun));
+      setPreview(result);
+      if (!dryRun) {
+        toast.success(
+          `${result.aangemaakt} locaties aangemaakt` +
+            (result.overgeslagen > 0
+              ? `, ${result.overgeslagen} bestonden al`
+              : ""),
+        );
+        onCreated();
+        onClose();
+      }
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Fout");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Reeks locaties aanmaken</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Rijen</Label>
+              <Input
+                value={rijen}
+                onChange={(e) => setRijen(e.target.value)}
+                placeholder="B, C"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Kasten</Label>
+              <Input
+                value={kasten}
+                onChange={(e) => setKasten(e.target.value)}
+                placeholder="A, B, C, D, E"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Plank van</Label>
+              <Input
+                type="number"
+                value={plankVan}
+                onChange={(e) => setPlankVan(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Plank tot</Label>
+              <Input
+                type="number"
+                value={plankTot}
+                onChange={(e) => setPlankTot(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Cijfers</Label>
+              <Input
+                type="number"
+                value={cijfers}
+                onChange={(e) => setCijfers(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Code-sjabloon</Label>
+            <Input
+              value={template}
+              onChange={(e) => setTemplate(e.target.value)}
+              placeholder="{rij}-{kast}-{plank}"
+            />
+            <p className="text-xs text-muted-foreground">
+              Gebruik {"{rij}"}, {"{kast}"} en {"{plank}"}. Dit is de code die op
+              het schap komt te staan.
+            </p>
+          </div>
+
+          {preview && (
+            <div className="rounded-md border border-border p-3">
+              <p className="text-sm">
+                <strong>{preview.totaal}</strong> locaties
+                {preview.overgeslagen > 0 && (
+                  <> — {preview.overgeslagen} bestaan al en worden overgeslagen</>
+                )}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {preview.voorbeeld.map((item) => (
+                  <Badge
+                    key={item.code}
+                    variant={item.bestaat_al ? "inactive" : undefined}
+                    className="font-normal"
+                  >
+                    {item.code}
+                  </Badge>
+                ))}
+                {preview.totaal > preview.voorbeeld.length && (
+                  <span className="text-xs text-muted-foreground self-center">
+                    …en nog {preview.totaal - preview.voorbeeld.length}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              className="flex-1"
+              disabled={busy}
+              onClick={() => run(true)}
+            >
+              Voorbeeld
+            </Button>
+            <Button
+              className="flex-1"
+              disabled={busy || !preview}
+              onClick={() => run(false)}
+            >
+              {preview ? `${preview.totaal - preview.overgeslagen} aanmaken` : "Aanmaken"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -292,6 +498,7 @@ function ManageSkusDialog({
           name: s.name,
           ean: s.ean,
           organization_name: s.organization_name,
+          is_bottle: s.is_bottle,
           is_primary: true,
         },
       ]);
