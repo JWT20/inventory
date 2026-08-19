@@ -1212,6 +1212,7 @@ def _to_next_pick(line: OrderLine, order: Order, source: str) -> NextPickRespons
         sku_name=line.sku.name,
         order_line_id=line.id,
         image_url=_next_pick_image_url(line),
+        pick_location=line.sku.primary_location_code,
         remaining_quantity=max(line.quantity - line.booked_count, 0),
         source=source,
         order_id=order.id,
@@ -1256,6 +1257,12 @@ def next_pick(
     bottle = scan_mode == "bottle"
     pick_options = (
         selectinload(Order.lines).selectinload(OrderLine.sku).selectinload(SKU.reference_images),
+        # The shelf the suggested product stands on; without this the lookup
+        # fires one query per line.
+        selectinload(Order.lines)
+        .selectinload(OrderLine.sku)
+        .selectinload(SKU.location_links)
+        .selectinload(SKULocation.location),
         selectinload(Order.lines).selectinload(OrderLine.customer),
     )
     order = (

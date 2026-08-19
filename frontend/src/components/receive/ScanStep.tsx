@@ -432,6 +432,11 @@ export function ScanStep({
               <p className="text-sm font-medium truncate" title={nextPick.sku_name}>
                 {nextPick.sku_name}
               </p>
+              {nextPick.pick_location && (
+                <p className="text-sm font-semibold">
+                  📍 {nextPick.pick_location}
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">
                 nog {nextPick.remaining_quantity}
               </p>

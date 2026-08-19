@@ -598,6 +598,9 @@ class NextPickResponse(BaseModel):
     sku_name: str
     order_line_id: int
     image_url: str | None = None
+    # Waar het product ligt, als het aan een schap gekoppeld is. Dit is het
+    # scherm waar de koerier op afloopt, dus hier hoort het te staan.
+    pick_location: str | None = None
     remaining_quantity: int
     source: Literal["this_order", "other_order"]
     order_id: int

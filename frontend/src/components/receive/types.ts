@@ -186,6 +186,8 @@ export interface WeeklyPickPhoto {
 export interface NextPick {
   sku_id: number;
   sku_name: string;
+  // Waar het product ligt, als het aan een schap gekoppeld is.
+  pick_location?: string | null;
   order_line_id: number;
   image_url: string | null;
   remaining_quantity: number;

@@ -331,6 +331,27 @@ class TestLocationIsShownForWine:
         item = next(i for i in resp.json() if i["sku_id"] == sku.id)
         assert item["pick_location"] == "B-A-02"
 
+    def test_next_pick_carries_the_shelf(self, client, db, courier_token):
+        """The panel the picker walks off is where the shelf matters most."""
+        from app.models import Order, OrderLine, ReferenceImage
+
+        org, sku = self._linked_bottle(client, db, courier_token, code="B-A-03")
+        db.add(ReferenceImage(sku_id=sku.id, image_path="f.jpg", processing_status="done"))
+        order = Order(organization_id=org.id, reference="ORD-NEXT", status="active")
+        db.add(order)
+        db.flush()
+        db.add(OrderLine(order_id=order.id, sku_id=sku.id, klant="Klant", quantity=3))
+        db.commit()
+
+        resp = client.get(
+            f"/api/orders/{order.id}/next-pick",
+            params={"scan_mode": "bottle"},
+            headers=auth_header(courier_token),
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["pick_location"] == "B-A-03"
+
     def test_a_wine_box_has_no_shelf(self, client, db, courier_token):
         """A box is matched per order, so it never reports a fixed spot."""
         from app.models import Order, OrderLine
