@@ -206,9 +206,11 @@ function BulkLocationDialog({
     if (open) setPreview(null);
   }, [open]);
 
+  // Split on commas only: a shelf row may well be called "Rij 1", and splitting
+  // on the space in it would silently turn one row into two.
   const splitList = (value: string) =>
     value
-      .split(/[,\s]+/)
+      .split(",")
       .map((item) => item.trim())
       .filter(Boolean);
 

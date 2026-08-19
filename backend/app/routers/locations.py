@@ -14,6 +14,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth import require_warehouse
@@ -137,8 +138,10 @@ def create_locations_bulk(data: LocationBulkCreate, db: Session = Depends(get_db
     A code that already exists is skipped, not an error: topping up a
     half-filled aisle has to be repeatable.
     """
-    rijen = [value.strip() for value in data.rijen if value.strip()]
-    kasten = [value.strip() for value in data.kasten if value.strip()]
+    # Dedupe rather than refuse: "B, B, C" is a typo in the input, not an
+    # intent to make two of every shelf, and the template is not at fault for it.
+    rijen = list(dict.fromkeys(value.strip() for value in data.rijen if value.strip()))
+    kasten = list(dict.fromkeys(value.strip() for value in data.kasten if value.strip()))
     if not rijen or not kasten:
         raise HTTPException(400, "Vul minstens één rij en één kast in")
 
@@ -198,18 +201,26 @@ def create_locations_bulk(data: LocationBulkCreate, db: Session = Depends(get_db
             voorbeeld=preview,
         )
 
-    db.add_all(
-        Location(code=code, rij=rij, kast=kast, plank=plank)
-        for code, rij, kast, plank in to_create
-    )
+    # Between the lookup above and this insert another bulk run may have claimed
+    # some of the same codes. That is the same situation as a code that already
+    # existed, so it is skipped the same way instead of failing the batch: one
+    # savepoint per shelf, and a loser simply counts as "was already there".
+    created = 0
+    for code, rij, kast, plank in to_create:
+        try:
+            with db.begin_nested():
+                db.add(Location(code=code, rij=rij, kast=kast, plank=plank))
+        except IntegrityError:
+            continue
+        created += 1
     db.commit()
-    logger.info("Bulk created %s pick locations", len(to_create))
+    logger.info("Bulk created %s pick locations", created)
 
     return LocationBulkResponse(
         dry_run=False,
         totaal=len(planned),
-        aangemaakt=len(to_create),
-        overgeslagen=len(planned) - len(to_create),
+        aangemaakt=created,
+        overgeslagen=len(planned) - created,
         voorbeeld=preview,
     )
 

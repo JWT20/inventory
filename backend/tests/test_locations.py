@@ -286,6 +286,45 @@ class TestBulkCreate:
         assert resp.status_code == 403
 
 
+    def test_a_duplicate_row_is_folded_instead_of_refused(
+        self, client, db, courier_token
+    ):
+        """"B, B, C" is a typo in the input; the template is not at fault."""
+        from app.models import Location
+
+        resp = client.post(
+            self.URL,
+            json=self._body(rijen=["B", "B"], kasten=["A"], plank_van=1,
+                            plank_tot=2, dry_run=False),
+            headers=auth_header(courier_token),
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["totaal"] == 2
+        assert db.query(Location).count() == 2
+
+    def test_a_code_claimed_in_between_counts_as_already_there(
+        self, client, db, courier_token
+    ):
+        """A second bulk run may have taken part of the range; that is the same
+        situation as a code that already existed, not a reason to fail."""
+        from app.models import Location
+
+        db.add(Location(code="B-A-01", rij="B", kast="A", plank="01"))
+        db.commit()
+
+        resp = client.post(
+            self.URL,
+            json=self._body(rijen=["B"], kasten=["A"], plank_van=1, plank_tot=3,
+                            dry_run=False),
+            headers=auth_header(courier_token),
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert (resp.json()["aangemaakt"], resp.json()["overgeslagen"]) == (2, 1)
+        assert db.query(Location).count() == 3
+
+
 class TestLocationIsShownForWine:
     """A bottle is picked by photo, but the picker still has to walk to it."""
 
