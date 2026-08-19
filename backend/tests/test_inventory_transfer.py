@@ -1,4 +1,4 @@
-"""Moving stock between the warehouse and the shop as one booking."""
+"""Moving stock between two pools as one booking."""
 
 from app.models import InventoryBalance, SKU, StockMovement
 from tests.conftest import auth_header
@@ -150,3 +150,99 @@ def test_couriers_may_not_move_goods_onto_the_shop_shelf(
     assert resp.status_code == 403
     db.expire_all()
     assert _balance(db, sku.id, "warehouse").quantity_on_hand == 10
+
+
+def test_transfer_into_the_webshop_pool(client, db, owner_token, sample_org):
+    sku = _stocked(db, sample_org, warehouse=10)
+
+    resp = client.post(
+        URL,
+        json=_body(sku, to_location="webshop"),
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    assert _balance(db, sku.id, "warehouse").quantity_on_hand == 4
+    assert _balance(db, sku.id, "webshop").quantity_on_hand == 6
+
+
+def test_transfer_between_shop_and_webshop_skips_the_warehouse(
+    client, db, owner_token, sample_org
+):
+    """The two sellable pools exchange stock without the warehouse noticing."""
+    sku = _stocked(db, sample_org, warehouse=10, store=8)
+
+    resp = client.post(
+        URL,
+        json=_body(sku, quantity=5, from_location="store", to_location="webshop"),
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    assert _balance(db, sku.id, "store").quantity_on_hand == 3
+    assert _balance(db, sku.id, "webshop").quantity_on_hand == 5
+    assert _balance(db, sku.id, "warehouse").quantity_on_hand == 10
+
+
+def test_response_lists_every_pool_the_product_sits_in(
+    client, db, owner_token, sample_org
+):
+    sku = _stocked(db, sample_org, warehouse=10, store=4)
+
+    resp = client.post(
+        URL,
+        json=_body(sku, quantity=2, to_location="webshop"),
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert {
+        (b["inventory_location"], b["quantity_on_hand"])
+        for b in resp.json()["balances"]
+    } == {("warehouse", 8), ("store", 4), ("webshop", 2)}
+
+
+def test_short_webshop_balance_leaves_both_pools_untouched(
+    client, db, owner_token, sample_org
+):
+    sku = _stocked(db, sample_org, warehouse=10, store=2)
+
+    resp = client.post(
+        URL,
+        json=_body(sku, quantity=5, from_location="store", to_location="webshop"),
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 409
+    db.expire_all()
+    assert _balance(db, sku.id, "store").quantity_on_hand == 2
+    assert _balance(db, sku.id, "webshop") is None
+    assert db.query(StockMovement).filter_by(sku_id=sku.id).count() == 0
+
+
+def test_couriers_may_not_move_goods_into_the_webshop_pool(
+    client, db, courier_token, sample_org
+):
+    sku = _stocked(db, sample_org, warehouse=10)
+
+    resp = client.post(
+        URL,
+        json=_body(sku, to_location="webshop", organization_id=sample_org.id),
+        headers=auth_header(courier_token),
+    )
+
+    assert resp.status_code == 403
+    db.expire_all()
+    assert _balance(db, sku.id, "warehouse").quantity_on_hand == 10
+
+
+def test_unknown_pool_is_refused(client, db, owner_token, sample_org):
+    sku = _stocked(db, sample_org, warehouse=10)
+
+    resp = client.post(
+        URL, json=_body(sku, to_location="zolder"), headers=auth_header(owner_token)
+    )
+
+    assert resp.status_code == 422

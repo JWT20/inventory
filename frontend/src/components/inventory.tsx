@@ -3,6 +3,7 @@ import { toast } from "@/App";
 import { api } from "@/lib/api";
 import { useAuth, hasModule } from "@/lib/auth";
 import {
+  INVENTORY_LOCATIONS,
   LOCATION_LABELS,
   LOCATION_TITLES,
   type InventoryLocation,
@@ -326,16 +327,9 @@ function InventoryDetailDialog({
   const canManagePrices = canViewPrices && canAdjustStock;
   // Couriers work the warehouse; deciding what goes onto the shop shelf is the
   // merchant's call, so they never get the move action.
-  const destination = item?.inventory_location === "store" ? "warehouse" : "store";
-  const destinationLabel = LOCATION_LABELS[destination];
-  // Couriers work the warehouse; deciding what goes onto the shop shelf is the
-  // merchant's call, so they never get the move action. The webshop pool has no
-  // move action yet — it gets its own destination picker in the follow-up.
-  const canTransferStock =
-    canAdjustStock &&
-    !!user &&
-    user.role !== "courier" &&
-    item?.inventory_location !== "webshop";
+  // Couriers work the warehouse; deciding what goes onto the shop shelf or into
+  // the webshop stock is the merchant's call, so they never get the move action.
+  const canTransferStock = canAdjustStock && !!user && user.role !== "courier";
 
   const [editingDefaultPrice, setEditingDefaultPrice] = useState(false);
   const [defaultPriceValue, setDefaultPriceValue] = useState("");
@@ -351,6 +345,7 @@ function InventoryDetailDialog({
   const [movingStock, setMovingStock] = useState(false);
   const [transferValue, setTransferValue] = useState("");
   const [transferNoteValue, setTransferNoteValue] = useState("");
+  const [destination, setDestination] = useState<InventoryLocation>("store");
   const [savingTransfer, setSavingTransfer] = useState(false);
   const transferInFlight = useRef(false);
 
@@ -365,6 +360,9 @@ function InventoryDetailDialog({
       setMovingStock(false);
       setTransferValue("");
       setTransferNoteValue("");
+      setDestination(
+        INVENTORY_LOCATIONS.find((l) => l !== item.inventory_location) ?? "store",
+      );
     }
   }, [item]);
 
@@ -373,9 +371,6 @@ function InventoryDetailDialog({
   async function saveTransfer() {
     if (!item || transferInFlight.current) return;
     const from = item.inventory_location;
-    // The webshop pool has no move action yet; its destination picker lands in
-    // the follow-up PR.
-    if (from === "webshop") return;
     const quantity = parseTransferQuantity(transferValue);
     if (quantity == null) {
       toast.error("Vul een aantal groter dan 0 in");
@@ -401,7 +396,7 @@ function InventoryDetailDialog({
       setMovingStock(false);
       setTransferValue("");
       setTransferNoteValue("");
-      toast.success(`${quantity} verplaatst naar ${destinationLabel}`);
+      toast.success(`${quantity} verplaatst naar ${LOCATION_LABELS[destination]}`);
       // Both pools changed, and the list only shows one of them.
       onRefresh();
       onClose();
@@ -621,8 +616,29 @@ function InventoryDetailDialog({
             {canTransferStock && movingStock && (
               <div className="rounded-md border border-border p-3 space-y-2">
                 <label className="text-xs text-muted-foreground block">
-                  Aantal naar {destinationLabel} (max {item.quantity_available}{" "}
-                  beschikbaar)
+                  Verplaatsen naar
+                </label>
+                <Select
+                  value={destination}
+                  onValueChange={(v) => setDestination(v as InventoryLocation)}
+                  disabled={savingTransfer}
+                >
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {INVENTORY_LOCATIONS.filter(
+                      (l) => l !== item.inventory_location,
+                    ).map((l) => (
+                      <SelectItem key={l} value={l}>
+                        {LOCATION_TITLES[l]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <label className="text-xs text-muted-foreground block">
+                  Aantal naar {LOCATION_LABELS[destination]} (max{" "}
+                  {item.quantity_available} beschikbaar)
                 </label>
                 <Input
                   type="number"
@@ -659,7 +675,7 @@ function InventoryDetailDialog({
                   >
                     {savingTransfer
                       ? "Verplaatsen..."
-                      : `Naar ${destinationLabel}`}
+                      : `Naar ${LOCATION_LABELS[destination]}`}
                   </button>
                   <button
                     onClick={() => setMovingStock(false)}
