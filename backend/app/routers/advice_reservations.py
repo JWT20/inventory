@@ -34,8 +34,12 @@ def _to_item(reservation: AdviceReservation) -> AdviceReservationAdminItem:
             sku_name=line.sku.name,
             source_product_id=line.sku.source_product_id,
             quantity=line.quantity,
+            inventory_location=line.inventory_location,
         )
-        for line in sorted(reservation.lines, key=lambda item: item.sku.sku_code)
+        for line in sorted(
+            reservation.lines,
+            key=lambda item: (item.sku.sku_code, item.inventory_location),
+        )
     ]
     return AdviceReservationAdminItem(
         id=reservation.id,

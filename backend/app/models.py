@@ -1135,11 +1135,15 @@ class AdviceSaleLine(Base):
 
 
 class AdviceReservation(Base):
-    """Store-stock hold for one pickup order owned by wijnadvies1.
+    """Sellable-stock hold for one advice-app order owned by wijnadvies1.
 
     It deliberately is not a Dockscan Order: pickup orders stay out of Scan &
     Boek. The source order id is the idempotency key for reserve, collect and
     release operations.
+
+    ``inventory_location`` records the pool the route *prefers* — the shop for a
+    counter pickup, the webshop for a delivery. What each product is actually
+    held in lives on the line, because one hold may span both places.
     """
 
     __tablename__ = "advice_reservations"
@@ -1179,10 +1183,21 @@ class AdviceReservation(Base):
 
 
 class AdviceReservationLine(Base):
+    """One product held for one reservation, in one pool.
+
+    A product may appear twice on the same reservation when the hold is split
+    across the shop and the webshop — they are one sellable pool spread over two
+    physical places. Each row is settled against its own pool, so collecting or
+    releasing gives every bottle back where it was taken from.
+    """
+
     __tablename__ = "advice_reservation_lines"
     __table_args__ = (
         UniqueConstraint(
-            "reservation_id", "sku_id", name="uq_advice_reservation_lines_reservation_sku"
+            "reservation_id",
+            "sku_id",
+            "inventory_location",
+            name="uq_advice_reservation_lines_reservation_sku_location",
         ),
     )
 
@@ -1192,6 +1207,9 @@ class AdviceReservationLine(Base):
     )
     sku_id: Mapped[int] = mapped_column(ForeignKey("skus.id", ondelete="RESTRICT"))
     quantity: Mapped[int] = mapped_column(Integer)
+    inventory_location: Mapped[str] = mapped_column(
+        String(20), default="store", server_default=text("'store'"), nullable=False
+    )
 
     reservation: Mapped["AdviceReservation"] = relationship(back_populates="lines")
     sku: Mapped["SKU"] = relationship()
