@@ -12,8 +12,12 @@ from datetime import datetime
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models import Booking, Order, OrderLine
-from app.services.stock import adjust_reservation, apply_stock_movement
+from app.models import SKU, Booking, Order, OrderLine
+from app.services.stock import (
+    BOTTLES_PER_BOX,
+    adjust_reservation,
+    apply_stock_movement,
+)
 
 
 @dataclass
@@ -92,6 +96,49 @@ def promote_pending_images_orders_for_sku(db: Session, sku_id: int) -> list[Orde
         if order.status != before:
             changed.append(order)
     return changed
+
+
+def rolcontainer_label(line: OrderLine) -> str:
+    """What the courier writes on the container this unit goes into.
+
+    A customer order goes into that customer's container. A replenishment order
+    goes back to the merchant, so naming a customer there would send the goods
+    to the wrong place.
+    """
+    if line.order.order_kind == "replenishment":
+        return line.klant.upper()
+    return f"KLANT {line.customer_name.upper()}"
+
+
+def replenishment_credit(
+    db: Session, order: Order, sku_id: int, quantity: int
+) -> tuple[int, int] | None:
+    """What a picked unit puts into the destination pool, or None.
+
+    A customer order takes goods out of the building and credits nothing. A
+    replenishment order moves the merchant's own stock: a picked box becomes
+    ``BOTTLES_PER_BOX`` bottles of the linked bottle product, and a picked
+    bottle stays one bottle of itself.
+
+    Refuses rather than guessing when a box has lost its bottle link between
+    the order being placed and this pick: crediting nothing would silently
+    destroy stock, and crediting the box itself would put a box in a pool that
+    only holds bottles.
+    """
+    if order.order_kind != "replenishment" or not order.destination_location:
+        return None
+    sku = db.get(SKU, sku_id)
+    if sku is None:
+        raise HTTPException(404, "Product niet gevonden")
+    if sku.is_bottle:
+        return sku_id, quantity
+    if sku.bottle_sku_id is None:
+        raise HTTPException(
+            409,
+            f"'{sku.name}' is niet aan een fles gekoppeld; "
+            "koppel de fles voordat deze doos gepickt wordt",
+        )
+    return sku.bottle_sku_id, quantity * BOTTLES_PER_BOX
 
 
 def apply_booking(
@@ -186,6 +233,26 @@ def apply_booking(
         performed_by=scanned_by,
         inventory_location=order.inventory_location,
     )
+
+    # 5b. A replenishment order does not leave the building: what came off the
+    #     warehouse lands in the merchant's own pool, as bottles. Same
+    #     transaction as the deduction above, so the goods can never exist in
+    #     neither place or in both.
+    credit = replenishment_credit(db, order, sku_id, quantity)
+    if credit is not None:
+        credit_sku_id, credit_quantity = credit
+        apply_stock_movement(
+            db,
+            sku_id=credit_sku_id,
+            organization_id=order.organization_id,
+            quantity=credit_quantity,
+            movement_type="transfer",
+            reference_type="booking",
+            reference_id=last_booking.id,
+            note=f"Bevoorrading uit order {order.reference}",
+            performed_by=scanned_by,
+            inventory_location=order.destination_location,
+        )
 
     # 6. Recompute status on the fresh lines, then commit.
     recompute_order_status(order, lines)
@@ -285,6 +352,29 @@ def undo_booking(db: Session, *, booking_id: int, performed_by: int) -> UndoResu
         performed_by=performed_by,
         inventory_location=order.inventory_location,
     )
+    # Take the replenished bottles back out of the destination pool. Booked and
+    # undone must net to zero in both pools, not just the one goods came from.
+    credit = replenishment_credit(db, order, sku_id, 1)
+    if credit is not None:
+        credit_sku_id, credit_quantity = credit
+        apply_stock_movement(
+            db,
+            sku_id=credit_sku_id,
+            organization_id=org_id,
+            quantity=-credit_quantity,
+            movement_type="transfer",
+            reference_type="booking_undo",
+            reference_id=None,
+            note=f"Bevoorrading teruggedraaid uit order {order.reference}",
+            performed_by=performed_by,
+            # Undoing a pick reverses a physical move that already happened, so
+            # a pool that has meanwhile sold the bottles goes negative rather
+            # than blocking the correction. The negative is the discrepancy,
+            # and a stock count settles it.
+            allow_negative=True,
+            inventory_location=order.destination_location,
+        )
+
     # Re-reserve the unit the order still needs (inverse of the pick release).
     # Only for channel orders, mirroring apply_booking — a manual undo must not
     # inflate the shared reservation.

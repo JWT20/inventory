@@ -36,12 +36,17 @@ import {
   formatBoxesBottles,
   formatBookedBoxesBottles,
 } from "@/lib/units";
+import {
+  LOCATION_TITLES,
+  type InventoryLocation,
+} from "@/lib/inventory-locations";
 
 interface SKUOption {
   id: number;
   sku_code: string;
   name: string;
   is_bottle?: boolean;
+  bottle_sku_id?: number | null;
   category?: string | null;
   producent?: string | null;
   supplier_name?: string | null;
@@ -172,6 +177,8 @@ interface Order {
   reference: string;
   status: string;
   channel: string;
+  order_kind: "customer" | "replenishment";
+  destination_location: InventoryLocation | null;
   pick_method: "vision" | "barcode";
   remarks: string;
   delivery_week: string | null;
@@ -191,6 +198,13 @@ interface Order {
   visible_total: number | null;
   hidden_lines_count: number;
 }
+
+// Who an order is for. A replenishment order has no customer — it goes back to
+// the merchant's own shelf, and showing a dash there reads as missing data.
+const orderRecipient = (order: Order): string =>
+  order.order_kind === "replenishment"
+    ? `Voorraad ${order.destination_location ? LOCATION_TITLES[order.destination_location].toLowerCase() : ""}`.trim()
+    : (order.customer_name ?? "\u2014");
 
 const emptyUnitForOrder = (order: Order): "boxes" | "items" =>
   order.pick_method === "barcode" || order.channel !== "manual" ? "items" : "boxes";
@@ -278,6 +292,7 @@ export function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [showManual, setShowManual] = useState(false);
+  const [showReplenishment, setShowReplenishment] = useState(false);
   const [showOverdue, setShowOverdue] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showUpcoming, setShowUpcoming] = useState(false);
@@ -324,6 +339,13 @@ export function OrdersPage() {
       user.role === "owner" ||
       user.role === "member" ||
       user.role === "customer");
+
+  // Replenishing is the merchant restocking their own shelf, so a customer
+  // account never gets it — they order from the merchant, not for them.
+  const canReplenish =
+    user &&
+    !isBarcodeOnlyOrg &&
+    (user.is_platform_admin || user.role === "owner" || user.role === "member");
 
   const DELIVERY_DAY_LABELS_FULL: Record<string, string> = {
     monday: "maandag",
@@ -602,7 +624,7 @@ export function OrdersPage() {
       <p className="text-sm text-muted-foreground">
         {isCustomer
           ? `${o.lines.length} product${o.lines.length !== 1 ? "en" : ""}`
-          : `${o.customer_name ?? "—"} · ${o.lines.length} product${o.lines.length !== 1 ? "en" : ""}`}
+          : `${orderRecipient(o)} · ${o.lines.length} product${o.lines.length !== 1 ? "en" : ""}`}
       </p>
       {!isCustomer &&
         (isPendingOrder(o) || o.status === "active") &&
@@ -678,7 +700,7 @@ export function OrdersPage() {
               <p className="truncate text-xs text-muted-foreground">
                 {isCustomer
                   ? formatOrderTotals(order)
-                  : `${order.customer_name ?? "—"} · ${formatBookedOrderTotals(order)}`}
+                  : `${orderRecipient(order)} · ${formatBookedOrderTotals(order)}`}
               </p>
             </div>
             {!isCustomer && (
@@ -744,6 +766,15 @@ export function OrdersPage() {
                   {notesEntries.length}
                 </span>
               )}
+            </Button>
+          )}
+          {canReplenish && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowReplenishment(true)}
+            >
+              + Voorraad
             </Button>
           )}
           {canCreate && (
@@ -919,6 +950,12 @@ export function OrdersPage() {
       <ManualOrderDialog
         open={showManual}
         onClose={() => setShowManual(false)}
+        onCreated={load}
+      />
+
+      <ReplenishmentOrderDialog
+        open={showReplenishment}
+        onClose={() => setShowReplenishment(false)}
         onCreated={load}
       />
 
@@ -1391,6 +1428,184 @@ function SkuSearchPicker({
   );
 }
 
+function ReplenishmentOrderDialog({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const { user } = useAuth();
+  const [destination, setDestination] = useState<"store" | "webshop">("webshop");
+  const [allSkus, setAllSkus] = useState<SKUOption[]>([]);
+  const [quantities, setQuantities] = useState<Record<number, number>>({});
+  const [search, setSearch] = useState("");
+  const [remarks, setRemarks] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    api.listSKUOptions(true).then((skus: SKUOption[]) => setAllSkus(skus));
+    setQuantities({});
+    setSearch("");
+    setRemarks("");
+  }, [open]);
+
+  // A box without a linked bottle cannot be turned into shelf stock, so it is
+  // not offered at all — better than accepting it and refusing on submit.
+  const orderable = allSkus.filter(
+    (sku) => sku.is_bottle || sku.bottle_sku_id != null,
+  );
+  const term = search.trim().toLowerCase();
+  const visible = term
+    ? orderable.filter(
+        (sku) =>
+          sku.name.toLowerCase().includes(term) ||
+          sku.sku_code.toLowerCase().includes(term),
+      )
+    : orderable;
+
+  const chosen = Object.entries(quantities).filter(([, qty]) => qty > 0);
+
+  function toggleSku(skuId: number) {
+    setQuantities((prev) => {
+      const next = { ...prev };
+      if (next[skuId] === undefined) {
+        next[skuId] = 1;
+      } else {
+        delete next[skuId];
+      }
+      return next;
+    });
+  }
+
+  async function submit() {
+    if (chosen.length === 0) {
+      toast.error("Selecteer minimaal één product met aantal");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await api.createReplenishmentOrder({
+        organization_id: user?.organization_id,
+        destination_location: destination,
+        remarks: remarks.trim(),
+        lines: chosen.map(([skuId, quantity]) => ({
+          sku_id: Number(skuId),
+          quantity,
+        })),
+      });
+      toast.success(`Bevoorrading voor ${LOCATION_TITLES[destination].toLowerCase()} aangemaakt`);
+      onCreated();
+      onClose();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Aanmaken mislukt");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
+      <SheetContent side="bottom">
+        <SheetHeader>
+          <SheetTitle>Voorraad bestellen</SheetTitle>
+        </SheetHeader>
+
+        <div className="space-y-4">
+          <div>
+            <Label className="mb-1 block text-sm">Bestemming</Label>
+            <Select
+              value={destination}
+              onValueChange={(v) => setDestination(v as "store" | "webshop")}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="webshop">Webshop</SelectItem>
+                <SelectItem value="store">Winkel</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Uit het magazijn. Een gepickte doos komt als 6 flessen op deze
+              voorraad.
+            </p>
+          </div>
+
+          <div>
+            <Label className="mb-1 block text-sm">Producten</Label>
+            <Input
+              placeholder="Zoek product..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="mb-2"
+            />
+            {orderable.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                Geen bestelbare producten. Koppel eerst bij een doos welke fles
+                erin zit.
+              </p>
+            ) : (
+              <div className="max-h-72 space-y-1 overflow-y-auto">
+                {visible.map((sku) => {
+                  const selected = quantities[sku.id] !== undefined;
+                  return (
+                    <div
+                      key={sku.id}
+                      className="flex items-center justify-between gap-2 rounded-md border border-border px-2 py-1.5"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Checkbox
+                          checked={selected}
+                          onCheckedChange={() => toggleSku(sku.id)}
+                        />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm">{sku.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {sku.is_bottle ? "per fles" : "per doos (6 flessen)"}
+                          </p>
+                        </div>
+                      </div>
+                      <OrderQuantityControl
+                        value={quantities[sku.id] ?? 1}
+                        disabled={!selected}
+                        onChange={(qty) =>
+                          setQuantities((prev) => ({ ...prev, [sku.id]: qty }))
+                        }
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <Label className="mb-1 block text-sm">Opmerking</Label>
+            <Textarea
+              value={remarks}
+              onChange={(e) => setRemarks(e.target.value)}
+              placeholder="Optioneel"
+              rows={2}
+            />
+          </div>
+
+          <Button
+            className="w-full"
+            onClick={submit}
+            disabled={submitting || chosen.length === 0}
+          >
+            {submitting ? "Aanmaken..." : "Bevoorrading aanmaken"}
+          </Button>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 function OrderQuantityControl({
   value,
   disabled,
@@ -1747,7 +1962,7 @@ function OrderDetailDialog({
           <p className="text-sm text-muted-foreground">
             {isCustomer
               ? `${order.organization_name}${order.created_by_name ? ` — ${order.created_by_name}` : ""}`
-              : (order.customer_name ?? "—")}
+              : orderRecipient(order)}
           </p>
           {order.pick_method === "barcode" && (
             <p className="text-sm text-muted-foreground">

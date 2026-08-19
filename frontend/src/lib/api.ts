@@ -394,6 +394,12 @@ export const api = {
       delivery_day?: string;
     }[];
   }) => json("/orders", "POST", data),
+  createReplenishmentOrder: (data: {
+    organization_id?: number | null;
+    destination_location: "store" | "webshop";
+    remarks?: string;
+    lines: { sku_id: number; quantity: number }[];
+  }) => json("/orders/replenishment", "POST", data),
   updateOrder: (id: number, data: { remarks: string }) =>
     json(`/orders/${id}`, "PATCH", data),
   listOrders: (

@@ -38,6 +38,10 @@ VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count", "sale", "transfer"
 # places, but together they are what the webshop can actually sell — see
 # SELLABLE_INVENTORY_LOCATIONS.
 VALID_INVENTORY_LOCATIONS = ("warehouse", "store", "webshop")
+# What an order is for. "customer" is the normal order that leaves the building;
+# "replenishment" moves the merchant's own stock from the warehouse onto their
+# shop shelf or into their webshop stock.
+VALID_ORDER_KINDS = ("customer", "replenishment")
 # The pools a webshop order may be served from. Kept as one definition so no
 # screen or feed can drift on what "available online" means.
 SELLABLE_INVENTORY_LOCATIONS = ("store", "webshop")
@@ -525,6 +529,18 @@ class Order(Base):
     # route a newly-created order explicitly without moving older orders.
     inventory_location: Mapped[str] = mapped_column(
         String(20), default="warehouse", server_default=text("'warehouse'"), nullable=False
+    )
+    # Who the order is for: a customer, or the merchant's own shop/webshop stock.
+    order_kind: Mapped[str] = mapped_column(
+        String(20), default="customer", server_default=text("'customer'"), nullable=False
+    )
+    # Where a replenishment order's goods land once picked. NULL on a customer
+    # order — those leave the building, so there is no destination pool. Set
+    # together with order_kind="replenishment" and never changed afterwards: a
+    # booking already credited this pool, so moving the target would strand the
+    # bottles somewhere nobody counted them.
+    destination_location: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
     )
     # The order id at the source channel (Shopify/bol). NULL for manual orders.
     # Unique per (organization, channel) via uq_orders_org_channel_external.
