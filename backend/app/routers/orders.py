@@ -894,26 +894,19 @@ def _build_customer_response(
     )
 
 
-@router.get("/reports/monthly-boxes", response_model=MonthlyBoxesResponse)
-def monthly_booked_boxes(
-    organization_id: int | None = Query(
-        None, description="Optioneel: beperk tot één handelaar."
-    ),
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """Aantal verwerkte eenheden per maand voor afgeronde orders.
+def _monthly_units_by_organization(
+    db: Session,
+    user: User,
+    organization_id: int | None,
+    order_kind: str,
+) -> list[MonthlyBoxesOrganization]:
+    """Booked units per organization per month, for one kind of order.
 
-    Eenheden tellen mee in de maand waarin de order is afgerond (``finalized_at``)
-    en worden uitgesplitst als dozen, flessen of items. Het aantal is het werkelijk
-    geboekte aantal. Gegroepeerd per handelaar (organisatie).
-
-    Voor barcode-producten tellen we daarnaast het aantal orders en orderregels:
-    daar zegt het aantal stuks weinig over de verwerkte hoeveelheid werk. Dozen en
-    flessen blijven puur op eenheden geteld.
-
-    Zichtbaar voor de koerier en platform-admin (alle handelaren) en voor een
-    owner/member (alleen de eigen handelaar).
+    Split by kind because the two are different work with different meaning:
+    customer orders are volume that left the building, replenishment is the
+    merchant's own stock being moved onto a shelf. Adding them up would count the
+    same bottles twice — once here and again on the customer order that later
+    ships them — so they are reported side by side instead.
     """
     # Per finalized order: its organization, finalize moment and booked boxes.
     #
@@ -941,11 +934,7 @@ def monthly_booked_boxes(
         .join(OrderLine, OrderLine.order_id == Order.id)
         .join(SKU, OrderLine.sku_id == SKU.id)
         .filter(Order.finalized_at.isnot(None))
-        # Replenishment moves goods between the merchant's own pools; it never
-        # leaves the building. Counting it as processed volume would double-count
-        # the same bottles once here and again on the customer order that later
-        # ships them.
-        .filter(Order.order_kind == "customer")
+        .filter(Order.order_kind == order_kind)
         .group_by(
             Order.id,
             Order.organization_id,
@@ -990,7 +979,7 @@ def monthly_booked_boxes(
             item_lines[row.org_id][month] += int(row.lines)
 
     if not buckets:
-        return MonthlyBoxesResponse(organizations=[])
+        return []
 
     # Resolve organization names in one query.
     org_ids = [oid for oid in buckets if oid is not None]
@@ -1037,7 +1026,43 @@ def monthly_booked_boxes(
         )
 
     organizations.sort(key=lambda o: o.organization_name.lower())
-    return MonthlyBoxesResponse(organizations=organizations)
+    return organizations
+
+
+@router.get("/reports/monthly-boxes", response_model=MonthlyBoxesResponse)
+def monthly_booked_boxes(
+    organization_id: int | None = Query(
+        None, description="Optioneel: beperk tot één handelaar."
+    ),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Aantal verwerkte eenheden per maand voor afgeronde orders.
+
+    Eenheden tellen mee in de maand waarin de order is afgerond (``finalized_at``)
+    en worden uitgesplitst als dozen, flessen of items. Het aantal is het werkelijk
+    geboekte aantal. Gegroepeerd per handelaar (organisatie).
+
+    Voor barcode-producten tellen we daarnaast het aantal orders en orderregels:
+    daar zegt het aantal stuks weinig over de verwerkte hoeveelheid werk. Dozen en
+    flessen blijven puur op eenheden geteld.
+
+    Bevoorradingsorders staan apart in ``replenishment``. Het is echt verwerkt
+    werk — de koerier pickt die dozen — maar de flessen verlaten het pand niet en
+    komen later nog een keer langs op de klantorder die ze verscheept. Bij elkaar
+    optellen zou diezelfde flessen dus dubbel tellen.
+
+    Zichtbaar voor de koerier en platform-admin (alle handelaren) en voor een
+    owner/member (alleen de eigen handelaar).
+    """
+    return MonthlyBoxesResponse(
+        organizations=_monthly_units_by_organization(
+            db, user, organization_id, "customer"
+        ),
+        replenishment=_monthly_units_by_organization(
+            db, user, organization_id, "replenishment"
+        ),
+    )
 
 
 @router.get("/weekly-summary", response_model=WeeklySummaryResponse)

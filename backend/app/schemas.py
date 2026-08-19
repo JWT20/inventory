@@ -1558,7 +1558,12 @@ class MonthlyBoxesOrganization(BaseModel):
 
 
 class MonthlyBoxesResponse(BaseModel):
+    # Klantorders: wat het pand verlaten heeft.
     organizations: list[MonthlyBoxesOrganization] = []
+    # Bevoorrading: dozen die de koerier van het magazijn naar de winkel- of
+    # webshopplank gepickt heeft. Apart, want het is echt verwerkt werk maar de
+    # flessen komen later nog een keer langs op de klantorder die ze verscheept.
+    replenishment: list[MonthlyBoxesOrganization] = []
 
 
 # --- Pick locations (barcode-only, courier-managed) ------------------------

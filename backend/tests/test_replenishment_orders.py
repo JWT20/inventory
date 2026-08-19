@@ -431,7 +431,7 @@ class TestPickingConvertsBoxesToBottles:
         assert order.reference in credit.note
 
 
-class TestReportsIgnoreReplenishment:
+class TestReports:
     def test_weekly_summary_skips_replenishment(
         self, client, db, owner_token, box, sample_org
     ):
@@ -453,9 +453,15 @@ class TestReportsIgnoreReplenishment:
         assert resp.status_code == 200, resp.text
         assert resp.json()["grand_total_quantity"] == 0
 
-    def test_monthly_report_skips_replenishment(
+    def test_monthly_report_keeps_replenishment_apart(
         self, client, db, owner_token, owner_user, box, sample_org
     ):
+        """Real work by the courier, but not volume that left the building.
+
+        Adding it to the customer totals would count the same bottles twice:
+        once when the box is moved onto the shelf and again on the customer
+        order that later ships them.
+        """
         _stock(db, sample_org, box, 3)
         created = client.post(
             URL,
@@ -475,4 +481,32 @@ class TestReportsIgnoreReplenishment:
         )
 
         assert resp.status_code == 200, resp.text
-        assert resp.json()["organizations"] == []
+        body = resp.json()
+        assert body["organizations"] == []
+        assert body["replenishment"][0]["total_boxes"] == 1
+        assert body["replenishment"][0]["organization_id"] == sample_org.id
+
+    def test_a_customer_order_stays_in_its_own_tab(
+        self, db, client, owner_token, owner_user, box, sample_org
+    ):
+        _stock(db, sample_org, box, 5)
+        order = Order(
+            organization_id=sample_org.id,
+            reference="ORD-MAAND",
+            status="active",
+            channel="manual",
+        )
+        db.add(order)
+        db.flush()
+        line = OrderLine(order_id=order.id, sku_id=box.id, klant="Klant", quantity=1)
+        db.add(line)
+        db.commit()
+        _book_one(db, order, line, box.id, owner_user.id)
+
+        resp = client.get(
+            "/api/orders/reports/monthly-boxes", headers=auth_header(owner_token)
+        )
+
+        body = resp.json()
+        assert body["organizations"][0]["total_boxes"] == 1
+        assert body["replenishment"] == []
