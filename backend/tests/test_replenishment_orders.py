@@ -510,3 +510,136 @@ class TestReports:
         body = resp.json()
         assert body["organizations"][0]["total_boxes"] == 1
         assert body["replenishment"] == []
+
+
+class TestTheLinkHoldsStillWhileUnitsAreBooked:
+    """Undo has to give the same bottles back that the pick took.
+
+    Which bottles those were lives only in ``SKU.bottle_sku_id``, so the link
+    is frozen for as long as a pick can still be reversed.
+    """
+
+    def _picked(self, client, db, owner_token, owner_user, box):
+        resp = client.post(
+            URL,
+            json={
+                "destination_location": "store",
+                "lines": [{"sku_id": box.id, "quantity": 2}],
+            },
+            headers=auth_header(owner_token),
+        )
+        assert resp.status_code == 201, resp.text
+        order = db.get(Order, resp.json()["id"])
+        line = order.lines[0]
+        _book_one(db, order, line, box.id, owner_user.id)
+        return order, line
+
+    def test_unlinking_a_picked_box_is_refused(
+        self, client, db, owner_token, owner_user, sample_org, box
+    ):
+        _stock(db, sample_org, box, 5)
+        self._picked(client, db, owner_token, owner_user, box)
+
+        resp = client.patch(
+            f"/api/skus/{box.id}",
+            json={"bottle_sku_id": None},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 409, resp.text
+        assert "bevoorradingsorder" in resp.json()["detail"]
+        db.expire_all()
+        assert db.get(SKU, box.id).bottle_sku_id is not None
+
+    def test_repointing_a_picked_box_is_refused(
+        self, client, db, owner_token, owner_user, sample_org, box, bottle
+    ):
+        other = SKU(
+            sku_code="FLES-REP-2",
+            name="Andere fles",
+            organization_id=sample_org.id,
+            product_type="vision",
+            is_bottle=True,
+        )
+        db.add(other)
+        db.commit()
+        _stock(db, sample_org, box, 5)
+        self._picked(client, db, owner_token, owner_user, box)
+
+        resp = client.patch(
+            f"/api/skus/{box.id}",
+            json={"bottle_sku_id": other.id},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 409, resp.text
+        db.expire_all()
+        assert db.get(SKU, box.id).bottle_sku_id == bottle.id
+
+    def test_unlinking_is_free_again_once_the_pick_is_undone(
+        self, client, db, owner_token, owner_user, sample_org, box
+    ):
+        """The freeze lasts exactly as long as there is something to reverse."""
+        _stock(db, sample_org, box, 5)
+        self._picked(client, db, owner_token, owner_user, box)
+        booking = db.query(Booking).order_by(Booking.id.desc()).first()
+        undo_booking(db, booking_id=booking.id, performed_by=owner_user.id)
+
+        resp = client.patch(
+            f"/api/skus/{box.id}",
+            json={"bottle_sku_id": None},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["bottle_sku_id"] is None
+
+    def test_an_unpicked_order_does_not_freeze_the_link(
+        self, client, db, owner_token, sample_org, box
+    ):
+        """Nothing is credited yet, so there is nothing to give back wrongly."""
+        _stock(db, sample_org, box, 5)
+        client.post(
+            URL,
+            json={
+                "destination_location": "store",
+                "lines": [{"sku_id": box.id, "quantity": 2}],
+            },
+            headers=auth_header(owner_token),
+        )
+
+        resp = client.patch(
+            f"/api/skus/{box.id}",
+            json={"bottle_sku_id": None},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200, resp.text
+
+    def test_a_customer_order_leaves_the_link_free(
+        self, client, db, owner_token, owner_user, sample_org, box, bottle
+    ):
+        """Only replenishment credits bottles; a customer pick never does."""
+        _stock(db, sample_org, box, 5)
+        order = Order(
+            organization_id=sample_org.id,
+            reference="ORD-KLANT-LINK",
+            status="active",
+            order_kind="customer",
+        )
+        db.add(order)
+        db.flush()
+        line = OrderLine(
+            order_id=order.id, sku_id=box.id, klant="Klant", quantity=1
+        )
+        db.add(line)
+        db.commit()
+        _book_one(db, order, line, box.id, owner_user.id)
+
+        resp = client.patch(
+            f"/api/skus/{box.id}",
+            json={"bottle_sku_id": None},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200, resp.text

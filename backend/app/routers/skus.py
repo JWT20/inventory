@@ -18,6 +18,7 @@ from app.models import (
     Booking,
     InboundShipmentLine,
     InventoryBalance,
+    Order,
     OrderLine,
     Organization,
     ReferenceImage,
@@ -422,6 +423,37 @@ def _assert_no_incoming_box_links(db: Session, sku: SKU) -> None:
     )
 
 
+def _assert_bottle_link_not_in_flight(db: Session, sku: SKU) -> None:
+    """Refuse to move the link while picked bottles still hang off it.
+
+    A picked box is credited to the shop or webshop as bottles of whatever the
+    link pointed at *then*. Undoing that pick has to take those same bottles
+    back off the shelf, and the only record of which product they were is the
+    link itself. Repointing or clearing it mid-flight would either strand the
+    undo or hand the bottles back to the wrong product.
+
+    Only booked units block: before the first pick nothing has been credited,
+    and once every unit is undone the link is free to move again.
+    """
+    booked = (
+        db.query(OrderLine.id)
+        .join(Order, OrderLine.order_id == Order.id)
+        .filter(
+            OrderLine.sku_id == sku.id,
+            OrderLine.booked_count > 0,
+            Order.order_kind == "replenishment",
+            Order.status != "shipped",
+        )
+        .first()
+    )
+    if booked:
+        raise HTTPException(
+            409,
+            f"'{sku.name}' staat gepickt op een bevoorradingsorder; draai die "
+            "picks eerst terug of rond de order af voordat je de fles loskoppelt",
+        )
+
+
 def _is_ean_unique_violation(exc: IntegrityError) -> bool:
     """Whether an IntegrityError is the per-org EAN uniqueness violation.
 
@@ -804,6 +836,11 @@ def update_sku(
     # turned into a box.
     if sku.is_bottle and not resulting_is_bottle:
         _assert_no_incoming_box_links(db, sku)
+    if (
+        "bottle_sku_id" in changed_fields
+        and resulting_bottle_sku_id != sku.bottle_sku_id
+    ):
+        _assert_bottle_link_not_in_flight(db, sku)
     if "bottle_sku_id" in changed_fields:
         sku.bottle_sku_id = resulting_bottle_sku_id
 

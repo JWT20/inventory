@@ -124,6 +124,12 @@ def replenishment_credit(
     the order being placed and this pick: crediting nothing would silently
     destroy stock, and crediting the box itself would put a box in a pool that
     only holds bottles.
+
+    Undoing a pick runs through here too, and there the refusal would strand
+    the correction instead of preventing a bad one. That is why the catalog
+    holds the link still while units are booked
+    (``skus._assert_bottle_link_not_in_flight``): by the time undo asks, the
+    answer is the same one the pick got.
     """
     if order.order_kind != "replenishment" or not order.destination_location:
         return None
