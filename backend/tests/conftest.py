@@ -40,6 +40,7 @@ from app.config import settings  # noqa: E402
 from app.database import Base, get_db, get_async_session  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import SKU, Organization, User  # noqa: E402
+from app.services import scan_metrics  # noqa: E402
 from app.services.channel_credentials import store_access_token  # noqa: E402
 
 SQLALCHEMY_DATABASE_URL = "sqlite://"
@@ -121,6 +122,20 @@ def db():
         yield session
     finally:
         session.close()
+
+
+@pytest.fixture(autouse=True)
+def no_langfuse_tracing(monkeypatch):
+    """Keep the test suite out of the Langfuse project.
+
+    A developer or CI runner whose environment carries working Langfuse keys
+    would otherwise ship every test scan to the same project the couriers are
+    traced in — dozens of fixture traces per run, landing between real scans
+    and counted in the same error figures.
+    """
+    monkeypatch.setattr("app.config.settings.langfuse_public_key", "", raising=False)
+    monkeypatch.setattr("app.config.settings.langfuse_secret_key", "", raising=False)
+    scan_metrics.reset_pending()
 
 
 @pytest.fixture(autouse=True)

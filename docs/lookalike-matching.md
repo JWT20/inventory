@@ -83,13 +83,44 @@ anders zou elke schone scan om bevestiging vragen.
 |---|---|
 | geen close call | voorstel om te bevestigen, geen vision-call |
 | rerank zeker, SKU staat open | voorstel om te bevestigen |
-| rerank zeker, SKU staat **niet** open | 409 — geen boekknop, mét het onderscheidende kenmerk in de melding |
+| rerank zeker, SKU staat **niet** open, geen open variant dichtbij | 409 — geen boekknop, mét het onderscheidende kenmerk in de melding |
+| rerank zeker, SKU staat **niet** open, maar een open variant zit binnen `ambiguity_margin` van die keuze en lag in dezelfde vergelijking | keuzescherm met `manual_review_required`: de open variant met knop, de gekozen variant met foto en zonder knop |
 | rerank onzeker | keuzescherm: open SKU's met knop, lookalikes buiten scope met foto en zonder knop |
 | rerank herkent geen enkele kandidaat | 404/422 "niet herkend" — nooit terugvallen op de dichtstbijzijnde embedding |
 | rerank kon niet draaien (storing, uit) | voorstel, maar altijd met `confirmation_reason` — nooit stil doorboeken |
 
 De laatste twee regels zijn het hart: als de AI het niet zeker weet, is de
 uitkomst een vraag aan de picker, geen boeking.
+
+**Waarom "zeker" niet genoeg is om te blokkeren.** Over elke rerank sinds de
+pass live ging kwam `certainty` terug als `"high"` — ook bij antwoorden waar het
+beslissende detail niet eens in beeld stond, en ook bij `NONE`. Het veld
+onderscheidt dus niets. Daarom blokkeert een zeker verdict alleen nog als de
+vectorzoektocht niet tegenspreekt dat de doos iets anders is: staat er een open
+variant vlak achter de keuze van de rerank, dan is de eerlijke stand "twee
+lookalikes, onbeslist" en gaat die naar de picker. Hoe vaak de rerank de
+vectorranking overruled staat als score `rerank_override` op elke trace.
+
+## Waarom een weigering geen exception is
+
+Een geweigerde scan is een normale uitkomst, geen storing. `_scan_and_book`
+levert daarom een `ScanOutcome` op — voorstel of `ScanRejection` — en pas de
+routerfunctie maakt er een HTTP-antwoord van. Zolang de weigering als exception
+door de getracete span liep, was "verkeerde doos" in Langfuse niet te
+onderscheiden van "Gemini plat": op 18 augustus stond 58% van de scans op ERROR
+terwijl het overgrote deel gewone afwijzingen waren.
+
+Elke uitkomst draagt een `reason_code` — `not_ordered`, `sku_full`, `no_stock`,
+`cap_reached`, `not_recognized`, `not_a_package`, `needs_reference_image` — die
+zowel in de melding aan de picker als in de score `scan_outcome` terechtkomt.
+De trace draagt daarnaast `scope_best`, `catalogue_best`, `gap` en het
+rerank-verdict, zodat één observatie het hele verhaal vertelt.
+
+Wordt binnen tien minuten in dezelfde picksessie een SKU geboekt die bij een
+geweigerde scan als kandidaat op tafel lag, dan krijgt die weigering de score
+`recovered_after_rejection` (`services/scan_metrics.py`). Dat is de picker die
+zegt dat de doos wél boekbaar was — gratis ground truth om een promptwijziging
+of een nieuwe modelversie tegenaan te houden, zonder handmatig labelen.
 
 ## Niet-boekbare lookalikes in het keuzescherm
 
