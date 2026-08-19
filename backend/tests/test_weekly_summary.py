@@ -169,3 +169,114 @@ def test_weekly_summary_denies_courier(
         headers=auth_header(courier_token),
     )
     assert resp.status_code == 403
+
+
+def _bottle_with_stock(db, org, code, name, *, store=0, webshop=0, active=True):
+    from app.models import SKU, InventoryBalance
+
+    sku = SKU(
+        sku_code=code,
+        name=name,
+        organization_id=org.id,
+        product_type="vision",
+        is_bottle=True,
+        active=active,
+    )
+    db.add(sku)
+    db.commit()
+    for location, quantity in (("store", store), ("webshop", webshop)):
+        if quantity:
+            db.add(
+                InventoryBalance(
+                    sku_id=sku.id,
+                    organization_id=org.id,
+                    inventory_location=location,
+                    quantity_on_hand=quantity,
+                )
+            )
+    db.commit()
+    return sku
+
+
+def test_weekly_summary_reports_shop_and_webshop_stock(
+    client, db, owner_token, sample_org
+):
+    """Both pools separately plus their total: where it is, and whether to reorder."""
+    sku = _bottle_with_stock(db, sample_org, "FLES-VERK", "Verkoopwijn", store=4, webshop=7)
+
+    resp = client.get(
+        "/api/orders/weekly-summary",
+        params={"week": "2026-W34"},
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200, resp.text
+    item = next(i for i in resp.json()["sellable_stock"] if i["sku_id"] == sku.id)
+    assert (item["store"], item["webshop"], item["total"]) == (4, 7, 11)
+
+
+def test_empty_shelves_still_show(client, db, owner_token, sample_org):
+    """A product nobody ordered this week is exactly the one you must not lose."""
+    sku = _bottle_with_stock(db, sample_org, "FLES-LEEG", "Lege wijn")
+
+    resp = client.get(
+        "/api/orders/weekly-summary",
+        params={"week": "2026-W34"},
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200, resp.text
+    item = next(i for i in resp.json()["sellable_stock"] if i["sku_id"] == sku.id)
+    assert item["total"] == 0
+
+
+def test_warehouse_stock_is_not_counted_as_sellable(
+    client, db, owner_token, sample_org
+):
+    from app.models import InventoryBalance
+
+    sku = _bottle_with_stock(db, sample_org, "FLES-MAG", "Magazijnwijn", webshop=2)
+    db.add(
+        InventoryBalance(
+            sku_id=sku.id,
+            organization_id=sample_org.id,
+            inventory_location="warehouse",
+            quantity_on_hand=99,
+        )
+    )
+    db.commit()
+
+    resp = client.get(
+        "/api/orders/weekly-summary",
+        params={"week": "2026-W34"},
+        headers=auth_header(owner_token),
+    )
+
+    item = next(i for i in resp.json()["sellable_stock"] if i["sku_id"] == sku.id)
+    assert item["total"] == 2
+
+
+def test_boxes_and_inactive_bottles_stay_out(client, db, owner_token, sample_org):
+    from app.models import SKU
+
+    box = SKU(
+        sku_code="DOOS-VERK",
+        name="Verkoopdoos",
+        organization_id=sample_org.id,
+        product_type="vision",
+    )
+    db.add(box)
+    db.commit()
+    inactive = _bottle_with_stock(
+        db, sample_org, "FLES-UIT", "Uitgezette wijn", store=3, active=False
+    )
+
+    resp = client.get(
+        "/api/orders/weekly-summary",
+        params={"week": "2026-W34"},
+        headers=auth_header(owner_token),
+    )
+
+    listed = {i["sku_id"] for i in resp.json()["sellable_stock"]}
+    assert box.id not in listed
+    assert inactive.id not in listed

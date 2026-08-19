@@ -20,6 +20,7 @@ from app.auth import (
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
+    SELLABLE_INVENTORY_LOCATIONS,
     Customer,
     CustomerSKU,
     InventoryBalance,
@@ -45,6 +46,7 @@ from app.schemas import (
     OrderResponse,
     OrderUpdate,
     ReplenishmentOrderCreate,
+    SellableStockItem,
     WeeklyPickPhotoResponse,
     WeeklySummaryCustomer,
     WeeklySummaryCustomerLine,
@@ -814,6 +816,7 @@ def weekly_pick_photos(
 def _build_customer_response(
     week: str,
     enriched: list[dict],
+    sellable_stock: list[SellableStockItem],
 ) -> WeeklySummaryResponse:
     """Pivot enriched lines into Customer -> SKU lines for invoicing."""
     # customer_id (or None) keyed; name kept alongside for display + sort
@@ -897,6 +900,7 @@ def _build_customer_response(
         group_by="customer",
         suppliers=[],
         customers=customers_out,
+        sellable_stock=sellable_stock,
         grand_total_quantity=grand_total_qty,
         grand_total_boxes=grand_total_boxes,
         grand_total_bottles=grand_total_bottles,
@@ -1075,6 +1079,54 @@ def monthly_booked_boxes(
     )
 
 
+def _sellable_stock(db: Session, organization_id: int | None) -> list[SellableStockItem]:
+    """Bottle stock on the shop and webshop shelves, right now.
+
+    Not filtered by week: the point is to see what is running out so it can be
+    replenished, and a product missing from this week's orders is exactly the
+    one you would otherwise never notice was empty. Products with nothing left
+    in either pool still show, at zero — a shortage you cannot see is a
+    shortage you cannot fix.
+    """
+    rows = (
+        db.query(
+            SKU.id,
+            SKU.sku_code,
+            SKU.name,
+            InventoryBalance.inventory_location,
+            InventoryBalance.quantity_on_hand,
+        )
+        .outerjoin(
+            InventoryBalance,
+            and_(
+                InventoryBalance.sku_id == SKU.id,
+                InventoryBalance.organization_id == organization_id,
+                InventoryBalance.inventory_location.in_(SELLABLE_INVENTORY_LOCATIONS),
+            ),
+        )
+        .filter(
+            SKU.organization_id == organization_id,
+            SKU.is_bottle.is_(True),
+            SKU.active.is_(True),
+        )
+        .order_by(SKU.name)
+        .all()
+    )
+
+    items: dict[int, SellableStockItem] = {}
+    for sku_id, sku_code, sku_name, location, quantity in rows:
+        item = items.setdefault(
+            sku_id,
+            SellableStockItem(sku_id=sku_id, sku_code=sku_code, sku_name=sku_name),
+        )
+        if location == "store":
+            item.store = quantity or 0
+        elif location == "webshop":
+            item.webshop = quantity or 0
+        item.total = item.store + item.webshop
+    return list(items.values())
+
+
 @router.get("/weekly-summary", response_model=WeeklySummaryResponse)
 def weekly_order_summary(
     week: str = Query(None, description="ISO week, bijv. '2026-W15'. Standaard: huidige week."),
@@ -1152,6 +1204,8 @@ def weekly_order_summary(
             customers=[],
             grand_total_quantity=0,
             grand_total_value=0,
+            # A week without orders still has shelves that may be empty.
+            sellable_stock=_sellable_stock(db, org_id),
         )
 
     # Physical stock is live data. Load it in one query for every product and
@@ -1236,7 +1290,7 @@ def weekly_order_summary(
         })
 
     if group_by == "customer":
-        return _build_customer_response(week, enriched)
+        return _build_customer_response(week, enriched, _sellable_stock(db, org_id))
 
     # Group: supplier -> sku -> list of (customer_name, quantity, effective_price)
     supplier_groups: dict[tuple[int | None, str], dict[int, list]] = defaultdict(lambda: defaultdict(list))
@@ -1343,6 +1397,7 @@ def weekly_order_summary(
         group_by="supplier",
         suppliers=suppliers_out,
         customers=[],
+        sellable_stock=_sellable_stock(db, org_id),
         grand_total_quantity=grand_total_qty,
         grand_total_boxes=grand_total_boxes,
         grand_total_bottles=grand_total_bottles,
