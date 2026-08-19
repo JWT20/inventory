@@ -395,14 +395,17 @@ def _hold_across_pools(
         taken.append((pool, portion))
         remaining -= portion
     if remaining > 0:
-        # Reuse the shared shortage message so both hold paths read the same.
-        adjust_reservation(
-            db,
-            sku_id=sku_id,
-            organization_id=organization_id,
-            inventory_location=pools[0],
-            delta=remaining,
-            require_available=True,
+        # Say it outright rather than provoking the shared guard into saying it:
+        # that call would only raise while the preferred pool is still empty, and
+        # on the day it is not, it would quietly hold stock no line accounts for.
+        # The number that matters here is what the two shelves hold together,
+        # which is also the number the caller can do something about.
+        sku = db.get(SKU, sku_id)
+        sku_code = sku.sku_code if sku else str(sku_id)
+        raise HTTPException(
+            409,
+            f"Onvoldoende voorraad voor {sku_code}: "
+            f"{quantity - remaining} beschikbaar, {quantity} nodig",
         )
     return taken
 

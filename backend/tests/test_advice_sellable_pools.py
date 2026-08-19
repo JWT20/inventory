@@ -449,3 +449,16 @@ class TestTheOldPoolNameKeepsWorking:
 
         assert resp.status_code == 200, resp.text
         assert resp.json()["duplicate"] is True
+
+
+def test_a_shortage_counts_both_shelves_together(
+    client, db, sample_org, monkeypatch
+):
+    """The caller can act on the pooled number, not on one shelf's share."""
+    _configure(monkeypatch, sample_org.id)
+    _bottle(db, sample_org, "prd_a", store=1, webshop=1, warehouse=99)
+
+    resp = client.post(RESERVATIONS_URL, json=_payload(), headers=_headers())
+
+    assert resp.status_code == 409
+    assert "2 beschikbaar, 4 nodig" in resp.json()["detail"]
