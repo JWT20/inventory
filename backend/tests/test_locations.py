@@ -284,3 +284,67 @@ class TestBulkCreate:
         resp = client.post(self.URL, json=self._body(), headers=auth_header(token))
 
         assert resp.status_code == 403
+
+
+class TestLocationIsShownForWine:
+    """A bottle is picked by photo, but the picker still has to walk to it."""
+
+    def _linked_bottle(self, client, db, courier_token, code="B-A-01"):
+        org = _org(db, "wijnloc-org")
+        org.modules = list(org.modules) + ["vision_picking", "week_overview"]
+        db.commit()
+        sku = _bottle_sku(db, org, "FLES-LOC")
+        loc_id = _create(client, courier_token, code).json()["id"]
+        client.post(f"/api/locations/{loc_id}/skus", json={"sku_id": sku.id},
+                    headers=auth_header(courier_token))
+        return org, sku
+
+    def test_order_line_carries_the_shelf(self, client, db, courier_token):
+        from app.models import Order, OrderLine
+
+        org, sku = self._linked_bottle(client, db, courier_token)
+        order = Order(organization_id=org.id, reference="ORD-LOC", status="active")
+        db.add(order)
+        db.flush()
+        db.add(OrderLine(order_id=order.id, sku_id=sku.id, klant="Klant", quantity=1))
+        db.commit()
+
+        resp = client.get(f"/api/orders/{order.id}", headers=auth_header(courier_token))
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["lines"][0]["pick_location"] == "B-A-01"
+
+    def test_week_photos_carry_the_shelf(self, client, db, courier_token):
+        from app.models import Order, OrderLine, ReferenceImage
+
+        org, sku = self._linked_bottle(client, db, courier_token, code="B-A-02")
+        db.add(ReferenceImage(sku_id=sku.id, image_path="f.jpg", processing_status="done"))
+        order = Order(organization_id=org.id, reference="ORD-LOC-WK", status="active")
+        db.add(order)
+        db.flush()
+        db.add(OrderLine(order_id=order.id, sku_id=sku.id, klant="Klant", quantity=2))
+        db.commit()
+
+        resp = client.get("/api/orders/weekly-pick-photos", headers=auth_header(courier_token))
+
+        assert resp.status_code == 200, resp.text
+        item = next(i for i in resp.json() if i["sku_id"] == sku.id)
+        assert item["pick_location"] == "B-A-02"
+
+    def test_a_wine_box_has_no_shelf(self, client, db, courier_token):
+        """A box is matched per order, so it never reports a fixed spot."""
+        from app.models import Order, OrderLine
+
+        org = _org(db, "doosloc-org")
+        org.modules = list(org.modules) + ["vision_picking"]
+        db.commit()
+        box = _vision_sku(db, org, "DOOS-LOC")
+        order = Order(organization_id=org.id, reference="ORD-DOOS", status="active")
+        db.add(order)
+        db.flush()
+        db.add(OrderLine(order_id=order.id, sku_id=box.id, klant="Klant", quantity=1))
+        db.commit()
+
+        resp = client.get(f"/api/orders/{order.id}", headers=auth_header(courier_token))
+
+        assert resp.json()["lines"][0]["pick_location"] is None

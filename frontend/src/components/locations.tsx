@@ -555,7 +555,7 @@ function ManageSkusDialog({
         </div>
 
         <div className="space-y-2 pt-2 border-t">
-          <Label>Product toevoegen (alleen barcode)</Label>
+          <Label>Product toevoegen</Label>
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}

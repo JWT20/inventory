@@ -588,6 +588,9 @@ class WeeklyPickPhotoResponse(BaseModel):
     quantity: int
     booked_count: int
     customers: list[str] = []
+    # Waar dit product in het magazijn ligt, als het aan een schap gekoppeld is.
+    # Puur informatie: wijn wordt op foto herkend, niet op een scan van het schap.
+    pick_location: str | None = None
 
 
 class NextPickResponse(BaseModel):
@@ -805,6 +808,10 @@ class BookingConfirmation(BaseModel):
     confidence: float
     klant: str = ""
     rolcontainer: str = ""
+    # Waar dit product ligt, als het aan een schap gekoppeld is — handig om de
+    # volgende van dezelfde wijn te halen. Alleen tonen, nooit scannen: wijn
+    # wordt op foto herkend.
+    pick_location: str | None = None
     scan_image_url: str
     reference_image_url: str
     reference_image_urls: list[str] = []

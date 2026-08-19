@@ -304,6 +304,28 @@ class SKU(Base):
     )
 
     @property
+    def primary_location_code(self) -> str | None:
+        """Code of this product's primary pick location, if it has one.
+
+        Only *active* locations count — an inactive one would send the picker
+        into the location phase for a shelf that /scan-location then rejects
+        with a 404. Prefers the ``is_primary`` link, else the first active one.
+
+        A barcode product is verified against this code by scanning it; for a
+        loose bottle it is only shown, because wine is matched by photo. NULL
+        for anything not on an active shelf — a whole wine box never is.
+        """
+        active = [
+            link
+            for link in (self.location_links or [])
+            if link.location and link.location.active
+        ]
+        if not active:
+            return None
+        primary = next((link for link in active if link.is_primary), active[0])
+        return primary.location.code
+
+    @property
     def attributes_dict(self) -> dict[str, str]:
         """Return attributes as a {key: value} dictionary."""
         return {a.key: a.value for a in self.attributes}

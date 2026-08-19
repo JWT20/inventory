@@ -98,6 +98,11 @@ export function ThisWeekStep({ week: initialWeek, onBack }: { week: string; onBa
               <p className="mt-2 truncate text-sm font-medium" title={item.wine_name}>
                 {item.wine_name}
               </p>
+              {item.pick_location && (
+                <p className="truncate text-xs font-medium">
+                  📍 {item.pick_location}
+                </p>
+              )}
               {item.customers.length > 0 && (
                 <p
                   className="truncate text-xs text-muted-foreground"
