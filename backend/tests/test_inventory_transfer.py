@@ -246,3 +246,50 @@ def test_unknown_pool_is_refused(client, db, owner_token, sample_org):
     )
 
     assert resp.status_code == 422
+
+
+def test_both_pools_are_locked_in_one_fixed_order(db, sample_org):
+    """Two operations taking the same rows in opposite orders deadlock.
+
+    A transfer touches two pools and so does a replenishment pick, so they have
+    to agree on the sequence rather than each picking a sensible-looking one.
+    """
+    from app.services.stock import INVENTORY_LOCK_ORDER, lock_ordered
+
+    # A pick books the warehouse first, so the shared order has to start there.
+    assert INVENTORY_LOCK_ORDER[0] == "warehouse"
+    # Whichever way the goods travel, the same sequence comes out.
+    assert lock_ordered(["store", "warehouse"]) == lock_ordered(
+        ["warehouse", "store"]
+    ) == ["warehouse", "store"]
+    assert lock_ordered(["store", "webshop"]) == lock_ordered(
+        ["webshop", "store"]
+    ) == ["webshop", "store"]
+    # A pool nobody thought of still lands somewhere defined, not at random.
+    assert lock_ordered(["zolder", "store"]) == ["store", "zolder"]
+
+
+def test_a_move_out_of_the_shop_locks_the_warehouse_first(
+    client, db, owner_token, sample_org, monkeypatch
+):
+    """The direction of the goods must not decide the locking order."""
+    seen: list[str] = []
+    import app.routers.inventory as inventory_router
+
+    original = inventory_router.apply_stock_movement
+
+    def _record(*args, **kwargs):
+        seen.append(kwargs["inventory_location"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(inventory_router, "apply_stock_movement", _record)
+    sku = _stocked(db, sample_org, warehouse=10, store=8)
+
+    resp = client.post(
+        URL,
+        json=_body(sku, quantity=2, from_location="store", to_location="warehouse"),
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert seen == ["warehouse", "store"]

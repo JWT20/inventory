@@ -79,7 +79,7 @@ from app.services.embedding import (
 from app.services.langfuse_client import PromptUnavailableError
 from app.services.pricing import calc_effective_price
 from app.services.inventory_sync import push_inventory_to_channels
-from app.services.stock import apply_stock_movement
+from app.services.stock import apply_stock_movement, lock_ordered
 from app.services.storage import storage
 
 logger = logging.getLogger(__name__)
@@ -1642,8 +1642,10 @@ def transfer_inventory(
     try:
         # Always touch the two pools in the same order, whichever way the goods
         # are going, so two opposite transfers of the same SKU cannot deadlock
-        # on each other's row lock.
-        for location in sorted(quantities):
+        # on each other's row lock. Alphabetical would do that for transfers
+        # alone, but a pick books the warehouse first, so the shared order is
+        # the one every multi-pool operation uses.
+        for location in lock_ordered(quantities):
             movements[location] = apply_stock_movement(
                 db,
                 sku_id=data.sku_id,
