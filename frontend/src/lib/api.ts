@@ -530,6 +530,14 @@ export const api = {
   // Inventory
   listInventoryOverview: (qs = "") => request(`/inventory/overview${qs}`),
   listAdviceReservations: (qs = "") => request(`/advice-reservations${qs}`),
+  adviceStatus: (orgId?: number) =>
+    request(`/channels/advice/status${orgId ? `?organization_id=${orgId}` : ""}`),
+  adviceSetMode: (mode: "observe" | "live", orgId?: number) =>
+    json(
+      `/channels/advice/mode${orgId ? `?organization_id=${orgId}` : ""}`,
+      "POST",
+      { mode },
+    ),
   listAdviceOrders: (qs = "") => request(`/advice-orders${qs}`),
   extractShipmentPreview: (
     blob: Blob,

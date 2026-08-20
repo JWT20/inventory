@@ -5,9 +5,18 @@ vi.mock("@/App", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
+// The page reads the signed-in user to decide who may flip the wijnadvies
+// switch. This suite renders it without an auth provider, so stub the hook.
+vi.mock("@/lib/auth", () => ({
+  useAuth: () => ({ user: { is_platform_admin: true } }),
+}));
+
 vi.mock("@/lib/api", () => ({
   api: {
     listOrganizations: vi.fn(),
+    adviceStatus: vi.fn(),
+    adviceSetMode: vi.fn(),
+    listAdviceOrders: vi.fn(),
     channelReconciliation: vi.fn(),
     bolChannelReconciliation: vi.fn(),
     listAdviceReservations: vi.fn(),
@@ -41,6 +50,8 @@ describe("bol Admin channel card", () => {
     vi.mocked(api.channelReconciliation).mockResolvedValue(emptyRecon);
     vi.mocked(api.bolChannelReconciliation).mockResolvedValue(emptyRecon);
     vi.mocked(api.listAdviceReservations).mockResolvedValue([]);
+    vi.mocked(api.listAdviceOrders).mockResolvedValue([]);
+    vi.mocked(api.adviceStatus).mockResolvedValue({ mode: "observe" });
     vi.mocked(api.bolChannelConnect).mockResolvedValue({
       connected: true,
       shop_domain: null,

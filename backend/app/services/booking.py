@@ -13,6 +13,8 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models import SKU, Booking, Order, OrderLine
+from app.services import advice_holds
+from app.services.advice_holds import hold_for_order
 from app.services.stock import (
     BOTTLES_PER_BOX,
     adjust_reservation,
@@ -220,25 +222,58 @@ def apply_booking(
     #    touch the shared reservation, or it would release stock a channel order
     #    still holds and cause overselling. Same transaction: a later stock 409
     #    rolls the release back too.
-    if order.channel != "manual":
+    #
+    #    An advice order is the exception to "one order, one pool". Its bottles
+    #    were held at payment, possibly split over the shop and the webshop, so
+    #    the hold decides which shelf each unit comes off — see services/
+    #    advice_holds.py. Whatever the hold does not cover falls back to the
+    #    order's own pool, so a scan that outruns its reservation still books
+    #    somewhere real instead of failing in the warehouse.
+    hold = hold_for_order(db, order)
+    portions = (
+        advice_holds.consume(db, hold, sku_id, quantity) if hold is not None else []
+    )
+    for pool, portion in portions:
         adjust_reservation(
             db,
             sku_id=sku_id,
             organization_id=order.organization_id,
-            inventory_location=order.inventory_location,
-            delta=-quantity,
+            inventory_location=pool,
+            delta=-portion,
         )
-    apply_stock_movement(
-        db,
-        sku_id=sku_id,
-        organization_id=order.organization_id,
-        quantity=-quantity,
-        movement_type="pick",
-        reference_type="booking",
-        reference_id=last_booking.id,
-        performed_by=scanned_by,
-        inventory_location=order.inventory_location,
-    )
+        apply_stock_movement(
+            db,
+            sku_id=sku_id,
+            organization_id=order.organization_id,
+            quantity=-portion,
+            movement_type="pick",
+            reference_type="booking",
+            reference_id=last_booking.id,
+            performed_by=scanned_by,
+            inventory_location=pool,
+        )
+
+    uncovered = quantity - sum(portion for _, portion in portions)
+    if uncovered > 0:
+        if order.channel != "manual" and hold is None:
+            adjust_reservation(
+                db,
+                sku_id=sku_id,
+                organization_id=order.organization_id,
+                inventory_location=order.inventory_location,
+                delta=-uncovered,
+            )
+        apply_stock_movement(
+            db,
+            sku_id=sku_id,
+            organization_id=order.organization_id,
+            quantity=-uncovered,
+            movement_type="pick",
+            reference_type="booking",
+            reference_id=last_booking.id,
+            performed_by=scanned_by,
+            inventory_location=order.inventory_location,
+        )
 
     # 5b. A replenishment order does not leave the building: what came off the
     #     warehouse lands in the merchant's own pool, as bottles. Same
@@ -354,17 +389,44 @@ def undo_booking(db: Session, *, booking_id: int, performed_by: int) -> UndoResu
     db.flush()
 
     # Restock (+1). Positive ``pick`` movement → nets out against the original.
-    apply_stock_movement(
-        db,
-        sku_id=sku_id,
-        organization_id=org_id,
-        quantity=1,
-        movement_type="pick",
-        reference_type="booking_undo",
-        reference_id=None,
-        performed_by=performed_by,
-        inventory_location=order.inventory_location,
-    )
+    # An advice order goes back onto the shelf the hold gave it, not onto the
+    # order's pool: the two can differ, and restocking the wrong shelf would
+    # move a bottle across the shop by undoing a scan.
+    hold = hold_for_order(db, order)
+    restored = advice_holds.restore(db, hold, sku_id, 1) if hold is not None else []
+    for pool, portion in restored:
+        apply_stock_movement(
+            db,
+            sku_id=sku_id,
+            organization_id=org_id,
+            quantity=portion,
+            movement_type="pick",
+            reference_type="booking_undo",
+            reference_id=None,
+            performed_by=performed_by,
+            inventory_location=pool,
+        )
+        adjust_reservation(
+            db,
+            sku_id=sku_id,
+            organization_id=org_id,
+            inventory_location=pool,
+            delta=portion,
+        )
+
+    uncovered = 1 - sum(portion for _, portion in restored)
+    if uncovered > 0:
+        apply_stock_movement(
+            db,
+            sku_id=sku_id,
+            organization_id=org_id,
+            quantity=uncovered,
+            movement_type="pick",
+            reference_type="booking_undo",
+            reference_id=None,
+            performed_by=performed_by,
+            inventory_location=order.inventory_location,
+        )
     # Take the replenished bottles back out of the destination pool. Booked and
     # undone must net to zero in both pools, not just the one goods came from.
     credit = replenishment_credit(db, order, sku_id, 1)
@@ -390,8 +452,9 @@ def undo_booking(db: Session, *, booking_id: int, performed_by: int) -> UndoResu
 
     # Re-reserve the unit the order still needs (inverse of the pick release).
     # Only for channel orders, mirroring apply_booking — a manual undo must not
-    # inflate the shared reservation.
-    if order.channel != "manual":
+    # inflate the shared reservation. An advice unit covered by its hold was
+    # already re-reserved on its own shelf above.
+    if order.channel != "manual" and uncovered > 0 and hold is None:
         adjust_reservation(
             db,
             sku_id=sku_id,

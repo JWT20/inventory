@@ -1,9 +1,8 @@
-"""The advice app as a sales channel, in observe mode.
+"""The advice app as a sales channel.
 
-The advice app's delivery orders need to become real orders here, because
-picking and the shipping-label gate both hang off an ``Order`` row. They must
-*not* become work yet: nobody has agreed a delivery flow, and stock is still
-reserved through ``advice_reservations``.
+The advice app's delivery orders become real orders here, because picking and
+the shipping-label gate both hang off an ``Order`` row. Whether they also become
+*work* is the operator's call, not the importer's.
 
 ``ChannelConnection.mode`` is the existing answer to exactly that problem. It is
 what keeps imported Shopify and bol orders inert until an operator flips the
@@ -33,10 +32,6 @@ from app.models import ChannelConnection, Organization, User
 #: ``ChannelSyncLog.channel``. Deliberately not "wijnadvies": the surrounding
 #: code, config and API keys all call this integration "advice".
 ADVICE_CHANNEL = "advice"
-
-
-class AdviceChannelNotObserving(RuntimeError):
-    """The advice connection is live, and nothing here implements live yet."""
 
 
 def resolve_advice_organization(
@@ -93,16 +88,17 @@ def advice_connection(db: Session, organization_id: int) -> ChannelConnection:
     return connection
 
 
-def assert_advice_observing(connection: ChannelConnection) -> None:
-    """Refuse to import while the connection claims to be live.
+def advice_is_live(connection: ChannelConnection) -> bool:
+    """Whether delivery orders from the advice app become pickable work.
 
-    Live means born-active, pickable orders whose reservation is consumed by the
-    pick booking instead of at the counter. None of that is built. Setting the
-    mode by hand would otherwise produce orders that reserve stock twice — once
-    as an advice hold, once as a pick — and the discrepancy would only surface
-    when a customer is standing at the door. Fail loudly instead.
+    Observe keeps them inert: visible in Kanalen, out of Scan & Boek and the
+    order list. Live makes a newly arriving order born-active, and its hold is
+    then settled by the pick instead of by the advice app's own collect (see
+    ``services/advice_holds.py``).
+
+    Only what arrives *after* the switch is affected. Promoting orders that were
+    already observed would activate deliveries whose bottles may have been
+    handed over by hand in the meantime, and no flag can tell those apart — so
+    the handful in flight at go-live are finished the way they were started.
     """
-    if connection.mode != "observe":
-        raise AdviceChannelNotObserving(
-            "De wijnadvies-koppeling staat op live, maar live is nog niet gebouwd"
-        )
+    return connection.mode == "live"
