@@ -5,6 +5,8 @@ router (manual counts/adjustments, shipment booking) and the receiving router
 (picking decrements bookings against stock). Lives in a service so neither
 router has to import the other.
 """
+from collections.abc import Iterable
+
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -13,6 +15,31 @@ from app.models import SKU, InventoryBalance, StockMovement
 
 
 DEFAULT_INVENTORY_LOCATION = "warehouse"
+
+# The order in which balance rows are locked, whenever a single operation
+# touches more than one pool. Two operations that take the same two rows in
+# opposite orders can each hold one and wait for the other, so every caller
+# sorts by this and nothing else. The sequence itself is arbitrary — what
+# matters is that there is only one. The warehouse leads because a pick already
+# starts there, which keeps booking and undo in step without reordering them.
+INVENTORY_LOCK_ORDER = ("warehouse", "webshop", "store")
+
+
+def lock_ordered(locations: Iterable[str]) -> list[str]:
+    """``locations`` in the one order every multi-pool operation locks them in.
+
+    Anything unrecognised sorts last, by name, so a pool added to the catalog
+    without being added here still has a defined position instead of a random
+    one.
+    """
+    return sorted(
+        locations,
+        key=lambda location: (
+            (INVENTORY_LOCK_ORDER.index(location), "")
+            if location in INVENTORY_LOCK_ORDER
+            else (len(INVENTORY_LOCK_ORDER), location)
+        ),
+    )
 
 
 def apply_stock_movement(

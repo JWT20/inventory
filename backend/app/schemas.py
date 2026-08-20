@@ -1326,8 +1326,8 @@ class InventoryAdjustRequest(BaseModel):
 class InventoryTransferRequest(BaseModel):
     sku_id: int
     quantity: int = Field(..., gt=0)
-    from_location: Literal["warehouse", "store"]
-    to_location: Literal["warehouse", "store"]
+    from_location: InventoryLocation
+    to_location: InventoryLocation
     note: str | None = None
     organization_id: int | None = None
 
@@ -1348,8 +1348,8 @@ class InventoryTransferBalance(BaseModel):
 class InventoryTransferResponse(BaseModel):
     sku_id: int
     quantity: int
-    from_location: Literal["warehouse", "store"]
-    to_location: Literal["warehouse", "store"]
+    from_location: InventoryLocation
+    to_location: InventoryLocation
     # Both sides after the move, so the caller never has to guess what the
     # other pool now holds.
     balances: list[InventoryTransferBalance]

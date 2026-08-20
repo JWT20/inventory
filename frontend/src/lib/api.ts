@@ -578,8 +578,8 @@ export const api = {
   transferInventory: (
     skuId: number,
     quantity: number,
-    fromLocation: "warehouse" | "store",
-    toLocation: "warehouse" | "store",
+    fromLocation: InventoryLocation,
+    toLocation: InventoryLocation,
     note: string | null,
     organizationId: number | null = null,
   ) =>

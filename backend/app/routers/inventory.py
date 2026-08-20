@@ -79,7 +79,7 @@ from app.services.embedding import (
 from app.services.langfuse_client import PromptUnavailableError
 from app.services.pricing import calc_effective_price
 from app.services.inventory_sync import push_inventory_to_channels
-from app.services.stock import apply_stock_movement
+from app.services.stock import apply_stock_movement, lock_ordered
 from app.services.storage import storage
 
 logger = logging.getLogger(__name__)
@@ -1614,14 +1614,14 @@ def transfer_inventory(
     db: Session = Depends(get_db),
     user: User = Depends(require_merchant_inbound),
 ):
-    """Move stock between the warehouse and the shop in one booking.
+    """Move stock between any two pools in one booking.
 
     Doing this as two separate adjustments can strand halfway and lose the goods
     on paper, and leaves two unrelated rows in the movement log. Here both sides
     live or die together and point at each other.
 
     Couriers are excluded on purpose: they may not decide to move goods onto the
-    merchant's shop shelf.
+    merchant's shop shelf or into their webshop stock.
     """
     sku = db.get(SKU, data.sku_id)
     if not sku:
@@ -1642,8 +1642,10 @@ def transfer_inventory(
     try:
         # Always touch the two pools in the same order, whichever way the goods
         # are going, so two opposite transfers of the same SKU cannot deadlock
-        # on each other's row lock.
-        for location in sorted(quantities):
+        # on each other's row lock. Alphabetical would do that for transfers
+        # alone, but a pick books the warehouse first, so the shared order is
+        # the one every multi-pool operation uses.
+        for location in lock_ordered(quantities):
             movements[location] = apply_stock_movement(
                 db,
                 sku_id=data.sku_id,
@@ -1669,9 +1671,13 @@ def transfer_inventory(
         db.rollback()
         raise
 
-    # Only warehouse availability is mirrored to Shopify/bol, and a transfer
-    # always changes it. Wine has no EAN, so for bottles this is a no-op.
-    background_tasks.add_task(push_inventory_to_channels, data.sku_id, organization_id)
+    # Only warehouse availability is mirrored to Shopify/bol, so a move between
+    # the shop and the webshop leaves the channels untouched. Wine has no EAN,
+    # so for bottles this is a no-op anyway.
+    if "warehouse" in (data.from_location, data.to_location):
+        background_tasks.add_task(
+            push_inventory_to_channels, data.sku_id, organization_id
+        )
 
     publish_event(
         "inventory_transferred",

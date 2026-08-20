@@ -1,4 +1,4 @@
-"""Moving stock between the warehouse and the shop as one booking."""
+"""Moving stock between two pools as one booking."""
 
 from app.models import InventoryBalance, SKU, StockMovement
 from tests.conftest import auth_header
@@ -150,3 +150,146 @@ def test_couriers_may_not_move_goods_onto_the_shop_shelf(
     assert resp.status_code == 403
     db.expire_all()
     assert _balance(db, sku.id, "warehouse").quantity_on_hand == 10
+
+
+def test_transfer_into_the_webshop_pool(client, db, owner_token, sample_org):
+    sku = _stocked(db, sample_org, warehouse=10)
+
+    resp = client.post(
+        URL,
+        json=_body(sku, to_location="webshop"),
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    assert _balance(db, sku.id, "warehouse").quantity_on_hand == 4
+    assert _balance(db, sku.id, "webshop").quantity_on_hand == 6
+
+
+def test_transfer_between_shop_and_webshop_skips_the_warehouse(
+    client, db, owner_token, sample_org
+):
+    """The two sellable pools exchange stock without the warehouse noticing."""
+    sku = _stocked(db, sample_org, warehouse=10, store=8)
+
+    resp = client.post(
+        URL,
+        json=_body(sku, quantity=5, from_location="store", to_location="webshop"),
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    assert _balance(db, sku.id, "store").quantity_on_hand == 3
+    assert _balance(db, sku.id, "webshop").quantity_on_hand == 5
+    assert _balance(db, sku.id, "warehouse").quantity_on_hand == 10
+
+
+def test_response_lists_every_pool_the_product_sits_in(
+    client, db, owner_token, sample_org
+):
+    sku = _stocked(db, sample_org, warehouse=10, store=4)
+
+    resp = client.post(
+        URL,
+        json=_body(sku, quantity=2, to_location="webshop"),
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert {
+        (b["inventory_location"], b["quantity_on_hand"])
+        for b in resp.json()["balances"]
+    } == {("warehouse", 8), ("store", 4), ("webshop", 2)}
+
+
+def test_short_webshop_balance_leaves_both_pools_untouched(
+    client, db, owner_token, sample_org
+):
+    sku = _stocked(db, sample_org, warehouse=10, store=2)
+
+    resp = client.post(
+        URL,
+        json=_body(sku, quantity=5, from_location="store", to_location="webshop"),
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 409
+    db.expire_all()
+    assert _balance(db, sku.id, "store").quantity_on_hand == 2
+    assert _balance(db, sku.id, "webshop") is None
+    assert db.query(StockMovement).filter_by(sku_id=sku.id).count() == 0
+
+
+def test_couriers_may_not_move_goods_into_the_webshop_pool(
+    client, db, courier_token, sample_org
+):
+    sku = _stocked(db, sample_org, warehouse=10)
+
+    resp = client.post(
+        URL,
+        json=_body(sku, to_location="webshop", organization_id=sample_org.id),
+        headers=auth_header(courier_token),
+    )
+
+    assert resp.status_code == 403
+    db.expire_all()
+    assert _balance(db, sku.id, "warehouse").quantity_on_hand == 10
+
+
+def test_unknown_pool_is_refused(client, db, owner_token, sample_org):
+    sku = _stocked(db, sample_org, warehouse=10)
+
+    resp = client.post(
+        URL, json=_body(sku, to_location="zolder"), headers=auth_header(owner_token)
+    )
+
+    assert resp.status_code == 422
+
+
+def test_both_pools_are_locked_in_one_fixed_order(db, sample_org):
+    """Two operations taking the same rows in opposite orders deadlock.
+
+    A transfer touches two pools and so does a replenishment pick, so they have
+    to agree on the sequence rather than each picking a sensible-looking one.
+    """
+    from app.services.stock import INVENTORY_LOCK_ORDER, lock_ordered
+
+    # A pick books the warehouse first, so the shared order has to start there.
+    assert INVENTORY_LOCK_ORDER[0] == "warehouse"
+    # Whichever way the goods travel, the same sequence comes out.
+    assert lock_ordered(["store", "warehouse"]) == lock_ordered(
+        ["warehouse", "store"]
+    ) == ["warehouse", "store"]
+    assert lock_ordered(["store", "webshop"]) == lock_ordered(
+        ["webshop", "store"]
+    ) == ["webshop", "store"]
+    # A pool nobody thought of still lands somewhere defined, not at random.
+    assert lock_ordered(["zolder", "store"]) == ["store", "zolder"]
+
+
+def test_a_move_out_of_the_shop_locks_the_warehouse_first(
+    client, db, owner_token, sample_org, monkeypatch
+):
+    """The direction of the goods must not decide the locking order."""
+    seen: list[str] = []
+    import app.routers.inventory as inventory_router
+
+    original = inventory_router.apply_stock_movement
+
+    def _record(*args, **kwargs):
+        seen.append(kwargs["inventory_location"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(inventory_router, "apply_stock_movement", _record)
+    sku = _stocked(db, sample_org, warehouse=10, store=8)
+
+    resp = client.post(
+        URL,
+        json=_body(sku, quantity=2, from_location="store", to_location="warehouse"),
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert seen == ["warehouse", "store"]
