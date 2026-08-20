@@ -674,3 +674,41 @@ def test_replenishment_surfaces_in_the_week_pick_screen(
 
     assert resp.status_code == 200, resp.text
     assert box.id in {item["sku_id"] for item in resp.json()}
+
+
+def test_a_pick_locks_the_pools_in_the_shared_order(
+    db, client, owner_token, owner_user, sample_org, bottle, monkeypatch
+):
+    """A loose-bottle replenishment touches the same two rows a transfer does.
+
+    Both take the warehouse row and one shelf row, so if they disagree on the
+    sequence each can hold one and wait for the other. The pick books the
+    warehouse first; this pins that it stays that way.
+    """
+    from app.services.stock import lock_ordered
+    import app.services.booking as booking_module
+
+    seen: list[str] = []
+    original = booking_module.apply_stock_movement
+
+    def _record(*args, **kwargs):
+        seen.append(kwargs["inventory_location"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(booking_module, "apply_stock_movement", _record)
+    _stock(db, sample_org, bottle, 10)
+
+    created = client.post(
+        URL,
+        json={
+            "destination_location": "store",
+            "lines": [{"sku_id": bottle.id, "quantity": 1}],
+        },
+        headers=auth_header(owner_token),
+    )
+    assert created.status_code == 201, created.text
+    order = db.get(Order, created.json()["id"])
+    _book_one(db, order, order.lines[0], bottle.id, owner_user.id)
+
+    assert seen == ["warehouse", "store"]
+    assert seen == lock_ordered(seen)

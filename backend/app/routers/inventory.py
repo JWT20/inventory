@@ -79,11 +79,11 @@ from app.services.embedding import (
 from app.services.langfuse_client import PromptUnavailableError
 from app.services.pricing import calc_effective_price
 from app.services.inventory_sync import push_inventory_to_channels
-from app.services.stock import apply_stock_movement, lock_ordered
 from app.services.stock import (
     BOTTLES_PER_BOX,
     LOCATION_LABELS,
     apply_stock_movement,
+    lock_ordered,
 )
 from app.services.storage import storage
 
