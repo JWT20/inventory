@@ -129,6 +129,17 @@ export function MonthlyBoxesPage() {
     load();
   }, [load]);
 
+  // A merchant without the wijnadvies connection can never have a webshop
+  // order, so offering the tab would only ever show them an empty table and
+  // leave them wondering what they are missing.
+  const hasWebshop = (webshop?.months.length ?? 0) > 0;
+
+  useEffect(() => {
+    // Switching to a merchant without webshop work must not strand the view on
+    // a tab that is no longer there.
+    if (!hasWebshop) setTab("customer");
+  }, [hasWebshop]);
+
   const shown = tab === "webshop" ? webshop : report;
   // Decided per merchant, not per month row: the table has one set of headers,
   // so a month without barcode orders keeps the columns and shows 0.
@@ -164,7 +175,7 @@ export function MonthlyBoxesPage() {
         </Select>
       </div>
 
-      {selectedOrganizationId && (
+      {selectedOrganizationId && hasWebshop && (
         <div className="inline-flex rounded-md border border-border overflow-hidden mb-4 text-sm">
           <button
             type="button"
