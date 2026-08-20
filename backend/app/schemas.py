@@ -1539,6 +1539,12 @@ class SellableStockItem(BaseModel):
     store: int = 0
     webshop: int = 0
     total: int = 0
+    # Wat er in het magazijn ligt om mee bij te vullen. Dozen en flessen apart:
+    # ze staan er ook apart, en een doos moet nog gepickt worden voordat er
+    # flessen op de plank staan. Niet meegeteld in `total` — dit is niet te
+    # verkopen, het is wat je kunt bijbestellen.
+    warehouse_boxes: int = 0
+    warehouse_bottles: int = 0
 
 
 class WeeklySummaryResponse(BaseModel):

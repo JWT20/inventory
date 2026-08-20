@@ -1087,6 +1087,11 @@ def _sellable_stock(db: Session, organization_id: int | None) -> list[SellableSt
     one you would otherwise never notice was empty. Products with nothing left
     in either pool still show, at zero — a shortage you cannot see is a
     shortage you cannot fix.
+
+    Each row also carries what the warehouse holds to refill it with: loose
+    bottles of the product itself, and boxes of whichever box is linked to it.
+    Seeing the shelf is empty is only half an answer — the other half is
+    whether there is anything to fetch.
     """
     rows = (
         db.query(
@@ -1124,6 +1129,45 @@ def _sellable_stock(db: Session, organization_id: int | None) -> list[SellableSt
         elif location == "webshop":
             item.webshop = quantity or 0
         item.total = item.store + item.webshop
+
+    if not items:
+        return []
+
+    # Loose bottles of the product itself, sitting in the warehouse.
+    bottle_ids = list(items)
+    for sku_id, quantity in (
+        db.query(InventoryBalance.sku_id, InventoryBalance.quantity_on_hand)
+        .filter(
+            InventoryBalance.sku_id.in_(bottle_ids),
+            InventoryBalance.organization_id == organization_id,
+            InventoryBalance.inventory_location == "warehouse",
+        )
+        .all()
+    ):
+        items[sku_id].warehouse_bottles = quantity or 0
+
+    # Boxes in the warehouse that would become bottles of this product. Summed
+    # over every box pointing at it: the same wine may arrive in more than one
+    # kind of case, and both refill the same shelf.
+    box_rows = (
+        db.query(SKU.bottle_sku_id, InventoryBalance.quantity_on_hand)
+        .join(
+            InventoryBalance,
+            and_(
+                InventoryBalance.sku_id == SKU.id,
+                InventoryBalance.organization_id == organization_id,
+                InventoryBalance.inventory_location == "warehouse",
+            ),
+        )
+        .filter(
+            SKU.organization_id == organization_id,
+            SKU.bottle_sku_id.in_(bottle_ids),
+        )
+        .all()
+    )
+    for bottle_sku_id, quantity in box_rows:
+        items[bottle_sku_id].warehouse_boxes += quantity or 0
+
     return list(items.values())
 
 

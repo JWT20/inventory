@@ -280,3 +280,99 @@ def test_boxes_and_inactive_bottles_stay_out(client, db, owner_token, sample_org
     listed = {i["sku_id"] for i in resp.json()["sellable_stock"]}
     assert box.id not in listed
     assert inactive.id not in listed
+
+
+def test_sellable_block_shows_what_the_warehouse_can_refill_with(
+    client, db, owner_token, sample_org
+):
+    """An empty shelf is only half an answer; the other half is what to fetch."""
+    from app.models import SKU, InventoryBalance
+
+    bottle = _bottle_with_stock(db, sample_org, "FLES-BIJ", "Bijvulwijn", store=2)
+    db.add(
+        InventoryBalance(
+            sku_id=bottle.id,
+            organization_id=sample_org.id,
+            inventory_location="warehouse",
+            quantity_on_hand=5,
+        )
+    )
+    box = SKU(
+        sku_code="DOOS-BIJ",
+        name="Bijvulwijn doos",
+        organization_id=sample_org.id,
+        product_type="vision",
+        bottle_sku_id=bottle.id,
+    )
+    db.add(box)
+    db.commit()
+    db.add(
+        InventoryBalance(
+            sku_id=box.id,
+            organization_id=sample_org.id,
+            inventory_location="warehouse",
+            quantity_on_hand=7,
+        )
+    )
+    db.commit()
+
+    resp = client.get(
+        "/api/orders/weekly-summary",
+        params={"week": "2026-W34"},
+        headers=auth_header(owner_token),
+    )
+
+    item = next(i for i in resp.json()["sellable_stock"] if i["sku_id"] == bottle.id)
+    assert (item["warehouse_boxes"], item["warehouse_bottles"]) == (7, 5)
+    # The warehouse is not sellable, so it stays out of the total.
+    assert item["total"] == 2
+
+
+def test_warehouse_boxes_add_up_over_every_linked_box(
+    client, db, owner_token, sample_org
+):
+    """The same wine may arrive in more than one case; both refill one shelf."""
+    from app.models import SKU, InventoryBalance
+
+    bottle = _bottle_with_stock(db, sample_org, "FLES-TWEE", "Tweedozenwijn")
+    for code, quantity in (("DOOS-TWEE-A", 3), ("DOOS-TWEE-B", 4)):
+        box = SKU(
+            sku_code=code,
+            name=code,
+            organization_id=sample_org.id,
+            product_type="vision",
+            bottle_sku_id=bottle.id,
+        )
+        db.add(box)
+        db.commit()
+        db.add(
+            InventoryBalance(
+                sku_id=box.id,
+                organization_id=sample_org.id,
+                inventory_location="warehouse",
+                quantity_on_hand=quantity,
+            )
+        )
+    db.commit()
+
+    resp = client.get(
+        "/api/orders/weekly-summary",
+        params={"week": "2026-W34"},
+        headers=auth_header(owner_token),
+    )
+
+    item = next(i for i in resp.json()["sellable_stock"] if i["sku_id"] == bottle.id)
+    assert item["warehouse_boxes"] == 7
+
+
+def test_an_unlinked_wine_reports_no_boxes(client, db, owner_token, sample_org):
+    bottle = _bottle_with_stock(db, sample_org, "FLES-SOLO", "Solowijn", webshop=3)
+
+    resp = client.get(
+        "/api/orders/weekly-summary",
+        params={"week": "2026-W34"},
+        headers=auth_header(owner_token),
+    )
+
+    item = next(i for i in resp.json()["sellable_stock"] if i["sku_id"] == bottle.id)
+    assert (item["warehouse_boxes"], item["warehouse_bottles"]) == (0, 0)

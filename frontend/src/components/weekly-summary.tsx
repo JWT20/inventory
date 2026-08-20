@@ -76,6 +76,8 @@ interface SellableStockItem {
   store: number;
   webshop: number;
   total: number;
+  warehouse_boxes: number;
+  warehouse_bottles: number;
 }
 
 type GroupBy = "supplier" | "customer";
@@ -111,6 +113,22 @@ function shiftWeek(week: string, delta: number): string {
   const dayOfWeek = monday.getDay() || 7;
   monday.setDate(monday.getDate() - dayOfWeek + 1 + (Number(w) - 1) * 7 + delta * 7);
   return getISOWeek(monday);
+}
+
+// Dozen en flessen apart houden: een doos moet nog gepickt worden voordat er
+// flessen op de plank staan, dus optellen zou een aantal suggereren dat er niet
+// als zodanig ligt.
+function formatWarehouse(item: SellableStockItem): string {
+  const parts: string[] = [];
+  if (item.warehouse_boxes > 0) {
+    parts.push(`${item.warehouse_boxes} ${item.warehouse_boxes === 1 ? "doos" : "dozen"}`);
+  }
+  if (item.warehouse_bottles > 0) {
+    parts.push(
+      `${item.warehouse_bottles} ${item.warehouse_bottles === 1 ? "fles" : "flessen"}`,
+    );
+  }
+  return parts.length > 0 ? parts.join(" · ") : "\u2013";
 }
 
 function formatPrice(v: number | null): string {
@@ -244,6 +262,7 @@ export function WeeklySummaryPage() {
                     <TableHead className="text-right">Webshop</TableHead>
                     <TableHead className="text-right">Winkel</TableHead>
                     <TableHead className="text-right">Totaal</TableHead>
+                    <TableHead className="text-right">Magazijn</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -266,13 +285,18 @@ export function WeeklySummaryPage() {
                       <TableCell className="text-right tabular-nums font-medium">
                         {item.total}
                       </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {formatWarehouse(item)}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
               <p className="px-4 py-2 text-xs text-muted-foreground">
-                Losse flessen die de webshop kan verkopen. Los van de gekozen
-                week &mdash; bestel bij via Orders &rarr; + Voorraad.
+                Losse flessen die de webshop kan verkopen. Magazijn telt niet mee
+                in het totaal &mdash; dat is wat je kunt bijbestellen, nog niet
+                wat je kunt verkopen. Los van de gekozen week; bestel bij via
+                Orders &rarr; + Voorraad.
               </p>
             </div>
           )}
