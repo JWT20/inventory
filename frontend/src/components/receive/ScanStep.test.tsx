@@ -155,3 +155,60 @@ describe("ScanStep feedback", () => {
     expect(mocks.toastDismiss).toHaveBeenLastCalledWith("scan-feedback");
   });
 });
+
+describe("ScanStep camera cleanup", () => {
+  it("stops a stream that only arrives after the screen is gone", async () => {
+    // The permission prompt can outlast the screen: tap back before answering
+    // it and the stream lands on a component nobody owns any more. Left alone
+    // it keeps the camera — and the camera light — on until the tab closes.
+    let grantCamera!: (stream: MediaStream) => void;
+    mocks.getUserMedia.mockReturnValue(
+      new Promise<MediaStream>((resolve) => {
+        grantCamera = resolve;
+      }),
+    );
+
+    const view = renderScanStep();
+    view.unmount();
+    grantCamera({
+      getTracks: () => [{ stop: mocks.stopTrack }],
+    } as unknown as MediaStream);
+
+    await waitFor(() => expect(mocks.stopTrack).toHaveBeenCalled());
+  });
+
+  it("stops the stream on a normal leave", async () => {
+    const view = renderScanStep();
+    await screen.findByRole("button", { name: "Scan" });
+
+    view.unmount();
+
+    await waitFor(() => expect(mocks.stopTrack).toHaveBeenCalled());
+  });
+
+  it("stays quiet when the camera fails after the screen is gone", async () => {
+    let refuseCamera!: (reason: Error) => void;
+    mocks.getUserMedia.mockReturnValue(
+      new Promise<MediaStream>((_resolve, reject) => {
+        refuseCamera = reject;
+      }),
+    );
+
+    const view = renderScanStep();
+    view.unmount();
+    refuseCamera(new Error("NotAllowedError"));
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mocks.toastError).not.toHaveBeenCalledWith("Camera niet beschikbaar");
+  });
+
+  it("still reports a camera failure while the screen is open", async () => {
+    mocks.getUserMedia.mockRejectedValue(new Error("NotAllowedError"));
+
+    renderScanStep();
+
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith("Camera niet beschikbaar"),
+    );
+  });
+});
