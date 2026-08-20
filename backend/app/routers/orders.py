@@ -1079,6 +1079,15 @@ def monthly_booked_boxes(
     )
 
 
+def _available(quantity_on_hand: int | None, quantity_reserved: int | None) -> int:
+    """What is left of a balance once its holds are taken off.
+
+    Never below zero: a reservation that outruns the shelf is a discrepancy to
+    settle with a stock count, not a negative number to show on a shelf list.
+    """
+    return max((quantity_on_hand or 0) - (quantity_reserved or 0), 0)
+
+
 def _sellable_stock(db: Session, organization_id: int | None) -> list[SellableStockItem]:
     """Bottle stock on the shop and webshop shelves, right now.
 
@@ -1092,6 +1101,11 @@ def _sellable_stock(db: Session, organization_id: int | None) -> list[SellableSt
     bottles of the product itself, and boxes of whichever box is linked to it.
     Seeing the shelf is empty is only half an answer — the other half is
     whether there is anything to fetch.
+
+    Every number is what is *available*, not what is physically standing there:
+    reserved bottles are spoken for by an advice-app hold or a channel order and
+    cannot be sold or fetched twice. Reporting on-hand here would call a shelf
+    full while every bottle on it already belongs to somebody.
     """
     rows = (
         db.query(
@@ -1100,6 +1114,7 @@ def _sellable_stock(db: Session, organization_id: int | None) -> list[SellableSt
             SKU.name,
             InventoryBalance.inventory_location,
             InventoryBalance.quantity_on_hand,
+            InventoryBalance.quantity_reserved,
         )
         .outerjoin(
             InventoryBalance,
@@ -1119,15 +1134,15 @@ def _sellable_stock(db: Session, organization_id: int | None) -> list[SellableSt
     )
 
     items: dict[int, SellableStockItem] = {}
-    for sku_id, sku_code, sku_name, location, quantity in rows:
+    for sku_id, sku_code, sku_name, location, quantity, reserved in rows:
         item = items.setdefault(
             sku_id,
             SellableStockItem(sku_id=sku_id, sku_code=sku_code, sku_name=sku_name),
         )
         if location == "store":
-            item.store = quantity or 0
+            item.store = _available(quantity, reserved)
         elif location == "webshop":
-            item.webshop = quantity or 0
+            item.webshop = _available(quantity, reserved)
         item.total = item.store + item.webshop
 
     if not items:
@@ -1135,8 +1150,12 @@ def _sellable_stock(db: Session, organization_id: int | None) -> list[SellableSt
 
     # Loose bottles of the product itself, sitting in the warehouse.
     bottle_ids = list(items)
-    for sku_id, quantity in (
-        db.query(InventoryBalance.sku_id, InventoryBalance.quantity_on_hand)
+    for sku_id, quantity, reserved in (
+        db.query(
+            InventoryBalance.sku_id,
+            InventoryBalance.quantity_on_hand,
+            InventoryBalance.quantity_reserved,
+        )
         .filter(
             InventoryBalance.sku_id.in_(bottle_ids),
             InventoryBalance.organization_id == organization_id,
@@ -1144,13 +1163,17 @@ def _sellable_stock(db: Session, organization_id: int | None) -> list[SellableSt
         )
         .all()
     ):
-        items[sku_id].warehouse_bottles = quantity or 0
+        items[sku_id].warehouse_bottles = _available(quantity, reserved)
 
     # Boxes in the warehouse that would become bottles of this product. Summed
     # over every box pointing at it: the same wine may arrive in more than one
     # kind of case, and both refill the same shelf.
     box_rows = (
-        db.query(SKU.bottle_sku_id, InventoryBalance.quantity_on_hand)
+        db.query(
+            SKU.bottle_sku_id,
+            InventoryBalance.quantity_on_hand,
+            InventoryBalance.quantity_reserved,
+        )
         .join(
             InventoryBalance,
             and_(
@@ -1165,8 +1188,8 @@ def _sellable_stock(db: Session, organization_id: int | None) -> list[SellableSt
         )
         .all()
     )
-    for bottle_sku_id, quantity in box_rows:
-        items[bottle_sku_id].warehouse_boxes += quantity or 0
+    for bottle_sku_id, quantity, reserved in box_rows:
+        items[bottle_sku_id].warehouse_boxes += _available(quantity, reserved)
 
     return list(items.values())
 

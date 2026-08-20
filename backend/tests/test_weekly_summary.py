@@ -376,3 +376,83 @@ def test_an_unlinked_wine_reports_no_boxes(client, db, owner_token, sample_org):
 
     item = next(i for i in resp.json()["sellable_stock"] if i["sku_id"] == bottle.id)
     assert (item["warehouse_boxes"], item["warehouse_bottles"]) == (0, 0)
+
+
+def test_sellable_stock_leaves_out_what_is_already_reserved(
+    client, db, owner_token, sample_org
+):
+    """The block is headed "what the webshop can sell", so a bottle an advice
+    hold has already claimed must not be counted twice."""
+    from app.models import InventoryBalance
+
+    sku = _bottle_with_stock(db, sample_org, "FLES-RES", "Gereserveerde wijn", webshop=10)
+    balance = (
+        db.query(InventoryBalance)
+        .filter_by(sku_id=sku.id, inventory_location="webshop")
+        .one()
+    )
+    balance.quantity_reserved = 4
+    db.commit()
+
+    resp = client.get(
+        "/api/orders/weekly-summary",
+        params={"week": "2026-W34"},
+        headers=auth_header(owner_token),
+    )
+
+    item = next(i for i in resp.json()["sellable_stock"] if i["sku_id"] == sku.id)
+    assert (item["webshop"], item["store"], item["total"]) == (6, 0, 6)
+
+
+def test_a_shelf_reserved_beyond_its_stock_reads_as_empty(
+    client, db, owner_token, sample_org
+):
+    """A hold outrunning the shelf is a discrepancy for a stock count to settle,
+    not a negative number to put in front of the merchant."""
+    from app.models import InventoryBalance
+
+    sku = _bottle_with_stock(db, sample_org, "FLES-NEG", "Scheve wijn", store=2)
+    balance = (
+        db.query(InventoryBalance)
+        .filter_by(sku_id=sku.id, inventory_location="store")
+        .one()
+    )
+    balance.quantity_reserved = 5
+    db.commit()
+
+    resp = client.get(
+        "/api/orders/weekly-summary",
+        params={"week": "2026-W34"},
+        headers=auth_header(owner_token),
+    )
+
+    item = next(i for i in resp.json()["sellable_stock"] if i["sku_id"] == sku.id)
+    assert (item["store"], item["total"]) == (0, 0)
+
+
+def test_reserved_warehouse_stock_is_not_offered_as_refill(
+    client, db, owner_token, sample_org
+):
+    """A box a channel order already holds cannot be fetched to fill a shelf."""
+    from app.models import InventoryBalance
+
+    sku = _bottle_with_stock(db, sample_org, "FLES-MAGRES", "Magazijnwijn")
+    db.add(
+        InventoryBalance(
+            sku_id=sku.id,
+            organization_id=sample_org.id,
+            inventory_location="warehouse",
+            quantity_on_hand=9,
+            quantity_reserved=3,
+        )
+    )
+    db.commit()
+
+    resp = client.get(
+        "/api/orders/weekly-summary",
+        params={"week": "2026-W34"},
+        headers=auth_header(owner_token),
+    )
+
+    item = next(i for i in resp.json()["sellable_stock"] if i["sku_id"] == sku.id)
+    assert item["warehouse_bottles"] == 6
