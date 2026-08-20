@@ -8,8 +8,9 @@ export interface OrderLine {
   quantity: number;
   booked_count: number;
   is_bottle: boolean;
-  // Scannable code of this product's pick location (barcode only). null when
-  // the product has no shelf, or for vision orders.
+  // Code of this product's pick location. The EAN flow verifies it by scanning;
+  // for a loose bottle it is only shown, because wine is matched by photo. null
+  // when the product has no shelf — a whole wine box never has one.
   pick_location?: string | null;
 }
 
@@ -95,6 +96,8 @@ export interface BookingResult {
   sku_name: string;
   klant: string;
   rolcontainer: string;
+  // Waar dit product ligt, als het aan een schap gekoppeld is.
+  pick_location?: string | null;
   needs_confirmation?: boolean;
   scan_image_url?: string;
   reference_image_urls?: string[];
@@ -175,11 +178,16 @@ export interface WeeklyPickPhoto {
   quantity: number;
   booked_count: number;
   customers: string[];
+  // Waar het product ligt, als het aan een schap gekoppeld is. Alleen tonen:
+  // wijn wordt op foto herkend, niet op een scan van het schap.
+  pick_location?: string | null;
 }
 
 export interface NextPick {
   sku_id: number;
   sku_name: string;
+  // Waar het product ligt, als het aan een schap gekoppeld is.
+  pick_location?: string | null;
   order_line_id: number;
   image_url: string | null;
   remaining_quantity: number;

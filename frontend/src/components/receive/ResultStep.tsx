@@ -109,6 +109,12 @@ export function ResultStep({
             <span className="text-muted-foreground">Klant:</span>{" "}
             {booking.klant}
           </p>
+          {booking.pick_location && (
+            <p className="text-sm">
+              <span className="text-muted-foreground">Locatie:</span>{" "}
+              <span className="font-semibold">📍 {booking.pick_location}</span>
+            </p>
+          )}
         </div>
 
         {/* Scan vs referentie vergelijking */}

@@ -28,6 +28,7 @@ from app.models import (
     OrderLine,
     Organization,
     SKU,
+    SKULocation,
     Supplier,
     User,
 )
@@ -108,25 +109,6 @@ def _report_month(finalized_at: datetime.datetime) -> str:
     return finalized_at.astimezone(WAREHOUSE_TZ).strftime("%Y-%m")
 
 
-def _primary_location_code(sku) -> str | None:
-    """Scannable code of a barcode product's primary pick location, if any.
-
-    Only *active* locations count — an inactive one would send the picker into
-    the location phase for a shelf that /scan-location then rejects with a 404.
-    Prefers the ``is_primary`` link; falls back to the first active one. NULL for
-    vision products and barcode products not on an active shelf.
-    """
-    active = [
-        lnk
-        for lnk in (getattr(sku, "location_links", None) or [])
-        if lnk.location and lnk.location.active
-    ]
-    if not active:
-        return None
-    primary = next((lnk for lnk in active if lnk.is_primary), active[0])
-    return primary.location.code
-
-
 def _order_line_to_response(
     line: OrderLine,
     sku_default_prices: dict[int, float | None],
@@ -183,7 +165,7 @@ def _order_line_to_response(
         has_image=len(line.sku.reference_images) > 0 or line.sku.product_type == "barcode",
         is_bottle=line.sku.is_bottle,
         is_item=line.sku.product_type == "barcode",
-        pick_location=_primary_location_code(line.sku),
+        pick_location=line.sku.primary_location_code,
         show_prices=customer_show_prices,
         unit_price=unit_price if customer_show_prices else None,
         discount_type=discount_type if customer_show_prices else None,
@@ -730,6 +712,11 @@ def weekly_pick_photos(
         .join(Order, OrderLine.order_id == Order.id)
         .options(
             selectinload(OrderLine.sku).selectinload(SKU.reference_images),
+            # The shelf a linked bottle stands on; without this the location
+            # lookup below fires one query per line.
+            selectinload(OrderLine.sku)
+            .selectinload(SKU.location_links)
+            .selectinload(SKULocation.location),
             selectinload(OrderLine.customer),
         )
         .filter(
@@ -806,6 +793,7 @@ def weekly_pick_photos(
                 quantity=sum(l.quantity for l in sku_lines),
                 booked_count=sum(l.booked_count for l in sku_lines),
                 customers=customers,
+                pick_location=line.sku.primary_location_code,
             )
         )
 
@@ -1498,6 +1486,7 @@ def _to_next_pick(line: OrderLine, order: Order, source: str) -> NextPickRespons
         sku_name=line.sku.name,
         order_line_id=line.id,
         image_url=_next_pick_image_url(line),
+        pick_location=line.sku.primary_location_code,
         remaining_quantity=max(line.quantity - line.booked_count, 0),
         source=source,
         order_id=order.id,
@@ -1542,6 +1531,12 @@ def next_pick(
     bottle = scan_mode == "bottle"
     pick_options = (
         selectinload(Order.lines).selectinload(OrderLine.sku).selectinload(SKU.reference_images),
+        # The shelf the suggested product stands on; without this the lookup
+        # fires one query per line.
+        selectinload(Order.lines)
+        .selectinload(OrderLine.sku)
+        .selectinload(SKU.location_links)
+        .selectinload(SKULocation.location),
         selectinload(Order.lines).selectinload(OrderLine.customer),
     )
     order = (
