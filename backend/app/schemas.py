@@ -1525,11 +1525,36 @@ class WeeklySummaryCustomer(BaseModel):
     customer_total_value: float | None = None
 
 
+class SellableStockItem(BaseModel):
+    """One bottle product with the stock the webshop can actually sell.
+
+    Shop and webshop are separate physical places but one sellable pool, so both
+    are reported next to their total — you need the split to know where to walk,
+    and the total to know whether to reorder.
+    """
+
+    sku_id: int
+    sku_code: str
+    sku_name: str
+    store: int = 0
+    webshop: int = 0
+    total: int = 0
+    # Wat er in het magazijn ligt om mee bij te vullen. Dozen en flessen apart:
+    # ze staan er ook apart, en een doos moet nog gepickt worden voordat er
+    # flessen op de plank staan. Niet meegeteld in `total` — dit is niet te
+    # verkopen, het is wat je kunt bijbestellen.
+    warehouse_boxes: int = 0
+    warehouse_bottles: int = 0
+
+
 class WeeklySummaryResponse(BaseModel):
     week: str
     group_by: Literal["supplier", "customer"] = "supplier"
     suppliers: list[WeeklySummarySupplier] = []
     customers: list[WeeklySummaryCustomer] = []
+    # Independent of the week: what is on the shop and webshop shelves right
+    # now, so a shortage can be spotted and replenished from the same screen.
+    sellable_stock: list[SellableStockItem] = []
     grand_total_quantity: int = 0
     grand_total_boxes: int = 0
     grand_total_bottles: int = 0

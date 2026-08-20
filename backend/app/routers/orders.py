@@ -20,6 +20,7 @@ from app.auth import (
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
+    SELLABLE_INVENTORY_LOCATIONS,
     Customer,
     CustomerSKU,
     InventoryBalance,
@@ -45,6 +46,7 @@ from app.schemas import (
     OrderResponse,
     OrderUpdate,
     ReplenishmentOrderCreate,
+    SellableStockItem,
     WeeklyPickPhotoResponse,
     WeeklySummaryCustomer,
     WeeklySummaryCustomerLine,
@@ -814,6 +816,7 @@ def weekly_pick_photos(
 def _build_customer_response(
     week: str,
     enriched: list[dict],
+    sellable_stock: list[SellableStockItem],
 ) -> WeeklySummaryResponse:
     """Pivot enriched lines into Customer -> SKU lines for invoicing."""
     # customer_id (or None) keyed; name kept alongside for display + sort
@@ -897,6 +900,7 @@ def _build_customer_response(
         group_by="customer",
         suppliers=[],
         customers=customers_out,
+        sellable_stock=sellable_stock,
         grand_total_quantity=grand_total_qty,
         grand_total_boxes=grand_total_boxes,
         grand_total_bottles=grand_total_bottles,
@@ -1075,6 +1079,121 @@ def monthly_booked_boxes(
     )
 
 
+def _available(quantity_on_hand: int | None, quantity_reserved: int | None) -> int:
+    """What is left of a balance once its holds are taken off.
+
+    Never below zero: a reservation that outruns the shelf is a discrepancy to
+    settle with a stock count, not a negative number to show on a shelf list.
+    """
+    return max((quantity_on_hand or 0) - (quantity_reserved or 0), 0)
+
+
+def _sellable_stock(db: Session, organization_id: int | None) -> list[SellableStockItem]:
+    """Bottle stock on the shop and webshop shelves, right now.
+
+    Not filtered by week: the point is to see what is running out so it can be
+    replenished, and a product missing from this week's orders is exactly the
+    one you would otherwise never notice was empty. Products with nothing left
+    in either pool still show, at zero — a shortage you cannot see is a
+    shortage you cannot fix.
+
+    Each row also carries what the warehouse holds to refill it with: loose
+    bottles of the product itself, and boxes of whichever box is linked to it.
+    Seeing the shelf is empty is only half an answer — the other half is
+    whether there is anything to fetch.
+
+    Every number is what is *available*, not what is physically standing there:
+    reserved bottles are spoken for by an advice-app hold or a channel order and
+    cannot be sold or fetched twice. Reporting on-hand here would call a shelf
+    full while every bottle on it already belongs to somebody.
+    """
+    rows = (
+        db.query(
+            SKU.id,
+            SKU.sku_code,
+            SKU.name,
+            InventoryBalance.inventory_location,
+            InventoryBalance.quantity_on_hand,
+            InventoryBalance.quantity_reserved,
+        )
+        .outerjoin(
+            InventoryBalance,
+            and_(
+                InventoryBalance.sku_id == SKU.id,
+                InventoryBalance.organization_id == organization_id,
+                InventoryBalance.inventory_location.in_(SELLABLE_INVENTORY_LOCATIONS),
+            ),
+        )
+        .filter(
+            SKU.organization_id == organization_id,
+            SKU.is_bottle.is_(True),
+            SKU.active.is_(True),
+        )
+        .order_by(SKU.name)
+        .all()
+    )
+
+    items: dict[int, SellableStockItem] = {}
+    for sku_id, sku_code, sku_name, location, quantity, reserved in rows:
+        item = items.setdefault(
+            sku_id,
+            SellableStockItem(sku_id=sku_id, sku_code=sku_code, sku_name=sku_name),
+        )
+        if location == "store":
+            item.store = _available(quantity, reserved)
+        elif location == "webshop":
+            item.webshop = _available(quantity, reserved)
+        item.total = item.store + item.webshop
+
+    if not items:
+        return []
+
+    # Loose bottles of the product itself, sitting in the warehouse.
+    bottle_ids = list(items)
+    for sku_id, quantity, reserved in (
+        db.query(
+            InventoryBalance.sku_id,
+            InventoryBalance.quantity_on_hand,
+            InventoryBalance.quantity_reserved,
+        )
+        .filter(
+            InventoryBalance.sku_id.in_(bottle_ids),
+            InventoryBalance.organization_id == organization_id,
+            InventoryBalance.inventory_location == "warehouse",
+        )
+        .all()
+    ):
+        items[sku_id].warehouse_bottles = _available(quantity, reserved)
+
+    # Boxes in the warehouse that would become bottles of this product. Summed
+    # over every box pointing at it: the same wine may arrive in more than one
+    # kind of case, and both refill the same shelf.
+    box_rows = (
+        db.query(
+            SKU.bottle_sku_id,
+            InventoryBalance.quantity_on_hand,
+            InventoryBalance.quantity_reserved,
+        )
+        .join(
+            InventoryBalance,
+            and_(
+                InventoryBalance.sku_id == SKU.id,
+                InventoryBalance.organization_id == organization_id,
+                InventoryBalance.inventory_location == "warehouse",
+            ),
+        )
+        .filter(
+            SKU.organization_id == organization_id,
+            SKU.bottle_sku_id.in_(bottle_ids),
+        )
+        .all()
+    )
+    for bottle_sku_id, quantity, reserved in box_rows:
+        items[bottle_sku_id].warehouse_boxes += _available(quantity, reserved)
+
+    return list(items.values())
+
+
 @router.get("/weekly-summary", response_model=WeeklySummaryResponse)
 def weekly_order_summary(
     week: str = Query(None, description="ISO week, bijv. '2026-W15'. Standaard: huidige week."),
@@ -1152,6 +1271,8 @@ def weekly_order_summary(
             customers=[],
             grand_total_quantity=0,
             grand_total_value=0,
+            # A week without orders still has shelves that may be empty.
+            sellable_stock=_sellable_stock(db, org_id),
         )
 
     # Physical stock is live data. Load it in one query for every product and
@@ -1236,7 +1357,7 @@ def weekly_order_summary(
         })
 
     if group_by == "customer":
-        return _build_customer_response(week, enriched)
+        return _build_customer_response(week, enriched, _sellable_stock(db, org_id))
 
     # Group: supplier -> sku -> list of (customer_name, quantity, effective_price)
     supplier_groups: dict[tuple[int | None, str], dict[int, list]] = defaultdict(lambda: defaultdict(list))
@@ -1343,6 +1464,7 @@ def weekly_order_summary(
         group_by="supplier",
         suppliers=suppliers_out,
         customers=[],
+        sellable_stock=_sellable_stock(db, org_id),
         grand_total_quantity=grand_total_qty,
         grand_total_boxes=grand_total_boxes,
         grand_total_bottles=grand_total_bottles,

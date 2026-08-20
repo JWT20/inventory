@@ -69,6 +69,17 @@ interface CustomerGroup {
   customer_total_value: number | null;
 }
 
+interface SellableStockItem {
+  sku_id: number;
+  sku_code: string;
+  sku_name: string;
+  store: number;
+  webshop: number;
+  total: number;
+  warehouse_boxes: number;
+  warehouse_bottles: number;
+}
+
 type GroupBy = "supplier" | "customer";
 
 interface WeeklySummary {
@@ -76,6 +87,7 @@ interface WeeklySummary {
   group_by: GroupBy;
   suppliers: SupplierGroup[];
   customers: CustomerGroup[];
+  sellable_stock: SellableStockItem[];
   grand_total_quantity: number;
   grand_total_boxes: number;
   grand_total_bottles: number;
@@ -83,6 +95,7 @@ interface WeeklySummary {
 }
 
 const GROUP_BY_STORAGE_KEY = "weekly-summary:group-by";
+const SELLABLE_COLLAPSE_KEY = "sellable-stock";
 
 function getISOWeek(date: Date): string {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
@@ -100,6 +113,22 @@ function shiftWeek(week: string, delta: number): string {
   const dayOfWeek = monday.getDay() || 7;
   monday.setDate(monday.getDate() - dayOfWeek + 1 + (Number(w) - 1) * 7 + delta * 7);
   return getISOWeek(monday);
+}
+
+// Dozen en flessen apart houden: een doos moet nog gepickt worden voordat er
+// flessen op de plank staan, dus optellen zou een aantal suggereren dat er niet
+// als zodanig ligt.
+function formatWarehouse(item: SellableStockItem): string {
+  const parts: string[] = [];
+  if (item.warehouse_boxes > 0) {
+    parts.push(`${item.warehouse_boxes} ${item.warehouse_boxes === 1 ? "doos" : "dozen"}`);
+  }
+  if (item.warehouse_bottles > 0) {
+    parts.push(
+      `${item.warehouse_bottles} ${item.warehouse_bottles === 1 ? "fles" : "flessen"}`,
+    );
+  }
+  return parts.length > 0 ? parts.join(" · ") : "\u2013";
 }
 
 function formatPrice(v: number | null): string {
@@ -148,6 +177,11 @@ export function WeeklySummaryPage() {
       // ignore storage failures
     }
   };
+
+  const sellableTotal = (data?.sellable_stock ?? []).reduce(
+    (sum, item) => sum + item.total,
+    0,
+  );
 
   const toggleCollapse = (key: string) => {
     setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -201,6 +235,73 @@ export function WeeklySummaryPage() {
           Per klant
         </button>
       </div>
+
+      {!loading && data && data.sellable_stock.length > 0 && (
+        <Card className="mb-4 overflow-hidden">
+          <button
+            className="w-full px-4 py-3 flex justify-between items-center text-left hover:bg-muted/50 transition-colors"
+            onClick={() => toggleCollapse(SELLABLE_COLLAPSE_KEY)}
+          >
+            <div>
+              <span className="font-semibold">Webshop &amp; winkel</span>
+              <span className="ml-2 text-sm text-muted-foreground">
+                {sellableTotal} fles{sellableTotal === 1 ? "" : "sen"} op de plank
+              </span>
+            </div>
+            <span className="text-muted-foreground text-xs">
+              {collapsed[SELLABLE_COLLAPSE_KEY] ? "\u25B6" : "\u25BC"}
+            </span>
+          </button>
+
+          {!collapsed[SELLABLE_COLLAPSE_KEY] && (
+            <div className="border-t border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Wijn</TableHead>
+                    <TableHead className="text-right">Webshop</TableHead>
+                    <TableHead className="text-right">Winkel</TableHead>
+                    <TableHead className="text-right">Totaal</TableHead>
+                    <TableHead className="text-right">Magazijn</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.sellable_stock.map((item) => (
+                    <TableRow key={item.sku_id}>
+                      <TableCell>
+                        {item.sku_name}
+                        {item.total === 0 && (
+                          <Badge variant="inactive" className="ml-2">
+                            leeg
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {item.webshop}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {item.store}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums font-medium">
+                        {item.total}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {formatWarehouse(item)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              <p className="px-4 py-2 text-xs text-muted-foreground">
+                Losse flessen die de webshop kan verkopen. Magazijn telt niet mee
+                in het totaal &mdash; dat is wat je kunt bijbestellen, nog niet
+                wat je kunt verkopen. Los van de gekozen week; bestel bij via
+                Orders &rarr; + Voorraad.
+              </p>
+            </div>
+          )}
+        </Card>
+      )}
 
       {loading && (
         <div className="space-y-4">
