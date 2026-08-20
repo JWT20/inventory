@@ -180,24 +180,32 @@ def test_stock_endpoint_returns_only_configured_organization_bottles(
                 "sku_code": "WIJN-001",
                 "is_bottle": True,
                 "quantity_available": 8,
+                "quantity_store": 8,
+                "quantity_webshop": 0,
             },
             {
                 "source_product_id": None,
                 "sku_code": "WIJN-002",
                 "is_bottle": True,
                 "quantity_available": 0,
+                "quantity_store": 0,
+                "quantity_webshop": 0,
             },
             {
                 "source_product_id": None,
                 "sku_code": "WIJN-003",
                 "is_bottle": True,
                 "quantity_available": 0,
+                "quantity_store": 0,
+                "quantity_webshop": 0,
             },
             {
                 "source_product_id": None,
                 "sku_code": "WIJN-004",
                 "is_bottle": True,
                 "quantity_available": 0,
+                "quantity_store": 0,
+                "quantity_webshop": 0,
             },
         ]
     }
@@ -256,12 +264,16 @@ def test_stock_endpoint_keeps_case_distinct_skus(
                 "sku_code": "WIJN-CASE",
                 "is_bottle": True,
                 "quantity_available": 3,
+                "quantity_store": 3,
+                "quantity_webshop": 0,
             },
             {
                 "source_product_id": None,
                 "sku_code": "wijn-case",
                 "is_bottle": True,
                 "quantity_available": 2,
+                "quantity_store": 2,
+                "quantity_webshop": 0,
             },
         ]
     }

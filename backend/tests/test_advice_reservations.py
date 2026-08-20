@@ -1,4 +1,4 @@
-"""Pickup reservations owned by wijnadvies1 but held in store inventory."""
+"""Reservations owned by wijnadvies1 but held in the merchant's sellable stock."""
 
 from sqlalchemy import event
 
@@ -202,44 +202,53 @@ def test_finished_reservation_never_answers_a_retry_as_a_no_op(
 def test_route_is_stored_and_settled_against_the_pool_it_was_taken_from(
     client, db, sample_org, monkeypatch
 ):
-    """Today every order is a pickup; the routing must still come from the row.
+    """A delivery sells the webshop shelf, a pickup the shop shelf.
 
-    Picked delivery orders will sell warehouse stock, and a reservation made
-    then has to be collected off the warehouse even though `store` is the
-    default. Hardcoding the location would book the wrong shelf.
+    The routing must come from the row and not from a default: a reservation
+    made for delivery has to be collected off the webshop even though `store` is
+    what the field defaults to. Hardcoding it would book the wrong shelf.
     """
     _configure(monkeypatch, sample_org.id)
     sku = _bottle(db, sample_org, "prd_a")
+    db.add(
+        InventoryBalance(
+            sku_id=sku.id,
+            organization_id=sample_org.id,
+            inventory_location="webshop",
+            quantity_on_hand=10,
+        )
+    )
+    db.commit()
 
     reserved = client.post(
         BASE_URL,
         json=_payload(
             external_order_id="order_picked",
             fulfillment_method="dockscan",
-            inventory_location="warehouse",
+            inventory_location="webshop",
         ),
         headers=_headers(),
     )
 
     assert reserved.status_code == 200
     assert reserved.json()["fulfillment_method"] == "dockscan"
-    assert reserved.json()["inventory_location"] == "warehouse"
+    assert reserved.json()["inventory_location"] == "webshop"
     db.expire_all()
-    assert _balance(db, sku.id, "warehouse").quantity_reserved == 2
+    assert _balance(db, sku.id, "webshop").quantity_reserved == 2
     assert _balance(db, sku.id, "store").quantity_reserved == 0
 
     collected = client.post(f"{BASE_URL}/order_picked/collect", headers=_headers())
 
     assert collected.status_code == 200
-    assert collected.json()["inventory_location"] == "warehouse"
+    assert collected.json()["inventory_location"] == "webshop"
     db.expire_all()
-    warehouse = _balance(db, sku.id, "warehouse")
-    assert (warehouse.quantity_on_hand, warehouse.quantity_reserved) == (97, 0)
+    webshop = _balance(db, sku.id, "webshop")
+    assert (webshop.quantity_on_hand, webshop.quantity_reserved) == (8, 0)
     store = _balance(db, sku.id, "store")
     assert (store.quantity_on_hand, store.quantity_reserved) == (8, 0)
     movements = db.query(StockMovement).filter_by(sku_id=sku.id).all()
     assert [(row.inventory_location, row.quantity) for row in movements] == [
-        ("warehouse", -2)
+        ("webshop", -2)
     ]
 
 
@@ -249,15 +258,13 @@ def test_route_must_match_the_pool_it_claims(client, db, sample_org, monkeypatch
 
     crossed = client.post(
         BASE_URL,
-        json=_payload(fulfillment_method="pickup", inventory_location="warehouse"),
+        json=_payload(fulfillment_method="pickup", inventory_location="webshop"),
         headers=_headers(),
     )
     changed_route = client.post(BASE_URL, json=_payload(), headers=_headers())
     reroute_attempt = client.post(
         BASE_URL,
-        json=_payload(
-            fulfillment_method="dockscan", inventory_location="warehouse"
-        ),
+        json=_payload(fulfillment_method="dockscan", inventory_location="webshop"),
         headers=_headers(),
     )
 

@@ -94,7 +94,9 @@ def test_a_delivery_order_lands_as_an_observed_order(
     assert (order.channel, order.status) == ("advice", "observed")
     assert order.external_id == "order_123"
     assert order.channel_reference == "JUR-2026-8CERZC"
-    assert order.inventory_location == "warehouse"
+    # The payload still says "warehouse", the way the live advice app does. That
+    # name now folds into the webshop shelf a delivery is actually packed from.
+    assert order.inventory_location == "webshop"
     # No delivery week: this order belongs to no week's planning.
     assert order.delivery_week is None
     assert [(line.sku_id, line.quantity, line.klant) for line in order.lines] == [

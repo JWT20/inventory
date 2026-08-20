@@ -7,13 +7,14 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
-from sqlalchemy import and_, func
+from sqlalchemy import and_, case, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
 from app.models import (
+    SELLABLE_INVENTORY_LOCATIONS,
     AdviceReservation,
     AdviceReservationLine,
     AdviceSale,
@@ -28,6 +29,7 @@ from app.models import (
 )
 from app.schemas import (
     AdviceOrderMatchedLine,
+    AdviceStockPool,
     AdviceOrderRequest,
     AdviceOrderResponse,
     AdviceReservationLineResponse,
@@ -46,7 +48,11 @@ from app.services.advice_channel import (
     advice_connection,
     assert_advice_observing,
 )
-from app.services.stock import adjust_reservation, apply_stock_movement
+from app.services.stock import (
+    adjust_reservation,
+    apply_stock_movement,
+    lock_ordered,
+)
 
 router = APIRouter(prefix="/integrations/advice", tags=["integrations"])
 
@@ -87,17 +93,19 @@ def _authenticate_advice_sales_request(
 @router.get("/stock", response_model=AdviceStockResponse)
 def advice_stock(
     response: Response,
-    inventory_location: Literal["warehouse", "store"] = "store",
+    inventory_location: AdviceStockPool = "store",
     db: Session = Depends(get_db),
     organization_id: int = Depends(_authenticate_advice_stock_request),
 ) -> AdviceStockResponse:
     """Return available bottle stock for the configured organization.
 
-    Today every advice-app order is a shop pickup, so the feed defaults to the
-    store pool. Once picked delivery orders exist they will sell warehouse
-    stock, and the advice app has to ask for the pool it is selling from — the
-    parameter is here from the start so that day is a caller change instead of
-    a breaking change to a live contract.
+    The shop and the webshop are two physical places but one sellable pool, so
+    ``sellable`` reports them added together — that is what the webshop can
+    actually sell. Every response also carries the split, so the shop can say
+    where a bottle is standing without a second call.
+
+    ``store``, ``webshop`` and ``warehouse`` keep working and keep meaning one
+    pool; the feed is live, so the caller changes when it is ready.
     """
     if db.get(Organization, organization_id) is None:
         raise HTTPException(
@@ -107,9 +115,11 @@ def advice_stock(
 
     rows = (
         db.query(
+            SKU.id,
             SKU.source_product_id,
             SKU.sku_code,
             SKU.active,
+            InventoryBalance.inventory_location,
             InventoryBalance.quantity_on_hand,
             InventoryBalance.quantity_reserved,
         )
@@ -118,7 +128,6 @@ def advice_stock(
             and_(
                 InventoryBalance.sku_id == SKU.id,
                 InventoryBalance.organization_id == organization_id,
-                InventoryBalance.inventory_location == inventory_location,
             ),
         )
         .filter(
@@ -129,31 +138,51 @@ def advice_stock(
         .all()
     )
 
-    response.headers["Cache-Control"] = "no-store"
-    return AdviceStockResponse(
-        items=[
-            AdviceStockItem(
+    # One row per (product, pool) comes back; fold them into one item per
+    # product carrying every pool it has a balance in.
+    available_by_sku: dict[int, dict[str, int]] = {}
+    items: dict[int, AdviceStockItem] = {}
+    for (
+        sku_id,
+        source_product_id,
+        sku_code,
+        active,
+        location,
+        quantity_on_hand,
+        quantity_reserved,
+    ) in rows:
+        if sku_id not in items:
+            items[sku_id] = AdviceStockItem(
                 source_product_id=source_product_id,
                 sku_code=sku_code,
                 is_bottle=True,
-                quantity_available=(
-                    max(
-                        (quantity_on_hand or 0) - (quantity_reserved or 0),
-                        0,
-                    )
-                    if active
-                    else 0
-                ),
+                quantity_available=0,
             )
-            for (
-                source_product_id,
-                sku_code,
-                active,
-                quantity_on_hand,
-                quantity_reserved,
-            ) in rows
-        ]
+            available_by_sku[sku_id] = {}
+        if location is None:
+            continue
+        # An inactive product is unsellable whatever the shelf holds, so it is
+        # reported at zero rather than being left out — the advice app needs to
+        # see it go to zero, not see it disappear.
+        available_by_sku[sku_id][location] = (
+            max((quantity_on_hand or 0) - (quantity_reserved or 0), 0)
+            if active
+            else 0
+        )
+
+    requested = (
+        SELLABLE_INVENTORY_LOCATIONS
+        if inventory_location == "sellable"
+        else (inventory_location,)
     )
+    for sku_id, item in items.items():
+        per_pool = available_by_sku[sku_id]
+        item.quantity_store = per_pool.get("store", 0)
+        item.quantity_webshop = per_pool.get("webshop", 0)
+        item.quantity_available = sum(per_pool.get(pool, 0) for pool in requested)
+
+    response.headers["Cache-Control"] = "no-store"
+    return AdviceStockResponse(items=list(items.values()))
 
 
 @router.post("/sales", response_model=AdviceSaleResponse)
@@ -299,6 +328,113 @@ def advice_sale(
     )
 
 
+def _same_route(stored: str, requested: str) -> bool:
+    """Whether a retry names the route the hold was actually taken on.
+
+    A delivery used to be routed from the warehouse. Holds taken before that
+    switch are still settled against the pool they really came out of, so their
+    stored name stays "warehouse" — but a caller retrying such an order means
+    the same route whichever of the two names it sends.
+    """
+    if stored == requested:
+        return True
+    return {stored, requested} == {"warehouse", "webshop"}
+
+
+def _pool_preference(inventory_location: str) -> tuple[str, ...]:
+    """Which pools this route draws on, best first.
+
+    The shop and the webshop hold the same sellable stock in two places, so a
+    route that runs out on its own shelf may take the rest from the other one
+    rather than refusing an order the building can serve. The preferred shelf
+    goes first so the route the other one depends on is not emptied for nothing.
+    """
+    others = tuple(
+        pool for pool in SELLABLE_INVENTORY_LOCATIONS if pool != inventory_location
+    )
+    return (inventory_location, *others)
+
+
+def _hold_across_pools(
+    db: Session,
+    *,
+    sku_id: int,
+    organization_id: int,
+    pools: tuple[str, ...],
+    quantity: int,
+) -> list[tuple[str, int]]:
+    """Reserve ``quantity`` bottles across ``pools``, filling each in turn.
+
+    Returns what was taken per pool. Raises the same 409 the single-pool hold
+    raised when the pools together fall short — a caller that cannot be served
+    must hear that before a payment starts, not after.
+    """
+    # Take every row this hold could touch before deciding anything, in the one
+    # order every multi-pool operation uses. Locking in preference order instead
+    # would have a pickup grab the shop row first and a delivery the webshop row
+    # first: two holds that both need to split can then each sit on one row
+    # waiting for the other, and one customer gets a database error mid-checkout.
+    # The route preference decides how the bottles are divided, never which row
+    # is claimed first.
+    balances = {
+        balance.inventory_location: balance
+        for balance in (
+            db.query(InventoryBalance)
+            .filter(
+                InventoryBalance.sku_id == sku_id,
+                InventoryBalance.organization_id == organization_id,
+                InventoryBalance.inventory_location.in_(pools),
+            )
+            .order_by(
+                case(
+                    {
+                        pool: index
+                        for index, pool in enumerate(lock_ordered(pools))
+                    },
+                    value=InventoryBalance.inventory_location,
+                )
+            )
+            .with_for_update()
+            .all()
+        )
+    }
+
+    taken: list[tuple[str, int]] = []
+    remaining = quantity
+    for pool in pools:
+        if remaining <= 0:
+            break
+        balance = balances.get(pool)
+        available = balance.quantity_available if balance else 0
+        if available <= 0:
+            continue
+        portion = min(available, remaining)
+        adjust_reservation(
+            db,
+            sku_id=sku_id,
+            organization_id=organization_id,
+            inventory_location=pool,
+            delta=portion,
+            require_available=True,
+        )
+        taken.append((pool, portion))
+        remaining -= portion
+    if remaining > 0:
+        # Say it outright rather than provoking the shared guard into saying it:
+        # that call would only raise while the preferred pool is still empty, and
+        # on the day it is not, it would quietly hold stock no line accounts for.
+        # The number that matters here is what the two shelves hold together,
+        # which is also the number the caller can do something about.
+        sku = db.get(SKU, sku_id)
+        sku_code = sku.sku_code if sku else str(sku_id)
+        raise HTTPException(
+            409,
+            f"Onvoldoende voorraad voor {sku_code}: "
+            f"{quantity - remaining} beschikbaar, {quantity} nodig",
+        )
+    return taken
+
+
 def _reservation_response(
     reservation: AdviceReservation, *, duplicate: bool
 ) -> AdviceReservationResponse:
@@ -311,15 +447,30 @@ def _reservation_response(
         inventory_location=reservation.inventory_location,
         status=reservation.status,
         duplicate=duplicate,
+        # A hold split across the shop and the webshop is one line to the
+        # caller: it ordered a number of bottles, not a shelf.
         lines=[
             AdviceReservationLineResponse(
-                source_product_id=line.sku.source_product_id,
-                sku_code=line.sku.sku_code,
-                quantity=line.quantity,
+                source_product_id=source_product_id,
+                sku_code=sku_code,
+                quantity=quantity,
             )
-            for line in sorted(reservation.lines, key=lambda item: item.sku.sku_code)
+            for (sku_code, source_product_id), quantity in sorted(
+                _reserved_totals(reservation).items()
+            )
         ],
     )
+
+
+def _reserved_totals(
+    reservation: AdviceReservation,
+) -> dict[tuple[str, str | None], int]:
+    """Bottles held per product, adding up any pools the hold was split over."""
+    totals: dict[tuple[str, str | None], int] = {}
+    for line in reservation.lines:
+        key = (line.sku.sku_code, line.sku.source_product_id)
+        totals[key] = totals.get(key, 0) + line.quantity
+    return totals
 
 
 def _locked_reservation(
@@ -361,17 +512,20 @@ def reserve_advice_pickup(
 
     existing = _locked_reservation(db, organization_id, payload.external_order_id)
     if existing:
-        existing_lines = {
-            line.sku.source_product_id: line.quantity for line in existing.lines
-        }
+        # Sum per product: one product may be held on two shelves at once, and
+        # a retry that ordered four bottles must still look like four.
+        existing_lines: dict[str | None, int] = {}
+        for line in existing.lines:
+            existing_lines[line.sku.source_product_id] = (
+                existing_lines.get(line.sku.source_product_id, 0) + line.quantity
+            )
         if existing_lines != requested:
             raise HTTPException(
                 409,
                 "Deze order-ID bestaat al met andere productregels",
             )
-        if (
-            existing.fulfillment_method != payload.fulfillment_method
-            or existing.inventory_location != payload.inventory_location
+        if existing.fulfillment_method != payload.fulfillment_method or not (
+            _same_route(existing.inventory_location, payload.inventory_location)
         ):
             raise HTTPException(
                 409,
@@ -414,26 +568,27 @@ def reserve_advice_pickup(
         status="active",
     )
     db.add(reservation)
+    pools = _pool_preference(reservation.inventory_location)
     try:
         db.flush()
         for product_id in sorted(requested):
             sku = skus[product_id]
             quantity = requested[product_id]
-            adjust_reservation(
+            for pool, portion in _hold_across_pools(
                 db,
                 sku_id=sku.id,
                 organization_id=organization_id,
-                inventory_location=reservation.inventory_location,
-                delta=quantity,
-                require_available=True,
-            )
-            db.add(
-                AdviceReservationLine(
-                    reservation_id=reservation.id,
-                    sku_id=sku.id,
-                    quantity=quantity,
+                pools=pools,
+                quantity=quantity,
+            ):
+                db.add(
+                    AdviceReservationLine(
+                        reservation_id=reservation.id,
+                        sku_id=sku.id,
+                        quantity=portion,
+                        inventory_location=pool,
+                    )
                 )
-            )
         db.commit()
     except HTTPException:
         # A short balance must roll back both the reservation row and every
@@ -473,18 +628,20 @@ def collect_advice_pickup(
         raise HTTPException(409, "Deze reservering is al vrijgegeven")
 
     for line in reservation.lines:
+        # Each line names the shelf its bottles came off, so a hold that was
+        # split across the shop and the webshop is settled on both.
         adjust_reservation(
             db,
             sku_id=line.sku_id,
             organization_id=organization_id,
-            inventory_location=reservation.inventory_location,
+            inventory_location=line.inventory_location,
             delta=-line.quantity,
         )
         apply_stock_movement(
             db,
             sku_id=line.sku_id,
             organization_id=organization_id,
-            inventory_location=reservation.inventory_location,
+            inventory_location=line.inventory_location,
             quantity=-line.quantity,
             movement_type="sale",
             reference_type="advice_pickup",
@@ -519,7 +676,7 @@ def release_advice_pickup(
             db,
             sku_id=line.sku_id,
             organization_id=organization_id,
-            inventory_location=reservation.inventory_location,
+            inventory_location=line.inventory_location,
             delta=-line.quantity,
         )
     reservation.status = "released"
