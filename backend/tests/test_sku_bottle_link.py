@@ -334,3 +334,82 @@ class TestCategoryMustMatch:
         )
 
         assert resp.status_code == 200, resp.text
+
+
+class TestABottleBoxesDependOnStaysABottle:
+    """The link is only checked on the box that carries it. Without a guard on
+    the other end, the fles a box points at can quietly become a box itself."""
+
+    def test_flipping_a_referenced_bottle_into_a_box_is_refused(
+        self, client, db, owner_token, box_sku, bottle_sku
+    ):
+        box_sku.bottle_sku_id = bottle_sku.id
+        db.commit()
+
+        resp = client.patch(
+            f"/api/skus/{bottle_sku.id}",
+            json={"is_bottle": False},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 409, resp.text
+        assert box_sku.name in resp.json()["detail"]
+        db.expire_all()
+        assert db.get(SKU, bottle_sku.id).is_bottle is True
+
+    def test_the_refusal_names_the_boxes_to_unlink(
+        self, client, db, owner_token, sample_org, bottle_sku
+    ):
+        for code in ("DOOS-A", "DOOS-B"):
+            db.add(
+                SKU(
+                    sku_code=code,
+                    name=f"Doos {code[-1]}",
+                    organization_id=sample_org.id,
+                    product_type="vision",
+                    is_bottle=False,
+                    bottle_sku_id=bottle_sku.id,
+                )
+            )
+        db.commit()
+
+        resp = client.patch(
+            f"/api/skus/{bottle_sku.id}",
+            json={"is_bottle": False},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert "Doos A" in detail and "Doos B" in detail
+
+    def test_an_unreferenced_bottle_may_still_become_a_box(
+        self, client, db, owner_token, bottle_sku
+    ):
+        resp = client.patch(
+            f"/api/skus/{bottle_sku.id}",
+            json={"is_bottle": False},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["is_bottle"] is False
+
+    def test_unlinking_the_box_first_clears_the_way(
+        self, client, db, owner_token, box_sku, bottle_sku
+    ):
+        box_sku.bottle_sku_id = bottle_sku.id
+        db.commit()
+        client.patch(
+            f"/api/skus/{box_sku.id}",
+            json={"bottle_sku_id": None},
+            headers=auth_header(owner_token),
+        )
+
+        resp = client.patch(
+            f"/api/skus/{bottle_sku.id}",
+            json={"is_bottle": False},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200, resp.text

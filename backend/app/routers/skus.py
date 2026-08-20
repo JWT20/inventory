@@ -396,6 +396,32 @@ def _validate_bottle_link(
         )
 
 
+def _assert_no_incoming_box_links(db: Session, sku: SKU) -> None:
+    """Refuse to turn a bottle into a box while boxes still point at it.
+
+    The link only carries meaning one way round: a box contains bottles. Nothing
+    validates the *incoming* side when this product is saved, so without this
+    check a bottle several boxes depend on can quietly become a box itself — and
+    a pick would then credit six of it into a pool that only holds bottles.
+    """
+    boxes = (
+        db.query(SKU.name)
+        .filter(SKU.bottle_sku_id == sku.id)
+        .order_by(SKU.name)
+        .limit(4)
+        .all()
+    )
+    if not boxes:
+        return
+    names = ", ".join(f"'{row[0]}'" for row in boxes[:3])
+    more = " en meer" if len(boxes) > 3 else ""
+    raise HTTPException(
+        409,
+        f"{names}{more} verwijst naar '{sku.name}' als de fles in de doos; "
+        "haal die koppeling eerst weg voordat je dit product een doos maakt",
+    )
+
+
 def _is_ean_unique_violation(exc: IntegrityError) -> bool:
     """Whether an IntegrityError is the per-org EAN uniqueness violation.
 
@@ -771,6 +797,11 @@ def update_sku(
         category=sku.category,
         self_sku_id=sku.id,
     )
+    # The outgoing link above is only half the pair. A product that boxes point
+    # at has no bottle_sku_id of its own, so nothing there notices it being
+    # turned into a box.
+    if sku.is_bottle and not resulting_is_bottle:
+        _assert_no_incoming_box_links(db, sku)
     if "bottle_sku_id" in changed_fields:
         sku.bottle_sku_id = resulting_bottle_sku_id
 
