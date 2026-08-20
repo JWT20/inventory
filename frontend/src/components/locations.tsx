@@ -200,10 +200,23 @@ function BulkLocationDialog({
   const [template, setTemplate] = useState("{rij}-{kast}-{plank}");
   const [cijfers, setCijfers] = useState("2");
   const [preview, setPreview] = useState<BulkResult | null>(null);
+  // The exact payload the preview was computed from. Creating sends this back,
+  // never the current fields: what the courier approved is what gets written.
+  const [previewed, setPreviewed] = useState<ReturnType<typeof body> | null>(
+    null,
+  );
+
+  // Any edit invalidates the preview: the count on the button and the codes in
+  // the sample belong to the old input, and leaving them there would let a
+  // range nobody looked at be created on a glance at the wrong number.
+  function resetPreview() {
+    setPreview(null);
+    setPreviewed(null);
+  }
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (open) setPreview(null);
+    if (open) resetPreview();
   }, [open]);
 
   // Split on commas only: a shelf row may well be called "Rij 1", and splitting
@@ -227,10 +240,15 @@ function BulkLocationDialog({
   }
 
   async function run(dryRun: boolean) {
+    const payload = dryRun ? body(true) : previewed && { ...previewed, dry_run: false };
+    if (!payload) return;
     setBusy(true);
     try {
-      const result: BulkResult = await api.bulkCreateLocations(body(dryRun));
-      setPreview(result);
+      const result: BulkResult = await api.bulkCreateLocations(payload);
+      if (dryRun) {
+        setPreview(result);
+        setPreviewed(body(true));
+      }
       if (!dryRun) {
         toast.success(
           `${result.aangemaakt} locaties aangemaakt` +
@@ -260,7 +278,10 @@ function BulkLocationDialog({
               <Label className="text-xs">Rijen</Label>
               <Input
                 value={rijen}
-                onChange={(e) => setRijen(e.target.value)}
+                onChange={(e) => {
+                  setRijen(e.target.value);
+                  resetPreview();
+                }}
                 placeholder="B, C"
               />
             </div>
@@ -268,7 +289,10 @@ function BulkLocationDialog({
               <Label className="text-xs">Kasten</Label>
               <Input
                 value={kasten}
-                onChange={(e) => setKasten(e.target.value)}
+                onChange={(e) => {
+                  setKasten(e.target.value);
+                  resetPreview();
+                }}
                 placeholder="A, B, C, D, E"
               />
             </div>
@@ -279,7 +303,10 @@ function BulkLocationDialog({
               <Input
                 type="number"
                 value={plankVan}
-                onChange={(e) => setPlankVan(e.target.value)}
+                onChange={(e) => {
+                  setPlankVan(e.target.value);
+                  resetPreview();
+                }}
               />
             </div>
             <div className="space-y-1">
@@ -287,7 +314,10 @@ function BulkLocationDialog({
               <Input
                 type="number"
                 value={plankTot}
-                onChange={(e) => setPlankTot(e.target.value)}
+                onChange={(e) => {
+                  setPlankTot(e.target.value);
+                  resetPreview();
+                }}
               />
             </div>
             <div className="space-y-1">
@@ -295,7 +325,10 @@ function BulkLocationDialog({
               <Input
                 type="number"
                 value={cijfers}
-                onChange={(e) => setCijfers(e.target.value)}
+                onChange={(e) => {
+                  setCijfers(e.target.value);
+                  resetPreview();
+                }}
               />
             </div>
           </div>
@@ -303,7 +336,10 @@ function BulkLocationDialog({
             <Label className="text-xs">Code-sjabloon</Label>
             <Input
               value={template}
-              onChange={(e) => setTemplate(e.target.value)}
+              onChange={(e) => {
+                  setTemplate(e.target.value);
+                  resetPreview();
+                }}
               placeholder="{rij}-{kast}-{plank}"
             />
             <p className="text-xs text-muted-foreground">
