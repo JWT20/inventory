@@ -462,3 +462,38 @@ def test_a_shortage_counts_both_shelves_together(
 
     assert resp.status_code == 409
     assert "2 beschikbaar, 4 nodig" in resp.json()["detail"]
+
+
+class TestSplitHoldsLockInOneOrder:
+    """Two holds that both have to split must not each sit on one shelf row
+    waiting for the other."""
+
+    def test_the_rows_are_claimed_in_the_shared_order(self, db, sample_org):
+        from app.services.stock import lock_ordered
+        from app.routers.integrations import _pool_preference
+
+        # The route still decides who gets served from where first...
+        assert _pool_preference("store") == ("store", "webshop")
+        assert _pool_preference("webshop") == ("webshop", "store")
+        # ...but both routes claim the same rows in the same order.
+        assert lock_ordered(_pool_preference("store")) == lock_ordered(
+            _pool_preference("webshop")
+        )
+
+    def test_a_pickup_still_prefers_the_shop_when_both_have_stock(
+        self, client, db, sample_org, monkeypatch
+    ):
+        """Fixing the locking must not flatten the routing."""
+        _configure(monkeypatch, sample_org.id)
+        sku = _bottle(db, sample_org, "prd_a", store=10, webshop=10)
+
+        resp = client.post(
+            RESERVATIONS_URL,
+            json=_payload(fulfillment_method="pickup", inventory_location="store"),
+            headers=_headers(),
+        )
+
+        assert resp.status_code == 200, resp.text
+        db.expire_all()
+        assert _balance(db, sku.id, "store").quantity_reserved == 4
+        assert _balance(db, sku.id, "webshop").quantity_reserved == 0

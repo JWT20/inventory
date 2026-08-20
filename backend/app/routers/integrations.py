@@ -7,7 +7,7 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
-from sqlalchemy import and_, func
+from sqlalchemy import and_, case, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -48,7 +48,11 @@ from app.services.advice_channel import (
     advice_connection,
     assert_advice_observing,
 )
-from app.services.stock import adjust_reservation, apply_stock_movement
+from app.services.stock import (
+    adjust_reservation,
+    apply_stock_movement,
+    lock_ordered,
+)
 
 router = APIRouter(prefix="/integrations/advice", tags=["integrations"])
 
@@ -365,21 +369,42 @@ def _hold_across_pools(
     raised when the pools together fall short — a caller that cannot be served
     must hear that before a payment starts, not after.
     """
+    # Take every row this hold could touch before deciding anything, in the one
+    # order every multi-pool operation uses. Locking in preference order instead
+    # would have a pickup grab the shop row first and a delivery the webshop row
+    # first: two holds that both need to split can then each sit on one row
+    # waiting for the other, and one customer gets a database error mid-checkout.
+    # The route preference decides how the bottles are divided, never which row
+    # is claimed first.
+    balances = {
+        balance.inventory_location: balance
+        for balance in (
+            db.query(InventoryBalance)
+            .filter(
+                InventoryBalance.sku_id == sku_id,
+                InventoryBalance.organization_id == organization_id,
+                InventoryBalance.inventory_location.in_(pools),
+            )
+            .order_by(
+                case(
+                    {
+                        pool: index
+                        for index, pool in enumerate(lock_ordered(pools))
+                    },
+                    value=InventoryBalance.inventory_location,
+                )
+            )
+            .with_for_update()
+            .all()
+        )
+    }
+
     taken: list[tuple[str, int]] = []
     remaining = quantity
     for pool in pools:
         if remaining <= 0:
             break
-        balance = (
-            db.query(InventoryBalance)
-            .filter(
-                InventoryBalance.sku_id == sku_id,
-                InventoryBalance.organization_id == organization_id,
-                InventoryBalance.inventory_location == pool,
-            )
-            .with_for_update()
-            .first()
-        )
+        balance = balances.get(pool)
         available = balance.quantity_available if balance else 0
         if available <= 0:
             continue

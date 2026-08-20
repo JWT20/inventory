@@ -58,6 +58,39 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # An *active* hold that is split across two shelves cannot be narrowed here.
+    # Collapsing the lines is only half of it: the bottles are also reserved on
+    # two ``inventory_balances`` rows, and after the column is gone the release
+    # settles everything against the reservation's own pool. The other pool
+    # would keep its reservation forever, and a collect would book stock off a
+    # shelf the bottles never stood on.
+    #
+    # Moving those reservations around inside a rollback would be quietly
+    # rewriting live stock numbers, so this refuses instead and says what to do:
+    # a split hold is settled in seconds by collecting or releasing it. Holds
+    # that are already collected or released hold nothing and pass fine.
+    split = (
+        sa.text(
+            """
+            SELECT COUNT(*) FROM (
+                SELECT l.reservation_id, l.sku_id
+                FROM advice_reservation_lines AS l
+                JOIN advice_reservations AS r ON r.id = l.reservation_id
+                WHERE r.status = 'active'
+                GROUP BY l.reservation_id, l.sku_id
+                HAVING COUNT(DISTINCT l.inventory_location) > 1
+            ) AS split_holds
+            """
+        )
+    )
+    blocking = op.get_bind().execute(split).scalar() or 0
+    if blocking:
+        raise RuntimeError(
+            f"{blocking} actieve reservering(en) staan over winkel én webshop "
+            "verdeeld. Haal die eerst op of geef ze vrij; daarna kan deze "
+            "migratie teruggedraaid worden."
+        )
+
     # Narrowing back to one row per product has to collapse a split hold. Sum
     # the quantities onto the surviving row first: a hold of three from the
     # webshop and one from the shop is four bottles, and dropping the second row
