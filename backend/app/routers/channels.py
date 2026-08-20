@@ -15,7 +15,7 @@ from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy.orm import Session
 
-from app.auth import require_platform_admin
+from app.auth import get_current_user, require_platform_admin
 from app.config import settings
 from app.database import get_db
 from app.models import (
@@ -58,6 +58,10 @@ from app.services.inventory_sync import (
     push_available,
     push_bol_available,
     push_inventory_to_channels,
+)
+from app.services.advice_channel import (
+    advice_connection,
+    resolve_advice_organization,
 )
 from app.services.stock import adjust_reservation, apply_stock_movement
 from app.services.shopify import (
@@ -742,6 +746,68 @@ def resolve_review_order(
         )
 
     return ChannelReviewResolveResponse(status=order.status)
+
+
+@router.get("/advice/status", response_model=ChannelStatus)
+def advice_status(
+    organization_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Whether the wijnadvies connection is observing or live.
+
+    Readable by the merchant, not just a platform admin: it decides whether
+    their delivery orders turn into warehouse work, so it belongs on a screen
+    they can open themselves.
+    """
+    org_id = resolve_advice_organization(db, user, organization_id)
+    connection = advice_connection(db, org_id)
+    db.commit()
+    return ChannelStatus(
+        connected=bool(settings.advice_sales_api_key),
+        mode=connection.mode,
+        last_synced_at=connection.last_synced_at,
+    )
+
+
+@router.post("/advice/mode", response_model=ChannelStatus)
+def set_advice_mode(
+    body: ChannelModeRequest,
+    organization_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_platform_admin),
+):
+    """Flip the wijnadvies connection between observing and live.
+
+    Live means a delivery order that arrives from now on is born pickable, and
+    its hold is settled by the pick that empties the shelf instead of by the
+    advice app's own collect. Orders that were already observed stay observed —
+    see ``advice_is_live`` for why activating them afterwards is unsafe.
+
+    Going back to observe stops future orders from becoming work; it does not
+    retract orders that are already active. Those are finished or cancelled
+    through the order itself, the same way every other channel handles it.
+    """
+    org_id = resolve_advice_organization(db, user, organization_id)
+    mode = body.mode.strip().lower()
+    if mode not in ("observe", "live"):
+        raise HTTPException(400, "Ongeldige modus — kies 'observe' of 'live'")
+
+    if mode == "live" and not settings.advice_sales_api_key:
+        # Without the write key the advice app cannot post an order at all, so
+        # going live would only produce a switch that never does anything.
+        raise HTTPException(
+            400, "De wijnadvies-koppeling is niet geconfigureerd op deze server"
+        )
+
+    connection = advice_connection(db, org_id)
+    connection.mode = mode
+    db.commit()
+    return ChannelStatus(
+        connected=bool(settings.advice_sales_api_key),
+        mode=connection.mode,
+        last_synced_at=connection.last_synced_at,
+    )
 
 
 @router.get("/shopify/reconciliation", response_model=ChannelReconciliation)

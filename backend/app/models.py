@@ -1232,9 +1232,21 @@ class AdviceReservationLine(Base):
     inventory_location: Mapped[str] = mapped_column(
         String(20), default="store", server_default=text("'store'"), nullable=False
     )
+    # How many of these held bottles a pick has already taken off the shelf.
+    # A delivery order is held at payment and picked later; both touch this same
+    # row, so it has to remember what is already gone. Collect and release only
+    # ever act on the remainder.
+    consumed_quantity: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
 
     reservation: Mapped["AdviceReservation"] = relationship(back_populates="lines")
     sku: Mapped["SKU"] = relationship()
+
+    @property
+    def open_quantity(self) -> int:
+        """Bottles this row still holds, i.e. not yet taken by a pick."""
+        return max(self.quantity - self.consumed_quantity, 0)
 
 
 class OrderDeliveryAddress(Base):

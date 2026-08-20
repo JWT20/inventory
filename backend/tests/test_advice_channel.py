@@ -1,13 +1,10 @@
-"""The advice app as an observe-mode channel connection."""
-
-import pytest
+"""The advice app as a channel connection."""
 
 from app.models import ChannelConnection, Organization
 from app.services.advice_channel import (
     ADVICE_CHANNEL,
-    AdviceChannelNotObserving,
     advice_connection,
-    assert_advice_observing,
+    advice_is_live,
 )
 from app.services.inventory_sync import (
     _live_bol_connection,
@@ -57,15 +54,15 @@ def test_each_organization_gets_its_own_connection(db):
     assert first.id != second.id
 
 
-def test_importing_refuses_while_the_connection_claims_to_be_live(db):
+def test_a_new_connection_is_not_live(db):
+    """Never act by surprise: an unconfigured connection only observes."""
     org = _org(db)
     connection = advice_connection(db, org.id)
 
-    assert_advice_observing(connection)  # observe is the whole point
+    assert advice_is_live(connection) is False
 
     connection.mode = "live"
-    with pytest.raises(AdviceChannelNotObserving):
-        assert_advice_observing(connection)
+    assert advice_is_live(connection) is True
 
 
 def test_the_stock_push_never_mistakes_advice_for_a_webshop(db):

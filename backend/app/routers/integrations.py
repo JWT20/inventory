@@ -44,10 +44,11 @@ from app.schemas import (
 )
 from app.services.advice_channel import (
     ADVICE_CHANNEL,
-    AdviceChannelNotObserving,
     advice_connection,
-    assert_advice_observing,
+    advice_is_live,
 )
+from app.services.advice_holds import was_picked
+from app.services.booking import recompute_order_status
 from app.services.stock import (
     adjust_reservation,
     apply_stock_movement,
@@ -626,6 +627,15 @@ def collect_advice_pickup(
         return _reservation_response(reservation, duplicate=True)
     if reservation.status == "released":
         raise HTTPException(409, "Deze reservering is al vrijgegeven")
+    if was_picked(db, reservation):
+        # The warehouse already took these bottles off the shelf and booked
+        # them. Settling here as well would deduct the same wine twice, and the
+        # difference would only show up at a stock count weeks later.
+        raise HTTPException(
+            409,
+            "Deze bestelling is al gepickt in het magazijn; "
+            "de voorraad is daar al afgeboekt",
+        )
 
     for line in reservation.lines:
         # Each line names the shelf its bottles came off, so a hold that was
@@ -635,14 +645,14 @@ def collect_advice_pickup(
             sku_id=line.sku_id,
             organization_id=organization_id,
             inventory_location=line.inventory_location,
-            delta=-line.quantity,
+            delta=-line.open_quantity,
         )
         apply_stock_movement(
             db,
             sku_id=line.sku_id,
             organization_id=organization_id,
             inventory_location=line.inventory_location,
-            quantity=-line.quantity,
+            quantity=-line.open_quantity,
             movement_type="sale",
             reference_type="advice_pickup",
             reference_id=reservation.id,
@@ -672,12 +682,15 @@ def release_advice_pickup(
         return _reservation_response(reservation, duplicate=True)
 
     for line in reservation.lines:
+        # Only what is still held can be given back. Bottles a pick already took
+        # are gone from the shelf; releasing them would conjure stock that is
+        # sitting in a parcel.
         adjust_reservation(
             db,
             sku_id=line.sku_id,
             organization_id=organization_id,
             inventory_location=line.inventory_location,
-            delta=-line.quantity,
+            delta=-line.open_quantity,
         )
     reservation.status = "released"
     reservation.released_at = func.now()
@@ -737,10 +750,7 @@ def receive_advice_order(
         )
 
     connection = advice_connection(db, organization_id)
-    try:
-        assert_advice_observing(connection)
-    except AdviceChannelNotObserving as exc:
-        raise HTTPException(409, str(exc)) from exc
+    live = advice_is_live(connection)
 
     # One product may arrive on several lines. Collapse them so the order books
     # one line per product, the same way a counter sale does.
@@ -844,6 +854,28 @@ def receive_advice_order(
         for sku_id, line in lines_by_sku.items():
             if sku_id not in seen_sku_ids:
                 db.delete(line)
+
+    # Only an order that *arrives* while the connection is live becomes work.
+    # A retry of one that was already observed stays observed: promoting it
+    # afterwards would activate a delivery whose bottles may have been handed
+    # over by hand in the meantime, and nothing here can tell those apart.
+    if live and created:
+        db.flush()
+        if unmatched or not matched:
+            # A catalogue that cannot name every product would ship a short
+            # order. Park it where the reconciliation view already looks.
+            order.status = "pending_product"
+        else:
+            db.refresh(order)
+            recompute_order_status(order, list(order.lines))
+            if order.status == "observed":
+                # recompute only promotes out of pending_images; an order that
+                # is inert for no other reason is simply ready to pick.
+                order.status = (
+                    "active"
+                    if all(line.sku.reference_images for line in order.lines)
+                    else "pending_images"
+                )
 
     # The reconciliation view under Kanalen reads sync logs, not orders, so an
     # order the catalogue could not fully match still has to leave a trace. Upsert

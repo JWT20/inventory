@@ -7,6 +7,7 @@ from app.models import (
     InventoryBalance,
     Order,
     OrderDeliveryAddress,
+    ReferenceImage,
     SKU,
 )
 
@@ -285,7 +286,31 @@ def test_the_first_order_creates_an_observing_connection(
     assert connection.last_synced_at is not None
 
 
-def test_a_live_connection_refuses_the_import(client, db, sample_org, monkeypatch):
+def test_a_live_connection_makes_the_order_pickable(
+    client, db, sample_org, monkeypatch
+):
+    """Live is the whole point of the switch: the order becomes warehouse work."""
+    _configure(monkeypatch, sample_org.id)
+    sku = _bottle(db, sample_org, "prd_a")
+    db.add(ReferenceImage(sku_id=sku.id, image_path="f.jpg", processing_status="done"))
+    db.add(
+        ChannelConnection(
+            organization_id=sample_org.id, channel="advice", mode="live"
+        )
+    )
+    db.commit()
+
+    response = client.post(BASE_URL, json=_payload(), headers=_headers())
+
+    assert response.status_code == 200, response.text
+    order = db.query(Order).one()
+    assert order.status == "active"
+
+
+def test_a_live_order_without_a_photo_waits_for_one(
+    client, db, sample_org, monkeypatch
+):
+    """The camera cannot match a wine it has never seen; picking would stall."""
     _configure(monkeypatch, sample_org.id)
     _bottle(db, sample_org, "prd_a")
     db.add(
@@ -297,9 +322,58 @@ def test_a_live_connection_refuses_the_import(client, db, sample_org, monkeypatc
 
     response = client.post(BASE_URL, json=_payload(), headers=_headers())
 
-    assert response.status_code == 409
-    assert "live" in response.json()["detail"]
-    assert db.query(Order).count() == 0
+    assert response.status_code == 200, response.text
+    assert db.query(Order).one().status == "pending_images"
+
+
+def test_a_live_order_with_an_unknown_product_is_parked(
+    client, db, sample_org, monkeypatch
+):
+    """Picking a short order would ship a parcel that misses a wine."""
+    _configure(monkeypatch, sample_org.id)
+    sku = _bottle(db, sample_org, "prd_a")
+    db.add(ReferenceImage(sku_id=sku.id, image_path="f.jpg", processing_status="done"))
+    db.add(
+        ChannelConnection(
+            organization_id=sample_org.id, channel="advice", mode="live"
+        )
+    )
+    db.commit()
+
+    response = client.post(
+        BASE_URL,
+        json=_payload(
+            lines=[
+                {"source_product_id": "prd_a", "quantity": 1},
+                {"source_product_id": "prd_onbekend", "quantity": 1},
+            ]
+        ),
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    assert db.query(Order).one().status == "pending_product"
+
+
+def test_flipping_to_live_leaves_orders_that_were_already_observed(
+    client, db, sample_org, monkeypatch
+):
+    """Their bottles may have been handed over by hand; nothing can tell."""
+    _configure(monkeypatch, sample_org.id)
+    sku = _bottle(db, sample_org, "prd_a")
+    db.add(ReferenceImage(sku_id=sku.id, image_path="f.jpg", processing_status="done"))
+    db.commit()
+
+    client.post(BASE_URL, json=_payload(), headers=_headers())
+    connection = db.query(ChannelConnection).filter_by(channel="advice").one()
+    connection.mode = "live"
+    db.commit()
+
+    # The advice app retries the same order after the switch.
+    again = client.post(BASE_URL, json=_payload(), headers=_headers())
+
+    assert again.status_code == 200, again.text
+    assert db.query(Order).one().status == "observed"
 
 
 def test_a_pickup_order_is_not_accepted_here(client, db, sample_org, monkeypatch):

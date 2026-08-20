@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "@/App";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -137,6 +138,12 @@ export function ChannelsPage() {
   const [orgId, setOrgId] = useState<number | null>(null);
   const [recon, setRecon] = useState<Reconciliation | null>(null);
   const [bolRecon, setBolRecon] = useState<Reconciliation | null>(null);
+  const { user } = useAuth();
+  // Only a platform admin flips the switch: it decides whether a merchant's
+  // paid orders turn into warehouse work. Everyone else reads the state.
+  const isPlatformAdmin = !!user?.is_platform_admin;
+  const [adviceMode, setAdviceMode] = useState<string | null>(null);
+  const [adviceModeSaving, setAdviceModeSaving] = useState(false);
   const [adviceHolds, setAdviceHolds] = useState<AdviceReservation[]>([]);
   const [adviceHoldsLoading, setAdviceHoldsLoading] = useState(false);
   const [adviceHoldsError, setAdviceHoldsError] = useState(false);
@@ -201,6 +208,17 @@ export function ChannelsPage() {
     }
   }, []);
 
+  const loadAdviceMode = useCallback(async () => {
+    // Same isolation as the holds: a deployment without the advice integration
+    // simply shows no switch instead of breaking the page.
+    try {
+      const status = await api.adviceStatus();
+      setAdviceMode(status.mode ?? null);
+    } catch {
+      setAdviceMode(null);
+    }
+  }, []);
+
   const loadAdviceOrders = useCallback(async () => {
     // Same isolation as the holds above: its own loader and its own error, so a
     // deployment without the advice integration keeps the rest of the page usable.
@@ -227,6 +245,10 @@ export function ChannelsPage() {
   useEffect(() => {
     loadAdviceOrders();
   }, [loadAdviceOrders]);
+
+  useEffect(() => {
+    loadAdviceMode();
+  }, [loadAdviceMode]);
 
   // Show a toast when we return from the Shopify OAuth redirect.
   useEffect(() => {
@@ -758,6 +780,61 @@ export function ChannelsPage() {
       )}
 
       <h3 className="text-base font-semibold pt-3">wijnadvies</h3>
+
+      {adviceMode !== null && (
+        <Card className="p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium">
+                Bezorgorders {adviceMode === "live" ? "worden gepickt" : "meekijken"}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {adviceMode === "live"
+                  ? "Een bezorgorder die vanaf nu binnenkomt verschijnt in Scan & Boek. De gereserveerde flessen worden bij het picken van de plank gehaald waar ze lagen."
+                  : "Bezorgorders komen binnen en zijn hier zichtbaar, maar worden niet gepickt en raken de voorraad niet."}
+              </p>
+              {isPlatformAdmin && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Omzetten geldt alleen voor nieuwe orders. Wat er nu al staat te
+                  wachten blijft meekijken.
+                </p>
+              )}
+            </div>
+            {isPlatformAdmin && (
+              <Button
+                size="sm"
+                variant={adviceMode === "live" ? "outline" : "default"}
+                disabled={adviceModeSaving}
+                onClick={async () => {
+                  const next = adviceMode === "live" ? "observe" : "live";
+                  setAdviceModeSaving(true);
+                  try {
+                    const status = await api.adviceSetMode(next);
+                    setAdviceMode(status.mode ?? next);
+                    toast.success(
+                      next === "live"
+                        ? "Nieuwe bezorgorders komen nu in Scan & Boek"
+                        : "Bezorgorders worden weer alleen meegekeken",
+                    );
+                    loadAdviceOrders();
+                  } catch (err: unknown) {
+                    toast.error(
+                      err instanceof Error ? err.message : "Omzetten mislukt",
+                    );
+                  } finally {
+                    setAdviceModeSaving(false);
+                  }
+                }}
+              >
+                {adviceMode === "live"
+                  ? "Bezorgorders terug naar meekijken"
+                  : "Bezorgorders live zetten"}
+              </Button>
+            )}
+          </div>
+        </Card>
+      )}
+
       <Card className="p-4">
         <p className="text-xs text-muted-foreground">
           Flessen die apart liggen voor een betaalde webshopbestelling. Ze
