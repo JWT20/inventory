@@ -1640,6 +1640,11 @@ class MonthlyBoxesResponse(BaseModel):
     # ander werk is dan een pallet kisten voor een restaurant, en ook anders
     # afgerekend wordt.
     webshop: list[MonthlyBoxesOrganization] = []
+    # Of deze handelaar überhaupt webshoporders kán hebben. Zonder
+    # wijnadvies-koppeling is dat nooit zo, en dan hoort het tabje er niet te
+    # staan. Mét koppeling maar zonder gepickte order hoort het er wél te staan,
+    # leeg — anders verschijnt het pas als er halverwege een maand iets in valt.
+    webshop_connected: bool = False
 
 
 # --- Pick locations (barcode-only, courier-managed) ------------------------

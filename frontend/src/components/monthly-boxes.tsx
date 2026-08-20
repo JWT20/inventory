@@ -49,6 +49,7 @@ interface OrgReport {
 interface MonthlyBoxesResponse {
   organizations: OrgReport[];
   webshop: OrgReport[];
+  webshop_connected: boolean;
 }
 
 // A webshop parcel and a wholesale order are not the same job and are not
@@ -95,6 +96,7 @@ export function MonthlyBoxesPage() {
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const [report, setReport] = useState<OrgReport | null>(null);
   const [webshop, setWebshop] = useState<OrgReport | null>(null);
+  const [webshopConnected, setWebshopConnected] = useState(false);
   const [tab, setTab] = useState<ReportTab>("customer");
   const [loading, setLoading] = useState(false);
 
@@ -109,6 +111,7 @@ export function MonthlyBoxesPage() {
     if (!selectedOrganizationId) {
       setReport(null);
       setWebshop(null);
+      setWebshopConnected(false);
       return;
     }
     try {
@@ -118,6 +121,7 @@ export function MonthlyBoxesPage() {
       );
       setReport(resp.organizations[0] ?? null);
       setWebshop(resp.webshop[0] ?? null);
+      setWebshopConnected(resp.webshop_connected);
     } catch {
       toast.error("Kan overzicht niet laden");
     } finally {
@@ -129,14 +133,15 @@ export function MonthlyBoxesPage() {
     load();
   }, [load]);
 
-  // A merchant without the wijnadvies connection can never have a webshop
-  // order, so offering the tab would only ever show them an empty table and
-  // leave them wondering what they are missing.
-  const hasWebshop = (webshop?.months.length ?? 0) > 0;
+  // Whether this merchant *can* have webshop orders, not whether any have been
+  // picked yet. Without the wijnadvies connection there will never be one, so
+  // the tab stays away; with it the tab belongs there even while it is still
+  // empty, instead of appearing halfway through a month.
+  const hasWebshop = webshopConnected;
 
   useEffect(() => {
-    // Switching to a merchant without webshop work must not strand the view on
-    // a tab that is no longer there.
+    // Switching to a merchant without the connection must not strand the view
+    // on a tab that is no longer there.
     if (!hasWebshop) setTab("customer");
   }, [hasWebshop]);
 

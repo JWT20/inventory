@@ -21,6 +21,7 @@ from app.database import get_db
 from app.events import publish_event
 from app.models import (
     SELLABLE_INVENTORY_LOCATIONS,
+    ChannelConnection,
     Customer,
     CustomerSKU,
     InventoryBalance,
@@ -897,6 +898,27 @@ def _build_customer_response(
     )
 
 
+def _has_advice_connection(db: Session, organization_id: int | None) -> bool:
+    """Whether this merchant can have webshop orders at all.
+
+    Answered from the connection, not from whether any order has been picked
+    yet. A merchant without the wijnadvies app will never have one, so the tab
+    should stay away; a merchant who has it but has picked nothing yet should
+    see it standing empty, rather than have it appear halfway through a month
+    the moment the first parcel is packed.
+    """
+    if organization_id is None:
+        return False
+    return db.query(
+        db.query(ChannelConnection)
+        .filter(
+            ChannelConnection.organization_id == organization_id,
+            ChannelConnection.channel == ADVICE_CHANNEL,
+        )
+        .exists()
+    ).scalar()
+
+
 def _monthly_units_by_organization(
     db: Session,
     user: User,
@@ -1075,6 +1097,9 @@ def monthly_booked_boxes(
         ),
         webshop=_monthly_units_by_organization(
             db, user, organization_id, webshop=True
+        ),
+        webshop_connected=_has_advice_connection(
+            db, organization_id or user.organization_id
         ),
     )
 

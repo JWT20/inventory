@@ -61,6 +61,7 @@ describe("monthly overview webshop tab", () => {
     vi.mocked(api.monthlyBookedBoxes).mockResolvedValue({
       organizations: [report("Racesokken.nl")],
       webshop: [],
+      webshop_connected: false,
     });
     const user = userEvent.setup();
 
@@ -72,10 +73,29 @@ describe("monthly overview webshop tab", () => {
     expect(screen.queryByRole("button", { name: "Klantorders" })).toBeNull();
   });
 
+  it("shows the tab as soon as the merchant is connected, empty or not", async () => {
+    // Jurjen has the wijnadvies connection but has picked nothing yet. Hiding
+    // it until the first parcel would make the tab appear halfway a month.
+    vi.mocked(api.monthlyBookedBoxes).mockResolvedValue({
+      organizations: [report("Wijn van Jurjen")],
+      webshop: [],
+      webshop_connected: true,
+    });
+    const user = userEvent.setup();
+
+    render(<MonthlyBoxesPage />);
+    await pickTheMerchant(user);
+
+    const tab = await screen.findByRole("button", { name: "Webshop" });
+    await user.click(tab);
+    await screen.findByText("Nog geen webshoporders gepickt voor deze handelaar");
+  });
+
   it("offers both tabs once a webshop order has been picked", async () => {
     vi.mocked(api.monthlyBookedBoxes).mockResolvedValue({
       organizations: [report("Wijn van Jurjen")],
       webshop: [report("Wijn van Jurjen")],
+      webshop_connected: true,
     });
     const user = userEvent.setup();
 
@@ -100,8 +120,13 @@ describe("monthly overview webshop tab", () => {
         ? {
             organizations: [report("Wijn van Jurjen")],
             webshop: [report("Wijn van Jurjen", [{ ...month, bottles: 9 }])],
+            webshop_connected: true,
           }
-        : { organizations: [report("Racesokken.nl")], webshop: [] },
+        : {
+            organizations: [report("Racesokken.nl")],
+            webshop: [],
+            webshop_connected: false,
+          },
     );
     const user = userEvent.setup();
 
