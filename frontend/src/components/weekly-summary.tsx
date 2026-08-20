@@ -82,6 +82,12 @@ interface SellableStockItem {
 
 type GroupBy = "supplier" | "customer";
 
+// Which tab is open. The first two group the week's order lines and are what the
+// backend understands as `group_by`; "stock" is not a grouping of the week at
+// all — it is the shelf right now, which the response carries regardless of the
+// week or the grouping asked for.
+type View = GroupBy | "stock";
+
 interface WeeklySummary {
   week: string;
   group_by: GroupBy;
@@ -95,7 +101,9 @@ interface WeeklySummary {
 }
 
 const GROUP_BY_STORAGE_KEY = "weekly-summary:group-by";
-const SELLABLE_COLLAPSE_KEY = "sellable-stock";
+// Kept apart from the group-by key so leaving the page on the stock tab still
+// remembers which grouping to return to.
+const VIEW_STORAGE_KEY = "weekly-summary:view";
 
 function getISOWeek(date: Date): string {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
@@ -147,6 +155,12 @@ export function WeeklySummaryPage() {
     // Default: per-customer for merchants (owner/member), per-supplier otherwise
     return user?.role === "owner" || user?.role === "member" ? "customer" : "supplier";
   });
+  const [view, setView] = useState<View>(() => {
+    const stored = typeof localStorage !== "undefined"
+      ? localStorage.getItem(VIEW_STORAGE_KEY)
+      : null;
+    return stored === "stock" ? "stock" : groupBy;
+  });
   const [data, setData] = useState<WeeklySummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -169,10 +183,15 @@ export function WeeklySummaryPage() {
     load();
   }, [load]);
 
-  const changeGroupBy = (next: GroupBy) => {
-    setGroupBy(next);
+  const changeView = (next: View) => {
+    setView(next);
+    // The stock tab reads what is already loaded, so `groupBy` stays where it
+    // was: switching to the shelf and back must not refetch the week, and must
+    // return to the grouping the user was actually looking at.
+    if (next !== "stock") setGroupBy(next);
     try {
-      localStorage.setItem(GROUP_BY_STORAGE_KEY, next);
+      localStorage.setItem(VIEW_STORAGE_KEY, next);
+      if (next !== "stock") localStorage.setItem(GROUP_BY_STORAGE_KEY, next);
     } catch {
       // ignore storage failures
     }
@@ -193,7 +212,9 @@ export function WeeklySummaryPage() {
         <h2 className="text-xl font-bold">Weekoverzicht</h2>
       </div>
 
-      <div className="flex items-center gap-2 mb-4">
+      {/* The shelf is today's count, not a week's worth of orders, so the week
+          picker is hidden there rather than left standing and doing nothing. */}
+      <div className={`items-center gap-2 mb-4 ${view === "stock" ? "hidden" : "flex"}`}>
         <Button variant="outline" size="sm" onClick={() => setWeek((w) => shiftWeek(w, -1))}>
           &larr;
         </Button>
@@ -214,9 +235,9 @@ export function WeeklySummaryPage() {
       <div className="inline-flex rounded-md border border-border overflow-hidden mb-4 text-sm">
         <button
           type="button"
-          onClick={() => changeGroupBy("supplier")}
+          onClick={() => changeView("supplier")}
           className={`px-3 py-1.5 transition-colors ${
-            groupBy === "supplier"
+            view === "supplier"
               ? "bg-primary text-primary-foreground"
               : "bg-background hover:bg-muted"
           }`}
@@ -225,35 +246,44 @@ export function WeeklySummaryPage() {
         </button>
         <button
           type="button"
-          onClick={() => changeGroupBy("customer")}
+          onClick={() => changeView("customer")}
           className={`px-3 py-1.5 transition-colors border-l border-border ${
-            groupBy === "customer"
+            view === "customer"
               ? "bg-primary text-primary-foreground"
               : "bg-background hover:bg-muted"
           }`}
         >
           Per klant
         </button>
+        <button
+          type="button"
+          onClick={() => changeView("stock")}
+          className={`px-3 py-1.5 transition-colors border-l border-border ${
+            view === "stock"
+              ? "bg-primary text-primary-foreground"
+              : "bg-background hover:bg-muted"
+          }`}
+        >
+          Voorraad
+        </button>
       </div>
 
-      {!loading && data && data.sellable_stock.length > 0 && (
-        <Card className="mb-4 overflow-hidden">
-          <button
-            className="w-full px-4 py-3 flex justify-between items-center text-left hover:bg-muted/50 transition-colors"
-            onClick={() => toggleCollapse(SELLABLE_COLLAPSE_KEY)}
-          >
-            <div>
-              <span className="font-semibold">Webshop &amp; winkel</span>
-              <span className="ml-2 text-sm text-muted-foreground">
-                {sellableTotal} fles{sellableTotal === 1 ? "" : "sen"} op de plank
-              </span>
-            </div>
-            <span className="text-muted-foreground text-xs">
-              {collapsed[SELLABLE_COLLAPSE_KEY] ? "\u25B6" : "\u25BC"}
-            </span>
-          </button>
+      {view === "stock" && !loading && data && data.sellable_stock.length === 0 && (
+        <Card className="p-6 text-center text-muted-foreground">
+          Nog geen losse flessen in de winkel of de webshop
+        </Card>
+      )}
 
-          {!collapsed[SELLABLE_COLLAPSE_KEY] && (
+      {view === "stock" && !loading && data && data.sellable_stock.length > 0 && (
+        <Card className="mb-4 overflow-hidden">
+          <div className="px-4 py-3">
+            <span className="font-semibold">Webshop &amp; winkel</span>
+            <span className="ml-2 text-sm text-muted-foreground">
+              {sellableTotal} fles{sellableTotal === 1 ? "" : "sen"} op de plank
+            </span>
+          </div>
+
+          {(
             <div className="border-t border-border">
               <Table>
                 <TableHeader>
@@ -293,9 +323,9 @@ export function WeeklySummaryPage() {
                 </TableBody>
               </Table>
               <p className="px-4 py-2 text-xs text-muted-foreground">
-                Losse flessen die de webshop kan verkopen. Magazijn telt niet mee
-                in het totaal &mdash; dat is wat je kunt bijbestellen, nog niet
-                wat je kunt verkopen. Los van de gekozen week; bestel bij via
+                Losse flessen die de webshop kan verkopen, zoals ze er nu bij
+                staan. Magazijn telt niet mee in het totaal &mdash; dat is wat je
+                kunt bijbestellen, nog niet wat je kunt verkopen. Bestel bij via
                 Orders &rarr; + Voorraad.
               </p>
             </div>
@@ -320,13 +350,13 @@ export function WeeklySummaryPage() {
         </div>
       )}
 
-      {!loading && data && data.suppliers.length === 0 && data.customers.length === 0 && (
+      {view !== "stock" && !loading && data && data.suppliers.length === 0 && data.customers.length === 0 && (
         <p className="text-center text-muted-foreground py-10">
           Geen bestellingen in deze week
         </p>
       )}
 
-      {!loading && data && data.group_by === "customer" && data.customers.length > 0 && (
+      {view === "customer" && !loading && data && data.group_by === "customer" && data.customers.length > 0 && (
         <div className="space-y-4">
           {data.customers.map((cust) => {
             const key = `c-${cust.customer_id ?? "none"}`;
@@ -409,7 +439,7 @@ export function WeeklySummaryPage() {
         </div>
       )}
 
-      {!loading && data && data.group_by === "supplier" && data.suppliers.length > 0 && (
+      {view === "supplier" && !loading && data && data.group_by === "supplier" && data.suppliers.length > 0 && (
         <div className="space-y-4">
           {data.suppliers.map((supplier) => {
             const key = String(supplier.supplier_id ?? "none");
