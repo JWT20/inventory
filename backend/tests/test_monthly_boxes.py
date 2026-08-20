@@ -446,3 +446,68 @@ def test_shipped_order_counts(client, db, courier_token, sample_org):
     assert len(orgs) == 1
     assert orgs[0]["total_boxes"] == 0
     assert orgs[0]["total_items"] == 4
+
+
+class TestWebshopTabVisibility:
+    """Whether the webshop tab belongs on screen, per merchant.
+
+    Answered from the wijnadvies connection, not from whether anything has been
+    picked. Without the connection there will never be a webshop order; with it
+    the tab belongs there even while it is still empty.
+    """
+
+    URL = "/api/orders/reports/monthly-boxes"
+
+    def test_a_merchant_without_the_connection_gets_no_tab(
+        self, client, db, owner_token, sample_org
+    ):
+        resp = client.get(
+            self.URL,
+            params={"organization_id": sample_org.id},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["webshop_connected"] is False
+
+    def test_a_connected_merchant_gets_the_tab_before_picking_anything(
+        self, client, db, owner_token, sample_org
+    ):
+        from app.models import ChannelConnection
+
+        db.add(
+            ChannelConnection(
+                organization_id=sample_org.id, channel="advice", mode="observe"
+            )
+        )
+        db.commit()
+
+        resp = client.get(
+            self.URL,
+            params={"organization_id": sample_org.id},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["webshop_connected"] is True
+        # Nothing picked yet, so the tab stands empty rather than absent.
+        assert resp.json()["webshop"] == []
+
+    def test_another_channel_does_not_count(self, client, db, owner_token, sample_org):
+        """Shopify and bol orders are counted with the wholesale work."""
+        from app.models import ChannelConnection
+
+        db.add(
+            ChannelConnection(
+                organization_id=sample_org.id, channel="shopify", mode="live"
+            )
+        )
+        db.commit()
+
+        resp = client.get(
+            self.URL,
+            params={"organization_id": sample_org.id},
+            headers=auth_header(owner_token),
+        )
+
+        assert resp.json()["webshop_connected"] is False
