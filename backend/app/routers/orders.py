@@ -56,6 +56,7 @@ from app.schemas import (
     WeeklySummarySupplier,
     WeeklySummaryWine,
 )
+from app.services.advice_channel import ADVICE_CHANNEL
 from app.services.booking import recompute_order_status, remaining_for_line
 from app.services.inventory_sync import push_inventory_to_channels
 from app.services.pricing import calc_effective_price
@@ -900,15 +901,22 @@ def _monthly_units_by_organization(
     db: Session,
     user: User,
     organization_id: int | None,
-    order_kind: str,
+    *,
+    webshop: bool,
 ) -> list[MonthlyBoxesOrganization]:
-    """Booked units per organization per month, for one kind of order.
+    """Booked units per organization per month, for one kind of work.
 
-    Split by kind because the two are different work with different meaning:
-    customer orders are volume that left the building, replenishment is the
-    merchant's own stock being moved onto a shelf. Adding them up would count the
-    same bottles twice — once here and again on the customer order that later
-    ships them — so they are reported side by side instead.
+    Split because a webshop parcel and a wholesale order are not the same job
+    and are not billed the same way: one is a single box with a shipping label,
+    the other a pallet of cases for a restaurant. Keeping them in one number
+    means unpicking it again before anyone can invoice.
+
+    Everything that is not a webshop order counts as the other side, including
+    replenishment — moving a case onto the shop shelf is warehouse work like any
+    other. Note that this does count the same bottles twice across a month: once
+    when the case lands on the shelf and again on the customer order that later
+    ships them. That is correct for "work done" and wrong for "goods sold"; this
+    report is the former.
     """
     # Per finalized order: its organization, finalize moment and booked boxes.
     #
@@ -936,7 +944,11 @@ def _monthly_units_by_organization(
         .join(OrderLine, OrderLine.order_id == Order.id)
         .join(SKU, OrderLine.sku_id == SKU.id)
         .filter(Order.finalized_at.isnot(None))
-        .filter(Order.order_kind == order_kind)
+        .filter(
+            Order.channel == ADVICE_CHANNEL
+            if webshop
+            else Order.channel != ADVICE_CHANNEL
+        )
         .group_by(
             Order.id,
             Order.organization_id,
@@ -1059,10 +1071,10 @@ def monthly_booked_boxes(
     """
     return MonthlyBoxesResponse(
         organizations=_monthly_units_by_organization(
-            db, user, organization_id, "customer"
+            db, user, organization_id, webshop=False
         ),
-        replenishment=_monthly_units_by_organization(
-            db, user, organization_id, "replenishment"
+        webshop=_monthly_units_by_organization(
+            db, user, organization_id, webshop=True
         ),
     )
 

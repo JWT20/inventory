@@ -1633,12 +1633,13 @@ class MonthlyBoxesOrganization(BaseModel):
 
 
 class MonthlyBoxesResponse(BaseModel):
-    # Klantorders: wat het pand verlaten heeft.
+    # Al het werk dat geen webshoppakket is: weekorders voor klanten, orders uit
+    # een verkoopkanaal, en bevoorrading van de eigen plank.
     organizations: list[MonthlyBoxesOrganization] = []
-    # Bevoorrading: dozen die de koerier van het magazijn naar de winkel- of
-    # webshopplank gepickt heeft. Apart, want het is echt verwerkt werk maar de
-    # flessen komen later nog een keer langs op de klantorder die ze verscheept.
-    replenishment: list[MonthlyBoxesOrganization] = []
+    # Bezorgorders uit de wijnadvies-app. Apart omdat een pakketje met een label
+    # ander werk is dan een pallet kisten voor een restaurant, en ook anders
+    # afgerekend wordt.
+    webshop: list[MonthlyBoxesOrganization] = []
 
 
 # --- Pick locations (barcode-only, courier-managed) ------------------------

@@ -436,3 +436,47 @@ class TestTheSwitch:
 
         assert resp.status_code == 200, resp.text
         assert db.query(Order).one().status == "active"
+
+
+class TestTheMonthlyReport:
+    URL = "/api/orders/reports/monthly-boxes"
+
+    def test_a_picked_webshop_order_counts_apart(
+        self, client, db, sample_org, owner_user, owner_token, monkeypatch
+    ):
+        """A parcel with a label is other work than a pallet for a restaurant."""
+        from tests.conftest import auth_header
+
+        _configure(monkeypatch, sample_org.id)
+        _live(db, sample_org)
+        _bottle(db, sample_org, webshop=6)
+        _reserve(client, quantity=2)
+        _order(client, quantity=2)
+        order = db.query(Order).one()
+        _pick(db, order, 2, owner_user.id)
+        db.expire_all()
+        assert db.query(Order).one().status == "completed"
+
+        resp = client.get(self.URL, headers=auth_header(owner_token))
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["webshop"][0]["total_bottles"] == 2
+        # And it is not counted a second time among the wholesale work.
+        assert body["organizations"] == []
+
+    def test_an_unpicked_webshop_order_counts_nowhere(
+        self, client, db, sample_org, owner_token, monkeypatch
+    ):
+        """Nothing was done yet, so there is nothing to bill."""
+        from tests.conftest import auth_header
+
+        _configure(monkeypatch, sample_org.id)
+        _live(db, sample_org)
+        _bottle(db, sample_org, webshop=6)
+        _reserve(client, quantity=2)
+        _order(client, quantity=2)
+
+        resp = client.get(self.URL, headers=auth_header(owner_token))
+
+        assert resp.json()["webshop"] == []
