@@ -1,3 +1,5 @@
+import type { InventoryLocation } from "@/lib/inventory-locations";
+
 const BASE = "/api";
 
 export interface AdviceProductSyncSummary {
@@ -594,7 +596,7 @@ export const api = {
     quantity: number,
     note: string | null,
     organizationId: number | null = null,
-    inventoryLocation: "warehouse" | "store" = "warehouse",
+    inventoryLocation: InventoryLocation = "warehouse",
   ) =>
     json("/inventory/adjust", "POST", {
       sku_id: skuId,

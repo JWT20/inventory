@@ -32,7 +32,15 @@ VALID_PRODUCT_TYPES = ("barcode", "vision")
 VALID_SHIPMENT_STATUSES = ("draft", "booked")
 VALID_INBOUND_UPLOAD_STATUSES = ("processing", "needs_action", "draft", "booked", "failed")
 VALID_MOVEMENT_TYPES = ("receive", "pick", "adjust", "count", "sale", "transfer")
-VALID_INVENTORY_LOCATIONS = ("warehouse", "store")
+# The physical stock pools. "warehouse" is the courier-run magazijn where
+# everything arrives; "store" is the merchant's shop shelf; "webshop" is the
+# stock set aside for online orders. Store and webshop are two separate physical
+# places, but together they are what the webshop can actually sell — see
+# SELLABLE_INVENTORY_LOCATIONS.
+VALID_INVENTORY_LOCATIONS = ("warehouse", "store", "webshop")
+# The pools a webshop order may be served from. Kept as one definition so no
+# screen or feed can drift on what "available online" means.
+SELLABLE_INVENTORY_LOCATIONS = ("store", "webshop")
 VALID_DISCOUNT_TYPES = ("percentage", "fixed")
 VALID_DELIVERY_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday")
 DEFAULT_DELIVERY_DAYS = ("wednesday", "thursday", "friday")
