@@ -126,6 +126,13 @@ export function ScanStep({
   }, [order, nextPickRetry]);
 
   useEffect(() => {
+    // Asking for the camera takes time — on a phone it waits for the permission
+    // prompt. Leave the screen in the meantime and the cleanup below runs while
+    // streamRef is still empty, so it stops nothing; the stream then arrives
+    // and nobody owns it any more. The camera light stays on until the tab is
+    // closed. Same guard the barcode scanner already uses.
+    let cancelled = false;
+
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -135,18 +142,26 @@ export function ScanStep({
             height: { ideal: 960 },
           },
         });
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
         }
       } catch {
-        toast.error("Camera niet beschikbaar");
+        // A screen that is already gone must not shout about a camera nobody
+        // is waiting for.
+        if (!cancelled) toast.error("Camera niet beschikbaar");
       }
     }
     startCamera();
     return () => {
+      cancelled = true;
       streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
       toast.dismiss(SCAN_FEEDBACK_TOAST_ID);
     };
   }, []);
