@@ -262,6 +262,8 @@ class SKUCreate(BaseModel):
     active: bool = True
     supplier_id: int | None = None
     is_bottle: bool = False
+    # The bottle product inside this box. Only meaningful on a box product.
+    bottle_sku_id: int | None = Field(default=None, gt=0)
     source_product_id: str | None = Field(default=None, max_length=100)
     # When omitted, the type is derived from the category below: wine → vision,
     # everything else → barcode (the new default, matching the model/migration).
@@ -307,6 +309,8 @@ class SKUUpdate(BaseModel):
     active: bool | None = None
     supplier_id: int | None = None
     is_bottle: bool | None = None
+    # Send null to unlink the bottle from this box.
+    bottle_sku_id: int | None = Field(default=None, gt=0)
     source_product_id: str | None = Field(default=None, max_length=100)
     product_type: Literal["barcode", "vision"] | None = None
     # EAN format/uniqueness is validated in the endpoint, where the SKU's
@@ -325,6 +329,9 @@ class SKUResponse(BaseModel):
     supplier_id: int | None = None
     supplier_name: str | None = None
     is_bottle: bool = False
+    bottle_sku_id: int | None = None
+    bottle_sku_code: str | None = None
+    bottle_sku_name: str | None = None
     source_product_id: str | None = None
     product_type: str = "vision"
     ean: str | None = None
