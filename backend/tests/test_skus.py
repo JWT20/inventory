@@ -71,6 +71,7 @@ class TestListSKUOptions:
             "sku_code",
             "name",
             "is_bottle",
+            "bottle_sku_id",
             "category",
             "producent",
             "supplier_name",

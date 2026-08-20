@@ -40,6 +40,15 @@ def lock_ordered(locations: Iterable[str]) -> list[str]:
             else (len(INVENTORY_LOCK_ORDER), location)
         ),
     )
+# How many bottles a box holds. One fixed ratio for the whole catalog: which
+# bottle sits inside which box is a per-product link (``SKU.bottle_sku_id``),
+# but the count is the same everywhere and is deliberately not a per-product
+# field nobody would keep correct.
+BOTTLES_PER_BOX = 6
+
+# Dutch names for the pools, for movement notes and screen text. One map, so a
+# pool is never called two different things in two places.
+LOCATION_LABELS = {"warehouse": "magazijn", "store": "winkel", "webshop": "webshop"}
 
 
 def apply_stock_movement(

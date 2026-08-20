@@ -357,6 +357,10 @@ class SKUOption(BaseModel):
     sku_code: str
     name: str
     is_bottle: bool = False
+    # The bottle inside this box, when linked. A picker that offers boxes for
+    # replenishment needs it to tell a usable box from one that would be
+    # refused on submit.
+    bottle_sku_id: int | None = None
     category: str | None = None
     producent: str | None = None
     supplier_name: str | None = None
@@ -551,6 +555,10 @@ class OrderResponse(BaseModel):
     # Order provenance: "manual" (in-app/customer), "shopify" or "bol".
     channel: str = "manual"
     inventory_location: InventoryLocation = "warehouse"
+    # "customer" (leaves the building) or "replenishment" (the merchant's own
+    # stock). A replenishment order names the pool its goods land in.
+    order_kind: Literal["customer", "replenishment"] = "customer"
+    destination_location: InventoryLocation | None = None
     # How this order is picked: "vision" (camera + AI) or "barcode" (handscanner
     # EAN scan). Derived from the order's products so the courier UI can route to
     # the right scanner.
@@ -751,6 +759,26 @@ class ManualOrderCreate(BaseModel):
     organization_id: int | None = None
     remarks: str = ""
     lines: list[ManualOrderLineCreate] = Field(..., min_length=1)
+
+
+class ReplenishmentOrderLineCreate(BaseModel):
+    sku_id: int = Field(..., gt=0)
+    quantity: int = Field(..., gt=0)
+
+
+class ReplenishmentOrderCreate(BaseModel):
+    """An order the merchant places for their own shop or webshop stock.
+
+    No customer: the goods stay with the merchant. The quantity is in the
+    product's own unit — boxes for a box product, bottles for a bottle product —
+    exactly as picking counts them.
+    """
+
+    organization_id: int | None = None
+    # Only the two sellable pools; the warehouse is where the goods come from.
+    destination_location: Literal["store", "webshop"]
+    remarks: str = ""
+    lines: list[ReplenishmentOrderLineCreate] = Field(..., min_length=1)
 
 
 class OrderLineAdd(BaseModel):
@@ -1530,7 +1558,12 @@ class MonthlyBoxesOrganization(BaseModel):
 
 
 class MonthlyBoxesResponse(BaseModel):
+    # Klantorders: wat het pand verlaten heeft.
     organizations: list[MonthlyBoxesOrganization] = []
+    # Bevoorrading: dozen die de koerier van het magazijn naar de winkel- of
+    # webshopplank gepickt heeft. Apart, want het is echt verwerkt werk maar de
+    # flessen komen later nog een keer langs op de klantorder die ze verscheept.
+    replenishment: list[MonthlyBoxesOrganization] = []
 
 
 # --- Pick locations (barcode-only, courier-managed) ------------------------

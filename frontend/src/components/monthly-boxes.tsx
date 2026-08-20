@@ -48,7 +48,14 @@ interface OrgReport {
 
 interface MonthlyBoxesResponse {
   organizations: OrgReport[];
+  replenishment: OrgReport[];
 }
+
+// Customer orders left the building; replenishment moved the merchant's own
+// stock onto a shelf. Both are work the courier did, but adding them up would
+// count the same bottles twice — once when the box is put on the shelf and
+// again on the customer order that ships them. Hence two tabs, never one total.
+type ReportTab = "customer" | "replenishment";
 
 const NL_MONTHS = [
   "januari",
@@ -87,6 +94,8 @@ export function MonthlyBoxesPage() {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const [report, setReport] = useState<OrgReport | null>(null);
+  const [replenishment, setReplenishment] = useState<OrgReport | null>(null);
+  const [tab, setTab] = useState<ReportTab>("customer");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -99,6 +108,7 @@ export function MonthlyBoxesPage() {
   const load = useCallback(async () => {
     if (!selectedOrganizationId) {
       setReport(null);
+      setReplenishment(null);
       return;
     }
     try {
@@ -107,6 +117,7 @@ export function MonthlyBoxesPage() {
         selectedOrganizationId,
       );
       setReport(resp.organizations[0] ?? null);
+      setReplenishment(resp.replenishment[0] ?? null);
     } catch {
       toast.error("Kan overzicht niet laden");
     } finally {
@@ -118,9 +129,10 @@ export function MonthlyBoxesPage() {
     load();
   }, [load]);
 
+  const shown = tab === "replenishment" ? replenishment : report;
   // Decided per merchant, not per month row: the table has one set of headers,
   // so a month without barcode orders keeps the columns and shows 0.
-  const showItemCounts = (report?.total_item_lines ?? 0) > 0;
+  const showItemCounts = (shown?.total_item_lines ?? 0) > 0;
 
   return (
     <>
@@ -152,6 +164,33 @@ export function MonthlyBoxesPage() {
         </Select>
       </div>
 
+      {selectedOrganizationId && (
+        <div className="inline-flex rounded-md border border-border overflow-hidden mb-4 text-sm">
+          <button
+            type="button"
+            onClick={() => setTab("customer")}
+            className={`px-3 py-1.5 transition-colors ${
+              tab === "customer"
+                ? "bg-primary text-primary-foreground"
+                : "bg-background hover:bg-muted"
+            }`}
+          >
+            Klantorders
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("replenishment")}
+            className={`px-3 py-1.5 transition-colors border-l border-border ${
+              tab === "replenishment"
+                ? "bg-primary text-primary-foreground"
+                : "bg-background hover:bg-muted"
+            }`}
+          >
+            Bevoorrading
+          </button>
+        </div>
+      )}
+
       {!selectedOrganizationId ? (
         <p className="text-center text-muted-foreground py-10">
           Kies een handelaar om het overzicht te bekijken
@@ -162,9 +201,11 @@ export function MonthlyBoxesPage() {
             <Skeleton key={i} className="h-8 w-full" />
           ))}
         </Card>
-      ) : !report || report.months.length === 0 ? (
+      ) : !shown || shown.months.length === 0 ? (
         <p className="text-center text-muted-foreground py-10">
-          Nog geen boekingen voor deze handelaar
+          {tab === "replenishment"
+            ? "Nog geen bevoorrading gepickt voor deze handelaar"
+            : "Nog geen boekingen voor deze handelaar"}
         </p>
       ) : (
         <Card className="p-0 overflow-hidden">
@@ -183,7 +224,7 @@ export function MonthlyBoxesPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {report.months.map((m) => {
+              {shown.months.map((m) => {
                 const closed = isClosedMonth(m.month);
                 return (
                   <TableRow key={m.month}>
@@ -211,6 +252,13 @@ export function MonthlyBoxesPage() {
               })}
             </TableBody>
           </Table>
+          {tab === "replenishment" && (
+            <p className="px-4 py-2 text-xs text-muted-foreground border-t border-border">
+              Dozen die uit het magazijn naar de winkel- of webshopplank zijn
+              gepickt. Deze staan los van de klantorders: de flessen verlaten het
+              pand pas op de order die ze later verscheept.
+            </p>
+          )}
         </Card>
       )}
     </>

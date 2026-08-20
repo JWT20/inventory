@@ -44,6 +44,7 @@ from app.schemas import (
     OrderLineUpdate,
     OrderResponse,
     OrderUpdate,
+    ReplenishmentOrderCreate,
     WeeklyPickPhotoResponse,
     WeeklySummaryCustomer,
     WeeklySummaryCustomerLine,
@@ -59,7 +60,7 @@ from app.services.push_notifications import (
     enqueue_approved_order_ready,
     enqueue_customer_order_created,
 )
-from app.services.stock import adjust_reservation
+from app.services.stock import LOCATION_LABELS, adjust_reservation
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -242,6 +243,8 @@ def _order_to_response(
         status=order.status,
         channel=order.channel,
         inventory_location=order.inventory_location,
+        order_kind=order.order_kind,
+        destination_location=order.destination_location,
         pick_method=pick_method,
         remarks=order.remarks or "",
         delivery_week=order.delivery_week,
@@ -493,6 +496,110 @@ def create_order(
     return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 
+@router.post("/replenishment", response_model=OrderResponse, status_code=201)
+def create_replenishment_order(
+    body: ReplenishmentOrderCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_merchant),
+):
+    """Order stock from the warehouse for the merchant's own shop or webshop.
+
+    Goods arrive at the warehouse in boxes but are sold as loose bottles, so
+    this is how a box gets onto the shelf it is sold from. The courier picks it
+    like any other order; the booking turns the box into bottles in the chosen
+    pool (see ``replenishment_credit``).
+
+    There is no approval step and no delivery week: the merchant is asking for
+    their own goods, and nobody else has to agree to that. Nothing is reserved
+    either — stock moves when it is actually picked.
+
+    Refuses a box without a bottle link up front. Discovering that in the
+    warehouse, with the box already in hand, is the worst moment to find out.
+    """
+    org_id = _resolve_organization_id(user, body.organization_id, db)
+    org = db.get(Organization, org_id)
+    if _is_barcode_only_org(org):
+        raise HTTPException(
+            403,
+            "Bevoorradingsorders zijn niet beschikbaar voor EAN-organisaties",
+        )
+
+    # Same product on two lines is one line; picking counts units, not rows.
+    quantities: dict[int, int] = {}
+    for line in body.lines:
+        quantities[line.sku_id] = quantities.get(line.sku_id, 0) + line.quantity
+
+    skus: dict[int, SKU] = {}
+    for sku_id in quantities:
+        sku = db.get(SKU, sku_id)
+        if not sku or sku.organization_id != org_id:
+            raise HTTPException(404, f"SKU met id {sku_id} niet gevonden")
+        if not sku.is_bottle and sku.bottle_sku_id is None:
+            raise HTTPException(
+                409,
+                f"'{sku.name}' is niet aan een fles gekoppeld; "
+                "koppel de fles bij het product voordat je hem bestelt",
+            )
+        skus[sku_id] = sku
+
+    destination_label = LOCATION_LABELS[body.destination_location]
+    order = Order(
+        organization_id=org_id,
+        created_by=user.id,
+        reference=f"BVR-{uuid.uuid4().hex[:8].upper()}",
+        channel="manual",
+        status="active",
+        order_kind="replenishment",
+        inventory_location="warehouse",
+        destination_location=body.destination_location,
+        remarks=body.remarks,
+        delivery_week=None,
+    )
+    db.add(order)
+    db.flush()
+
+    lines = [
+        OrderLine(
+            order_id=order.id,
+            sku_id=sku_id,
+            customer_id=None,
+            # No customer, so this is what the courier sees on the pick screen.
+            klant=f"Voorraad {destination_label}",
+            quantity=quantity,
+        )
+        for sku_id, quantity in quantities.items()
+    ]
+    db.add_all(lines)
+    db.flush()
+
+    # A vision product without a reference photo cannot be matched by the
+    # camera, so the order waits in pending_images exactly like a customer
+    # order does — adding the photo promotes it.
+    recompute_order_status(order, lines)
+    if order.status == "active" and not all(
+        len(line.sku.reference_images) > 0 or line.sku.product_type == "barcode"
+        for line in lines
+    ):
+        order.status = "pending_images"
+
+    db.commit()
+    db.refresh(order)
+
+    publish_event(
+        "order_created_replenishment",
+        details={
+            "order_reference": order.reference,
+            "destination_location": body.destination_location,
+            "total_lines": len(quantities),
+        },
+        user=user,
+        resource_type="order",
+        resource_id=order.id,
+    )
+
+    return _order_to_response(order, db)
+
+
 @router.get("", response_model=list[OrderResponse])
 def list_orders(
     week: str | None = None,
@@ -633,6 +740,16 @@ def weekly_pick_photos(
                 and_(
                     Order.delivery_week.is_(None),
                     Order.organization_id.in_(week_org_ids),
+                    Order.created_at >= start_dt,
+                    Order.created_at <= end_dt,
+                ),
+                # A replenishment order belongs to nobody's delivery week, but
+                # it does have to be picked. Tying it to the week-planning orgs
+                # would hide it from every merchant without that module, so it
+                # surfaces in the week it was placed regardless.
+                and_(
+                    Order.order_kind == "replenishment",
+                    Order.delivery_week.is_(None),
                     Order.created_at >= start_dt,
                     Order.created_at <= end_dt,
                 ),
@@ -787,26 +904,19 @@ def _build_customer_response(
     )
 
 
-@router.get("/reports/monthly-boxes", response_model=MonthlyBoxesResponse)
-def monthly_booked_boxes(
-    organization_id: int | None = Query(
-        None, description="Optioneel: beperk tot één handelaar."
-    ),
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """Aantal verwerkte eenheden per maand voor afgeronde orders.
+def _monthly_units_by_organization(
+    db: Session,
+    user: User,
+    organization_id: int | None,
+    order_kind: str,
+) -> list[MonthlyBoxesOrganization]:
+    """Booked units per organization per month, for one kind of order.
 
-    Eenheden tellen mee in de maand waarin de order is afgerond (``finalized_at``)
-    en worden uitgesplitst als dozen, flessen of items. Het aantal is het werkelijk
-    geboekte aantal. Gegroepeerd per handelaar (organisatie).
-
-    Voor barcode-producten tellen we daarnaast het aantal orders en orderregels:
-    daar zegt het aantal stuks weinig over de verwerkte hoeveelheid werk. Dozen en
-    flessen blijven puur op eenheden geteld.
-
-    Zichtbaar voor de koerier en platform-admin (alle handelaren) en voor een
-    owner/member (alleen de eigen handelaar).
+    Split by kind because the two are different work with different meaning:
+    customer orders are volume that left the building, replenishment is the
+    merchant's own stock being moved onto a shelf. Adding them up would count the
+    same bottles twice — once here and again on the customer order that later
+    ships them — so they are reported side by side instead.
     """
     # Per finalized order: its organization, finalize moment and booked boxes.
     #
@@ -834,6 +944,7 @@ def monthly_booked_boxes(
         .join(OrderLine, OrderLine.order_id == Order.id)
         .join(SKU, OrderLine.sku_id == SKU.id)
         .filter(Order.finalized_at.isnot(None))
+        .filter(Order.order_kind == order_kind)
         .group_by(
             Order.id,
             Order.organization_id,
@@ -878,7 +989,7 @@ def monthly_booked_boxes(
             item_lines[row.org_id][month] += int(row.lines)
 
     if not buckets:
-        return MonthlyBoxesResponse(organizations=[])
+        return []
 
     # Resolve organization names in one query.
     org_ids = [oid for oid in buckets if oid is not None]
@@ -925,7 +1036,43 @@ def monthly_booked_boxes(
         )
 
     organizations.sort(key=lambda o: o.organization_name.lower())
-    return MonthlyBoxesResponse(organizations=organizations)
+    return organizations
+
+
+@router.get("/reports/monthly-boxes", response_model=MonthlyBoxesResponse)
+def monthly_booked_boxes(
+    organization_id: int | None = Query(
+        None, description="Optioneel: beperk tot één handelaar."
+    ),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Aantal verwerkte eenheden per maand voor afgeronde orders.
+
+    Eenheden tellen mee in de maand waarin de order is afgerond (``finalized_at``)
+    en worden uitgesplitst als dozen, flessen of items. Het aantal is het werkelijk
+    geboekte aantal. Gegroepeerd per handelaar (organisatie).
+
+    Voor barcode-producten tellen we daarnaast het aantal orders en orderregels:
+    daar zegt het aantal stuks weinig over de verwerkte hoeveelheid werk. Dozen en
+    flessen blijven puur op eenheden geteld.
+
+    Bevoorradingsorders staan apart in ``replenishment``. Het is echt verwerkt
+    werk — de koerier pickt die dozen — maar de flessen verlaten het pand niet en
+    komen later nog een keer langs op de klantorder die ze verscheept. Bij elkaar
+    optellen zou diezelfde flessen dus dubbel tellen.
+
+    Zichtbaar voor de koerier en platform-admin (alle handelaren) en voor een
+    owner/member (alleen de eigen handelaar).
+    """
+    return MonthlyBoxesResponse(
+        organizations=_monthly_units_by_organization(
+            db, user, organization_id, "customer"
+        ),
+        replenishment=_monthly_units_by_organization(
+            db, user, organization_id, "replenishment"
+        ),
+    )
 
 
 @router.get("/weekly-summary", response_model=WeeklySummaryResponse)
@@ -974,6 +1121,11 @@ def weekly_order_summary(
             # remains a useful historical overview. Cancelled and unapproved
             # orders deliberately stay out.
             Order.status.in_(("pending_images", "active", "completed", "closed")),
+            # A replenishment order is the merchant restocking their own shelf,
+            # not a customer buying something. Counting it here would inflate
+            # both the supplier order quantities and the customer totals with
+            # goods that never left the building.
+            Order.order_kind == "customer",
             or_(
                 Order.delivery_week == week,
                 # Weekless fallback only for week-planning orgs (legacy wine

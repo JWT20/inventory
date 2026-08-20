@@ -13,7 +13,11 @@ from app.database import get_db
 from app.events import publish_event
 from app.models import SKU, InventoryBalance, Order, OrderLine, Organization, ReferenceImage, User
 from app.routers.skus import _check_duplicate_embedding, _sku_to_response
-from app.services.booking import apply_booking, promote_pending_images_orders_for_sku
+from app.services.booking import (
+    apply_booking,
+    promote_pending_images_orders_for_sku,
+    rolcontainer_label,
+)
 from app.schemas import (
     AlternativeMatch,
     BookingConfirmation,
@@ -522,7 +526,7 @@ def sku_distribution(
             order_id=line.order_id,
             order_line_id=line.id,
             customer_name=line.customer_name,
-            rolcontainer=f"KLANT {line.customer_name.upper()}",
+            rolcontainer=rolcontainer_label(line),
             delivery_day=line.delivery_day,
             delivery_week=line.order.delivery_week,
             ordered_quantity=line.quantity,
@@ -951,7 +955,7 @@ async def book_box(
             (t_match - t_process) * 1000,
         )
 
-        rolcontainer = f"KLANT {order_line.customer_name.upper()}"
+        rolcontainer = rolcontainer_label(order_line)
 
         return BookingConfirmation(
             confirmation_token=token,
@@ -1065,7 +1069,7 @@ def confirm_booking(
         confidence=data.get("confidence"),
     )
 
-    rolcontainer = f"KLANT {order_line.customer_name.upper()}"
+    rolcontainer = rolcontainer_label(order_line)
     remaining = result.remaining
 
     publish_event(
@@ -1210,7 +1214,7 @@ async def register_reference_and_book(
 
     remaining = order_line.quantity - order_line.booked_count
     remaining = min(remaining, cap_remaining_for_line)
-    rolcontainer = f"KLANT {order_line.customer_name.upper()}"
+    rolcontainer = rolcontainer_label(order_line)
 
     return BookingConfirmation(
         confirmation_token=confirm_token,
@@ -1324,7 +1328,7 @@ def book_more(
         confidence=None,
     )
 
-    rolcontainer = f"KLANT {order_line.customer_name.upper()}"
+    rolcontainer = rolcontainer_label(order_line)
     remaining = result.remaining
 
     publish_event(

@@ -79,7 +79,12 @@ from app.services.embedding import (
 from app.services.langfuse_client import PromptUnavailableError
 from app.services.pricing import calc_effective_price
 from app.services.inventory_sync import push_inventory_to_channels
-from app.services.stock import apply_stock_movement, lock_ordered
+from app.services.stock import (
+    BOTTLES_PER_BOX,
+    LOCATION_LABELS,
+    apply_stock_movement,
+    lock_ordered,
+)
 from app.services.storage import storage
 
 logger = logging.getLogger(__name__)
@@ -102,8 +107,6 @@ def _normalize_supplier_code(value: str | None) -> str:
         return ""
     return value.strip().upper()
 
-
-BOTTLES_PER_BOX = 6
 
 _BOX_UNIT_ALIASES = {"boxes", "box", "doos", "dozen", "colli", "kisten", "ds", "ct"}
 _PIECE_UNIT_ALIASES = {"pieces", "piece", "bottles", "bottle", "flessen", "fles", "fl", "btls", "stuks", "stuk", "pcs"}
@@ -1602,9 +1605,6 @@ def adjust_inventory(
     )
 
     return movement
-
-
-LOCATION_LABELS = {"warehouse": "magazijn", "store": "winkel", "webshop": "webshop"}
 
 
 @router.post("/inventory/transfer", response_model=InventoryTransferResponse)
