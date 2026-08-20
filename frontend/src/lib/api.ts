@@ -550,7 +550,6 @@ export const api = {
     document_sha256?: string | null;
     upload_attempt_id?: number | null;
     force?: boolean;
-    inventory_location?: "warehouse" | "store";
     lines: { sku_id: number; quantity: number; supplier_code?: string | null }[];
   }) => json("/shipments", "POST", data),
   bookShipment: (shipmentId: number) =>

@@ -921,7 +921,13 @@ class ShipmentCreate(BaseModel):
     document_sha256: str | None = None
     upload_attempt_id: int | None = Field(None, gt=0)
     force: bool = False
-    inventory_location: Literal["warehouse", "store"] = "warehouse"
+    # Everything arrives at the warehouse. What goes to the shop or the webshop
+    # is decided afterwards, per product, by moving or replenishing it — not by
+    # a choice on the delivery note, which could only ever apply to the whole
+    # document at once. The field stays so an older caller keeps working; the
+    # response side stays wide because shipments booked to the shop before this
+    # still have to be readable.
+    inventory_location: Literal["warehouse"] = "warehouse"
     lines: list[ShipmentLineCreate] = Field(..., min_length=1)
 
 

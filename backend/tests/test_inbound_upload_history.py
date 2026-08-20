@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 from app.models import (
+    InboundShipment,
     InboundUploadAttempt,
     InventoryBalance,
     Organization,
@@ -406,43 +407,59 @@ def test_stale_processing_attempt_is_marked_failed(db, owner_user):
 
 
 def test_history_shows_which_pool_the_goods_landed_in(client, db, owner_token, sample_org):
-    """A pakbon can go to the shop or the warehouse; afterwards you must be
-    able to see which. Without it the only way to tell is to go count."""
+    """New pakbonnen all land in the warehouse, but older ones went to the shop;
+    the history must keep showing where each one actually landed."""
     sku = SKU(sku_code="HISTORY-LOC", name="Locatiewijn", organization_id=sample_org.id)
     db.add(sku)
     db.commit()
 
-    def _book(location: str, reference: str) -> dict:
-        attempt = InboundUploadAttempt(
-            organization_id=sample_org.id,
-            source_type="text",
-            status="needs_action",
-            line_count=1,
-            bookable_line_count=1,
-        )
-        db.add(attempt)
-        db.commit()
-        created = client.post(
-            "/api/shipments",
-            headers=auth_header(owner_token),
-            json={
-                "upload_attempt_id": attempt.id,
-                "supplier_name": "Vojacek",
-                "reference": reference,
-                "inventory_location": location,
-                "lines": [{"sku_id": sku.id, "quantity": 2}],
-            },
-        )
-        assert created.status_code == 201, created.text
-        booked = client.post(
-            f'/api/shipments/{created.json()["id"]}/book',
-            headers=auth_header(owner_token),
-        )
-        assert booked.status_code == 200, booked.text
-        return created.json()
+    attempt = InboundUploadAttempt(
+        organization_id=sample_org.id,
+        source_type="text",
+        status="needs_action",
+        line_count=1,
+        bookable_line_count=1,
+    )
+    db.add(attempt)
+    db.commit()
+    created = client.post(
+        "/api/shipments",
+        headers=auth_header(owner_token),
+        json={
+            "upload_attempt_id": attempt.id,
+            "supplier_name": "Vojacek",
+            "reference": "PKB-MAGAZIJN",
+            "lines": [{"sku_id": sku.id, "quantity": 2}],
+        },
+    )
+    assert created.status_code == 201, created.text
+    booked = client.post(
+        f'/api/shipments/{created.json()["id"]}/book',
+        headers=auth_header(owner_token),
+    )
+    assert booked.status_code == 200, booked.text
+    warehouse_shipment_id = created.json()["id"]
 
-    store_shipment = _book("store", "PKB-WINKEL")
-    warehouse_shipment = _book("warehouse", "PKB-MAGAZIJN")
+    # A pakbon booked to the shop before inbound became warehouse-only. The API
+    # no longer accepts one, so it is written the way history holds it.
+    old_attempt = InboundUploadAttempt(
+        organization_id=sample_org.id,
+        source_type="text",
+        status="booked",
+        line_count=1,
+        bookable_line_count=1,
+    )
+    old_shipment = InboundShipment(
+        organization_id=sample_org.id,
+        supplier_name="Vojacek",
+        reference="PKB-WINKEL",
+        status="booked",
+        inventory_location="store",
+    )
+    db.add_all([old_attempt, old_shipment])
+    db.commit()
+    old_attempt.shipment_id = old_shipment.id
+    db.commit()
 
     history = client.get("/api/inbound-uploads", headers=auth_header(owner_token))
 
@@ -450,8 +467,8 @@ def test_history_shows_which_pool_the_goods_landed_in(client, db, owner_token, s
     by_shipment = {
         row["shipment_id"]: row["inventory_location"] for row in history.json()
     }
-    assert by_shipment[store_shipment["id"]] == "store"
-    assert by_shipment[warehouse_shipment["id"]] == "warehouse"
+    assert by_shipment[old_shipment.id] == "store"
+    assert by_shipment[warehouse_shipment_id] == "warehouse"
 
 
 def test_history_reports_no_location_when_nothing_was_booked(
@@ -476,7 +493,7 @@ def test_history_reports_no_location_when_nothing_was_booked(
 def test_history_hides_location_while_shipment_is_still_a_draft(
     client, db, owner_token, sample_org
 ):
-    """Choosing a destination on a draft does not mean stock landed there."""
+    """A draft has not landed anywhere yet, so it reports no pool."""
     sku = SKU(
         sku_code="HISTORY-DRAFT-LOC",
         name="Conceptlocatiewijn",
@@ -499,7 +516,6 @@ def test_history_hides_location_while_shipment_is_still_a_draft(
             "upload_attempt_id": attempt.id,
             "supplier_name": "Vojacek",
             "reference": "PKB-CONCEPT-WINKEL",
-            "inventory_location": "store",
             "lines": [{"sku_id": sku.id, "quantity": 2}],
         },
     )
