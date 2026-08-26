@@ -1,0 +1,58 @@
+name: Diagnose advice feed key
+
+# Read-only check of the credential Dockscan uses for the advice product feed.
+# Run it from the Actions tab when "Synchroniseer nu" answers 502: the feed
+# reports every auth failure as a plain 401, and Dockscan collapses that into
+# "tijdelijk niet bereikbaar", so neither side names the real problem.
+#
+# The key itself is never printed. Only its length, whether it carries stray
+# whitespace, and a short irreversible fingerprint reach the log — plus the
+# status the live feed answers with, which is the actual question.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect the credential and probe the feed
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: deploy
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 5m
+          script: |
+            set -u
+            cd /opt/wijnpick
+
+            raw=$(grep -m1 '^ADVICE_PRODUCTS_API_KEY=' .env | cut -d= -f2-)
+            base=$(grep -m1 '^ADVICE_PRODUCTS_BASE_URL=' .env | cut -d= -f2-)
+
+            # What the shell would hand httpx, minus anything invisible.
+            clean=$(printf '%s' "$raw" | tr -d ' \t\r\n' | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//")
+            base=$(printf '%s' "$base" | tr -d ' \t\r\n' | sed -e 's/^"//' -e 's/"$//' -e 's:/*$::')
+
+            echo "=== configuratie ==="
+            echo "BASE_URL           : ${base}"
+            echo "sleutel lengte     : ${#raw}"
+            echo "zonder witruimte   : ${#clean}"
+            if [ "${#raw}" -ne "${#clean}" ]; then
+              echo "OORDEEL            : er staat witruimte of een quote omheen"
+            else
+              echo "OORDEEL            : schoon, geen witruimte"
+            fi
+            echo "vingerafdruk       : $(printf '%s' "$clean" | sha256sum | cut -c1-12)"
+
+            # The decisive test: ask the live feed, once as configured and once
+            # cleaned. A 200 on the cleaned key proves whitespace is the cause.
+            echo ""
+            echo "=== antwoord van de feed ==="
+            for label in configured cleaned; do
+              if [ "$label" = configured ]; then k=$raw; else k=$clean; fi
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 \
+                -H "Authorization: Bearer ${k}" \
+                "${base}/api/integrations/inventory/products" || echo "geen antwoord")
+              printf '%-12s -> HTTP %s\n' "$label" "$code"
+            done
