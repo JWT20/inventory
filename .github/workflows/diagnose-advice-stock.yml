@@ -1,0 +1,96 @@
+name: Diagnose advice stock visibility
+
+# Why a synced bottle can sit on the shelf and still read as sold out in the
+# advice app.
+#
+# The stock feed reports an inactive SKU at zero in every pool rather than
+# leaving it out (integrations.py, "An inactive product is unsellable whatever
+# the shelf holds"). For an organization with auto_inactivate_no_images, a
+# feed-linked bottle is active only when the advice app says so *and* it has a
+# usable reference image (product_status.py). The manual sync runs with
+# import_images=False, so a freshly synced wine has no image until the hourly
+# loop fetches one — and that import runs the duplicate check, which can reject
+# it. A bottle stuck that way reports zero forever.
+#
+# This reads only. No stock is moved and no product is activated.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query the linked bottles
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: deploy
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 5m
+          script: |
+            set -eu
+            cd /opt/wijnpick
+
+            org=$(grep -m1 '^ADVICE_STOCK_ORGANIZATION_ID=' .env | cut -d= -f2- | tr -d ' \t\r\n"')
+            dbuser=$(grep -m1 '^POSTGRES_USER=' .env | cut -d= -f2- | tr -d ' \t\r\n"')
+            dbuser=${dbuser:-wijnpick}
+            dbname=$(grep -m1 '^POSTGRES_DB=' .env | cut -d= -f2- | tr -d ' \t\r\n"')
+            dbname=${dbname:-wijnpick}
+
+            echo "organisatie: ${org}"
+            echo ""
+
+            sudo docker exec -i wijnpick-db-1 psql -U "$dbuser" -d "$dbname" -P pager=off <<SQL
+            \echo '=== staat de beeldeis aan voor deze organisatie? ==='
+            SELECT id, name, auto_inactivate_no_images
+            FROM organizations WHERE id = ${org};
+
+            \echo ''
+            \echo '=== samenvatting gekoppelde flessen ==='
+            SELECT count(*) AS totaal,
+                   count(*) FILTER (WHERE active) AS actief,
+                   count(*) FILTER (WHERE NOT active) AS inactief
+            FROM skus
+            WHERE organization_id = ${org}
+              AND is_bottle
+              AND source_product_id IS NOT NULL;
+
+            \echo ''
+            \echo '=== de 20 nieuwste gekoppelde flessen ==='
+            SELECT s.sku_code,
+                   left(s.name, 28) AS naam,
+                   s.active AS act,
+                   s.source_active AS feed,
+                   (SELECT count(*) FROM reference_images ri
+                      WHERE ri.sku_id = s.id
+                        AND ri.processing_status IN ('pending','processing','done')) AS beeld_ok,
+                   (SELECT count(*) FROM reference_images ri
+                      WHERE ri.sku_id = s.id
+                        AND ri.processing_status NOT IN ('pending','processing','done')) AS beeld_fout,
+                   coalesce((SELECT sum(ib.quantity_on_hand - ib.quantity_reserved)
+                             FROM inventory_balances ib
+                             WHERE ib.sku_id = s.id
+                               AND ib.inventory_location IN ('store','webshop')), 0) AS verkoopbaar
+            FROM skus s
+            WHERE s.organization_id = ${org}
+              AND s.is_bottle
+              AND s.source_product_id IS NOT NULL
+            ORDER BY s.id DESC
+            LIMIT 20;
+
+            \echo ''
+            \echo '=== flessen met voorraad die de feed toch op nul zet ==='
+            SELECT s.sku_code, left(s.name, 28) AS naam, s.active AS act, s.source_active AS feed,
+                   sum(ib.quantity_on_hand - ib.quantity_reserved) AS op_plank
+            FROM skus s
+            JOIN inventory_balances ib ON ib.sku_id = s.id
+            WHERE s.organization_id = ${org}
+              AND s.is_bottle
+              AND NOT s.active
+              AND ib.inventory_location IN ('store','webshop')
+            GROUP BY s.id, s.sku_code, s.name, s.active, s.source_active
+            HAVING sum(ib.quantity_on_hand - ib.quantity_reserved) > 0
+            ORDER BY op_plank DESC
+            LIMIT 20;
+            SQL
