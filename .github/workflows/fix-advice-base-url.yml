@@ -1,0 +1,78 @@
+name: Point the advice feed at its canonical domain
+
+# One-off repair for the sync outage of August 2026.
+#
+# ADVICE_PRODUCTS_BASE_URL pointed at https://adviesvanjurjen.nl, which stopped
+# serving the advice app and now answers 308 towards https://vanjurjen.nl.
+# httpx follows that redirect but drops the Authorization header on the way,
+# because the host changes — so the feed saw an unauthenticated request and
+# answered 401, and every sync since has failed with nothing pointing at the
+# domain as the cause.
+#
+# This rewrites that one line, restarts the backend so it re-reads .env, and
+# then proves the result by asking the feed from the server itself. No key is
+# read back into the log.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Correct the base URL and verify the feed answers
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: deploy
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 10m
+          script: |
+            set -eu
+            cd /opt/wijnpick
+
+            target="https://vanjurjen.nl"
+
+            echo "=== voor ==="
+            grep '^ADVICE_PRODUCTS_BASE_URL=' .env || echo "(regel ontbreekt)"
+
+            backup=".env.bak.$(date +%Y%m%d-%H%M%S)"
+            sudo cp .env "$backup"
+            echo "back-up: ${backup}"
+
+            if grep -q '^ADVICE_PRODUCTS_BASE_URL=' .env; then
+              sudo sed -i "s|^ADVICE_PRODUCTS_BASE_URL=.*|ADVICE_PRODUCTS_BASE_URL=${target}|" .env
+            else
+              echo "ADVICE_PRODUCTS_BASE_URL=${target}" | sudo tee -a .env > /dev/null
+            fi
+
+            echo ""
+            echo "=== na ==="
+            grep '^ADVICE_PRODUCTS_BASE_URL=' .env
+
+            echo ""
+            echo "=== backend herstarten ==="
+            sudo docker compose up -d backend
+            sleep 10
+
+            # Proof the container actually re-read .env, rather than the file
+            # merely looking right on disk.
+            echo ""
+            echo "=== wat de container nu ziet ==="
+            sudo docker exec wijnpick-backend-1 printenv ADVICE_PRODUCTS_BASE_URL
+
+            # The real test: the credential that has been answering 401 for days
+            # should now be accepted, because no cross-host redirect strips it.
+            echo ""
+            echo "=== antwoord van de feed ==="
+            key=$(grep -m1 '^ADVICE_PRODUCTS_API_KEY=' .env | cut -d= -f2- | tr -d ' \t\r\n')
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 \
+              -H "Authorization: Bearer ${key}" \
+              "${target}/api/integrations/inventory/products" || echo "geen antwoord")
+            echo "GET ${target}/api/integrations/inventory/products -> HTTP ${code}"
+
+            if [ "$code" = "200" ]; then
+              echo "GELUKT: de feed accepteert de sleutel weer."
+            else
+              echo "NIET OPGELOST: verwacht 200, kreeg ${code}. Herstel met: sudo cp ${backup} .env"
+            fi
