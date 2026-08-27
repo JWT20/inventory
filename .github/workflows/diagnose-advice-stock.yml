@@ -93,4 +93,38 @@ jobs:
             HAVING sum(ib.quantity_on_hand - ib.quantity_reserved) > 0
             ORDER BY op_plank DESC
             LIMIT 20;
+            \echo ''
+            \echo '=== fles met voorraad die de advies-app niet ziet (niet gekoppeld) ==='
+            SELECT a.sku_code AS met_voorraad,
+                   left(a.name, 26) AS naam,
+                   a.active AS act,
+                   sum(ib.quantity_on_hand - ib.quantity_reserved) AS op_plank,
+                   b.sku_code AS gekoppelde_tweeling
+            FROM skus a
+            JOIN inventory_balances ib
+              ON ib.sku_id = a.id AND ib.inventory_location IN ('store','webshop')
+            LEFT JOIN skus b
+              ON b.organization_id = a.organization_id
+             AND b.source_product_id IS NOT NULL
+             AND b.sku_code = a.sku_code || '-FLES'
+            WHERE a.organization_id = ${org}
+              AND a.is_bottle
+              AND a.source_product_id IS NULL
+            GROUP BY a.id, a.sku_code, a.name, a.active, b.sku_code
+            HAVING sum(ib.quantity_on_hand - ib.quantity_reserved) > 0
+            ORDER BY op_plank DESC
+            LIMIT 30;
+
+            \echo ''
+            \echo '=== de Adeneuer van Jurjen, alle varianten ==='
+            SELECT sku_code, left(name, 26) AS naam, is_bottle, active, source_product_id,
+                   coalesce((SELECT sum(ib.quantity_on_hand - ib.quantity_reserved)
+                             FROM inventory_balances ib
+                             WHERE ib.sku_id = s.id
+                               AND ib.inventory_location IN ('store','webshop')), 0) AS verkoopbaar
+            FROM skus s
+            WHERE s.organization_id = ${org}
+              AND (s.sku_code LIKE 'ADEN-SPAT%'
+                   OR s.name ILIKE '%spatburgunder%'
+                   OR s.source_product_id = 'prd_msrho3neqt5lz6389m');
             SQL
