@@ -100,14 +100,18 @@ def _post_book(client, courier_token, order):
     )
 
 
-def test_confident_out_of_scope_variant_is_refused(
+def test_confident_out_of_scope_wine_is_refused(
     client, courier_token, variants, tmp_path
 ):
-    """The picker grabbed the wrong variant: refuse, never offer a one-tap book.
+    """The picker grabbed a different wine: refuse, never offer a one-tap book.
 
     This is the regression the whole change exists for. The scanned box is
     CALY-ROSSO, which is not on the order; previously it matched CALY-BIANCO —
     the only variant in the restricted pool — and was booked as such.
+
+    The refusal stands whenever the visual pass and the vector ranking agree
+    that the box is something else: here CALY-ROSSO leads by more than the
+    ambiguity margin, so no open variant is close enough to be in doubt.
     """
     ordered, other, _third, order = variants
 
@@ -115,7 +119,48 @@ def test_confident_out_of_scope_variant_is_refused(
          patch("app.routers.receiving.storage", _tmp_storage(tmp_path)), \
          patch("app.routers.receiving.find_best_matches") as mock_match, \
          patch("app.routers.receiving.rerank_scan") as mock_rerank:
-        # The embedding cannot separate them: both score inside the margin.
+        mock_match.return_value = [
+            (other, 0.96, "reference_images/CALY-ROSSO.jpg", "Calycanto box"),
+            (ordered, 0.83, "reference_images/CALY-BIANCO.jpg", "Calycanto box"),
+        ]
+        mock_rerank.return_value = RerankVerdict(
+            ran=True,
+            sku_id=other.id,
+            certainty="high",
+            distinguishing_feature="label reads Rosso, not Bianco",
+            considered_sku_ids=[other.id, ordered.id],
+        )
+
+        resp = _post_book(client, courier_token, order)
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    # Never ordered here, so that is what the picker is told — not the old
+    # catch-all about the SKU "not being open".
+    assert detail["error"] == "not_ordered"
+    assert "CALY-ROSSO" in detail["message"]
+    assert "apart" in detail["message"]  # tells the picker what to do with it
+    assert detail["distinguishing_feature"] == "label reads Rosso, not Bianco"
+
+
+def test_near_tied_out_of_scope_pick_asks_the_picker_instead_of_refusing(
+    client, courier_token, variants, tmp_path
+):
+    """Visual pass picks an out-of-scope variant that barely leads an open one.
+
+    The pass answers "high" on every verdict it gives, so on its own it cannot
+    carry a dead-end refusal. With an open variant inside the ambiguity margin
+    of its pick — the box of Soave whose only difference from its sibling was
+    the bottle count on one flap — the scan goes to the picker as an explicit
+    comparison, with the variant the pass believed it saw shown alongside.
+    """
+    ordered, other, _third, order = variants
+
+    with patch("app.routers.receiving.process_image", side_effect=_mock_process_package), \
+         patch("app.routers.receiving.storage", _tmp_storage(tmp_path)), \
+         patch("app.routers.receiving.find_best_matches") as mock_match, \
+         patch("app.routers.receiving.rerank_scan") as mock_rerank:
+        # Neither the embedding nor the photos separate them.
         mock_match.return_value = [
             (other, 0.94, "reference_images/CALY-ROSSO.jpg", "Calycanto box"),
             (ordered, 0.93, "reference_images/CALY-BIANCO.jpg", "Calycanto box"),
@@ -130,10 +175,17 @@ def test_confident_out_of_scope_variant_is_refused(
 
         resp = _post_book(client, courier_token, order)
 
-    assert resp.status_code == 409
-    detail = resp.json()["detail"]
-    assert "CALY-ROSSO" in detail
-    assert "Rosso" in detail  # the visual reason is passed through to the picker
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["sku_code"] == "CALY-BIANCO"
+    # A deliberate two-photo decision, never a clean hit.
+    assert body["manual_review_required"] is True
+    assert "CALY-ROSSO" in body["confirmation_reason"]
+    assert "aantal en inhoud" in body["confirmation_reason"]
+
+    # The variant the visual pass believed it saw is on screen, and not bookable.
+    assert [a["sku_code"] for a in body["alternatives"]] == ["CALY-ROSSO"]
+    assert body["alternatives"][0]["bookable"] is False
 
 
 def test_unsure_between_variants_offers_a_choice_with_the_lookalike_shown(

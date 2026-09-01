@@ -2,6 +2,9 @@ import logging
 import time
 import uuid
 
+from dataclasses import dataclass, field
+from typing import Any, NoReturn
+
 from fastapi import APIRouter, Depends, Form, HTTPException, Response, UploadFile
 from sqlalchemy.exc import IntegrityError
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -41,6 +44,7 @@ from app.services.embedding import (
 )
 from app.services.matching import find_best_matches
 from app.services.product_status import recompute_active
+from app.services.scan_metrics import record_booking, record_scan
 from app.services.rerank import (
     RerankVerdict,
     needs_visual_check,
@@ -75,6 +79,94 @@ _DELIVERY_DAY_SORT = {
 
 def _scope_label(context_order: "Order") -> str:
     return "de open orders" if context_order.delivery_week else "deze order"
+
+
+@dataclass(frozen=True)
+class ScanRejection:
+    """A scan that cannot be booked, named by the situation the picker is in.
+
+    Five different situations used to reach the picker as two sentences, which
+    is why a box that was simply not ordered this week and a box whose order
+    line is already complete looked like the same failure. ``reason_code`` is
+    the same label the trace carries, so what the picker read and what the
+    dashboard counts can never drift apart.
+    """
+
+    status_code: int
+    reason_code: str
+    message: str
+    detail_extra: dict[str, Any] = field(default_factory=dict)
+
+    def as_http(self) -> HTTPException:
+        detail: dict[str, Any] = {"error": self.reason_code, "message": self.message}
+        detail.update(self.detail_extra)
+        return HTTPException(self.status_code, detail)
+
+
+class ScanRejectionError(Exception):
+    """Internal signal: this scan ends in a rejection rather than a proposal.
+
+    Deliberately not an ``HTTPException``: a rejection is a normal outcome of
+    the scan flow, and letting it travel as an exception through the traced
+    span is what marked every "wrong box" as an ERROR next to real outages.
+    The router turns it into an HTTP response at the very edge.
+    """
+
+    def __init__(self, rejection: ScanRejection):
+        super().__init__(rejection.message)
+        self.rejection = rejection
+
+
+def _reject(status_code: int, reason_code: str, message: str, **detail_extra: Any) -> NoReturn:
+    raise ScanRejectionError(ScanRejection(status_code, reason_code, message, detail_extra))
+
+
+def _scope_status(db: Session, context_order: "Order", sku_id: int) -> str:
+    """Where a SKU stands in the scan scope: ``open``, ``full`` or ``not_ordered``.
+
+    ``full`` means every order line for this wine in scope has its boxes — not
+    that one customer is done. As long as anybody still needs it, the SKU stays
+    open and the scan is booked on that customer instead.
+    """
+    if _open_scope_lines_query(db, context_order, sku_id).first() is not None:
+        return "open"
+    if (
+        _open_scope_lines_query(db, context_order, sku_id, include_complete=True).first()
+        is not None
+    ):
+        return "full"
+    return "not_ordered"
+
+
+def _reject_out_of_scope(
+    db: Session,
+    context_order: "Order",
+    sku: "SKU",
+    unit_word: str = "doos",
+    distinguishing_feature: str = "",
+) -> NoReturn:
+    """Refuse a recognised SKU that has no bookable line left, saying which of the two it is."""
+    scope_phrase = "deze week" if context_order.delivery_week else "in deze order"
+    if _scope_status(db, context_order, sku.id) == "full":
+        reason_code = "sku_full"
+        message = (
+            f"Al compleet — alle bestellingen voor {sku.sku_code} ({sku.name}) zijn "
+            f"{scope_phrase} geboekt. Deze {unit_word} blijft over."
+        )
+    else:
+        reason_code = "not_ordered"
+        message = (
+            f"Niet besteld {scope_phrase} — {sku.sku_code} ({sku.name}). "
+            f"Leg deze {unit_word} apart."
+        )
+    _reject(
+        409,
+        reason_code,
+        message,
+        sku_code=sku.sku_code,
+        sku_name=sku.name,
+        distinguishing_feature=distinguishing_feature or None,
+    )
 
 
 def _open_scope_lines_query(
@@ -158,6 +250,49 @@ def _cap_remaining_by_line(
     return caps_by_line
 
 
+def _reject_no_allocation(
+    db: Session,
+    context_order: "Order",
+    sku_id: int,
+    lines: list["OrderLine"],
+) -> NoReturn:
+    """Refuse a SKU that is open but has nothing left to allocate.
+
+    Two very different causes end up here and used to share one sentence about
+    an "allocation limit": the goods are simply not booked into stock yet, or
+    the stock that exists is already promised to other customers. Only the
+    first is something the picker can act on — by having the packing slip
+    processed — so it gets its own message.
+    """
+    sku = db.get(SKU, sku_id)
+    label = f"{sku.sku_code} ({sku.name})" if sku else "deze SKU"
+
+    balance = (
+        db.query(InventoryBalance)
+        .filter(
+            InventoryBalance.sku_id == sku_id,
+            InventoryBalance.organization_id == context_order.organization_id,
+            InventoryBalance.inventory_location == "warehouse",
+        )
+        .first()
+    )
+    if not balance or balance.quantity_on_hand <= 0:
+        _reject(
+            409,
+            "no_stock",
+            f"Pakbon nog niet verwerkt voor {label} — er staat nog geen voorraad ingeboekt.",
+        )
+
+    booked = sum(line.booked_count for line in lines)
+    ordered = sum(line.quantity for line in lines)
+    _reject(
+        409,
+        "cap_reached",
+        f"Alles verdeeld — de voorraad van {label} is al aan andere klanten toegewezen "
+        f"({booked} van {ordered} geboekt).",
+    )
+
+
 def _select_order_line_for_scope(
     db: Session,
     context_order: "Order",
@@ -166,10 +301,10 @@ def _select_order_line_for_scope(
     """Pick the exact order line for a scan: start order first, then week fallback."""
     lines = _open_scope_lines_query(db, context_order, sku_id).all()
     if not lines:
-        raise HTTPException(
-            400,
-            f"SKU staat niet open in {_scope_label(context_order)}",
-        )
+        sku = db.get(SKU, sku_id)
+        if sku is None:
+            _reject(404, "sku_unknown", "SKU niet gevonden")
+        _reject_out_of_scope(db, context_order, sku)
 
     cap_remaining_by_line = _cap_remaining_by_line(db, context_order, sku_id, lines)
     candidates = [
@@ -178,10 +313,7 @@ def _select_order_line_for_scope(
         if cap_remaining_by_line.get(line.id, 0) > 0
     ]
     if not candidates:
-        raise HTTPException(
-            409,
-            f"Toewijzingslimiet bereikt voor deze SKU in {_scope_label(context_order)}",
-        )
+        _reject_no_allocation(db, context_order, sku_id, lines)
 
     def sort_key(item: tuple["OrderLine", int]) -> tuple[int, str, int, int]:
         line, _cap_remaining = item
@@ -243,6 +375,21 @@ def _confirmation_token_data(
         "confidence": round(confidence, 4),
         "scan_image_key": scan_key,
         "user_id": user_id,
+    }
+
+
+def _match_summary(
+    match: tuple["SKU", float, str | None, str | None] | None,
+) -> dict[str, Any] | None:
+    """One vector hit, flattened for the trace: which SKU, and how close."""
+    if match is None:
+        return None
+    sku, similarity, _image_path, _ref_desc = match
+    return {
+        "sku_id": sku.id,
+        "sku_code": sku.sku_code,
+        "sku_name": sku.name,
+        "similarity": round(similarity, 4),
     }
 
 
@@ -592,7 +739,110 @@ async def book_box(
     line, and creates a booking. Returns the rolcontainer assignment.
     ``scan_mode`` restricts matching to box or bottle references; in bottle
     mode the is_package gate is skipped.
+
+    The scan itself runs one level down so that a refusal can be *returned*
+    rather than raised: an exception crossing the traced span turns the whole
+    scan red, which made "wrong box" indistinguishable from "Gemini is down".
     """
+    outcome = await _scan_and_book(
+        file=file, order_id=order_id, scan_mode=scan_mode, db=db, user=user
+    )
+    _record_scan_outcome(outcome, session_id=str(order_id))
+    if outcome.rejection is not None:
+        raise outcome.rejection.as_http()
+    return outcome.confirmation
+
+
+@dataclass
+class ScanOutcome:
+    """How one scan ended, with the numbers the decision rested on.
+
+    ``decision`` is what the trace shows: the best candidate in scope, the best
+    in the whole catalogue, the gap between them and what the visual check made
+    of it. Reading a refusal used to mean lining up three observations by hand.
+    """
+
+    reason_code: str
+    decision: dict[str, Any]
+    confirmation: BookingConfirmation | None = None
+    rejection: ScanRejection | None = None
+
+    @property
+    def rejected(self) -> bool:
+        return self.rejection is not None
+
+
+def _record_scan_outcome(outcome: ScanOutcome, *, session_id: str) -> None:
+    """Write the scan's scores, and park a refusal for the recovery check."""
+    decision = outcome.decision
+    rerank = decision.get("rerank") or {}
+    record_scan(
+        trace_id=decision.get("trace_id", ""),
+        session_id=session_id,
+        reason_code=outcome.reason_code,
+        rejected=outcome.rejected,
+        rerank_ran=bool(rerank.get("ran")),
+        rerank_agreed_with_vector=rerank.get("agreed_with_vector"),
+        candidate_sku_ids=decision.get("candidate_sku_ids", []),
+    )
+
+
+@observe()
+async def _scan_and_book(
+    *,
+    file: UploadFile,
+    order_id: int,
+    scan_mode: str,
+    db: Session,
+    user: User,
+) -> ScanOutcome:
+    """Run one scan and report how it ended — a proposal or a named refusal."""
+    decision: dict[str, Any] = {
+        "scan_mode": scan_mode,
+        "context_order_id": order_id,
+        "candidate_sku_ids": [],
+    }
+    try:
+        from langfuse import get_client
+
+        decision["trace_id"] = get_client().get_current_trace_id() or ""
+    except Exception:  # tracing is optional, the scan is not
+        decision["trace_id"] = ""
+
+    try:
+        confirmation = await _scan_and_propose(
+            file=file,
+            order_id=order_id,
+            scan_mode=scan_mode,
+            db=db,
+            user=user,
+            decision=decision,
+        )
+    except ScanRejectionError as exc:
+        decision["outcome"] = exc.rejection.reason_code
+        return ScanOutcome(
+            reason_code=exc.rejection.reason_code,
+            decision=decision,
+            rejection=exc.rejection,
+        )
+
+    decision["outcome"] = (
+        "manual_review" if confirmation.manual_review_required else "needs_confirmation"
+    )
+    return ScanOutcome(
+        reason_code=decision["outcome"], decision=decision, confirmation=confirmation
+    )
+
+
+async def _scan_and_propose(
+    *,
+    file: UploadFile,
+    order_id: int,
+    scan_mode: str,
+    db: Session,
+    user: User,
+    decision: dict[str, Any],
+) -> BookingConfirmation:
     bottle_mode = scan_mode == "bottle"
     with propagate_attributes(
         user_id=str(user.id),
@@ -640,8 +890,9 @@ async def book_box(
                 user=user,
                 resource_type="booking",
             )
-            raise HTTPException(
+            _reject(
                 422,
+                "not_a_package",
                 "Dit is geen doos of verpakking — scan een productdoos",
             )
 
@@ -656,10 +907,7 @@ async def book_box(
         # other weeks remain available as a FIFO fallback.
         scope_sku_ids = set(_scope_sku_ids(db, order))
         if not scope_sku_ids:
-            raise HTTPException(
-                400,
-                "Geen open orderregels gevonden",
-            )
+            _reject(400, "no_open_lines", "Geen open orderregels gevonden")
 
         # Search the whole catalogue, never only the SKUs open in scope.
         # Restricting the pool to the order's own SKUs is what let a lookalike
@@ -710,6 +958,36 @@ async def book_box(
         by_sku_id = {m[0].id: m for m in matches}
         vector_best = matches[0] if matches else None
         in_scope_matches = [m for m in matches if m[0].id in scope_sku_ids]
+        best_in_scope_match = next(iter(in_scope_matches), None)
+
+        # Everything the refusal or the proposal rests on, in one place. Reading
+        # a scan back used to mean lining up three observations by hand and
+        # inferring which SKU each score belonged to.
+        decision["scan_image_url"] = _image_url(scan_key)
+        decision["catalogue_best"] = _match_summary(vector_best)
+        decision["scope_best"] = _match_summary(best_in_scope_match)
+        decision["gap"] = (
+            round(vector_best[1] - best_in_scope_match[1], 4)
+            if vector_best and best_in_scope_match
+            else None
+        )
+        decision["rerank"] = {
+            "ran": verdict.ran,
+            "skip_reason": verdict.skip_reason or None,
+            "choice_sku_id": verdict.sku_id,
+            "certainty": verdict.certainty if verdict.ran else None,
+            "considered_sku_ids": list(verdict.considered_sku_ids),
+            "agreed_with_vector": (
+                verdict.sku_id == vector_best[0].id
+                if verdict.ran and verdict.sku_id is not None and vector_best
+                else None
+            ),
+        }
+        decision["candidate_sku_ids"] = list(
+            dict.fromkeys(
+                [m[0].id for m in matches[:5]] + list(verdict.considered_sku_ids)
+            )
+        )
 
         chosen: tuple[SKU, float, str | None, str | None] | None = None
         manual_review_required = False
@@ -739,23 +1017,52 @@ async def book_box(
                 chosen = best_in_scope
                 manual_review_required = True
 
-        # A confident verdict for a SKU that is not open here means the picker
-        # is holding the wrong box. Never offer a bookable proposal in that
-        # case — a one-tap confirm is exactly how the wrong variant got booked.
+        # A confident verdict for a SKU that is not open here usually means the
+        # picker is holding the wrong box, and a one-tap confirm is exactly how
+        # the wrong variant got booked — so that scan is refused outright.
+        #
+        # Refused only when both signals point the same way, though. The visual
+        # pass answers "high" on every verdict it gives, so its certainty alone
+        # is not evidence enough to dead-end a picker. When it picks an
+        # out-of-scope variant while an open variant sits within the ambiguity
+        # margin of that pick and was shown in the same comparison, the honest
+        # state is "two lookalikes, unresolved". That belongs on the picker's
+        # screen as an explicit decision between two photos, not in a red error
+        # — the case that cost a courier two scans on a box of Soave that only
+        # differed from its sibling in the bottle count printed on one flap.
+        variant_lookalike: tuple[SKU, float, str | None, str | None] | None = None
         if chosen is not None and chosen[0].id not in scope_sku_ids and verdict.is_confident:
-            wrong_sku = chosen[0]
-            detail = (
-                f"Deze {unit_word} is {wrong_sku.sku_code} ({wrong_sku.name}), "
-                f"maar die staat niet open in {_scope_label(order)}"
+            near_tied_in_scope = next(
+                (
+                    m
+                    for m in in_scope_matches
+                    if m[1] >= settings.match_threshold
+                    and chosen[1] - m[1] <= settings.ambiguity_margin
+                    and m[0].id in verdict.considered_sku_ids
+                    and m[2] is not None
+                ),
+                None,
             )
-            if verdict.distinguishing_feature:
-                detail += f" — {verdict.distinguishing_feature}"
-            raise HTTPException(409, detail)
+            if near_tied_in_scope is None:
+                _reject_out_of_scope(
+                    db, order, chosen[0], unit_word, verdict.distinguishing_feature
+                )
+            logger.info(
+                "Visual check chose out-of-scope %s (%.3f) over near-tied open %s (%.3f) — "
+                "asking the picker instead of refusing",
+                chosen[0].sku_code, chosen[1],
+                near_tied_in_scope[0].sku_code, near_tied_in_scope[1],
+            )
+            variant_lookalike = chosen
+            chosen = near_tied_in_scope
+            manual_review_required = True
 
         # Unsure, and the best guess is out of scope: fall back to the best
         # candidate that *is* open, but only as a proposal to confirm, with the
         # out-of-scope lookalike shown alongside it (handled below).
-        out_of_scope_lookalike: tuple[SKU, float, str | None, str | None] | None = None
+        out_of_scope_lookalike: tuple[SKU, float, str | None, str | None] | None = (
+            variant_lookalike
+        )
         if chosen is not None and chosen[0].id not in scope_sku_ids:
             out_of_scope_lookalike = chosen
             chosen = next(
@@ -774,12 +1081,7 @@ async def book_box(
                 else None
             )
             if fallback_lookalike is not None and not verdict.rejected_all:
-                wrong_sku = fallback_lookalike[0]
-                raise HTTPException(
-                    409,
-                    f"Deze {unit_word} lijkt op SKU {wrong_sku.sku_code} ({wrong_sku.name}), "
-                    f"maar die staat niet open in {_scope_label(order)}",
-                )
+                _reject_out_of_scope(db, order, fallback_lookalike[0], unit_word)
 
             # Surface SKUs in this scan scope that have no reference image yet —
             # matching cannot succeed against them. The koerier is holding the
@@ -792,24 +1094,22 @@ async def book_box(
                     "scan_image_key": scan_key,
                     "user_id": user.id,
                 })
-                raise HTTPException(
+                _reject(
                     422,
-                    detail={
-                        "error": "needs_reference_image",
-                        "message": (
-                            f"{unit_word.capitalize()} niet herkend. Eén of meer SKUs in {_scope_label(order)} "
-                            "hebben nog geen referentiefoto. Kies de juiste SKU "
-                            "om deze scan als referentiefoto te registreren."
-                        ),
-                        "register_token": register_token,
-                        "scan_image_url": _image_url(scan_key),
-                        "candidates": [c.model_dump() for c in missing_refs],
-                    },
+                    "needs_reference_image",
+                    f"{unit_word.capitalize()} niet herkend. Eén of meer SKUs in "
+                    f"{_scope_label(order)} hebben nog geen referentiefoto. Kies de "
+                    "juiste SKU om deze scan als referentiefoto te registreren.",
+                    register_token=register_token,
+                    scan_image_url=_image_url(scan_key),
+                    candidates=[c.model_dump() for c in missing_refs],
                 )
 
-            raise HTTPException(
+            _reject(
                 404,
-                f"{unit_word.capitalize()} niet herkend — geen match gevonden met open SKUs in {_scope_label(order)}",
+                "not_recognized",
+                f"{unit_word.capitalize()} niet herkend — maak de foto iets verder af, "
+                "met de hele voorkant in beeld.",
             )
 
         # Collect quality/confidence/ambiguity reasons for logging.
@@ -818,7 +1118,17 @@ async def book_box(
         reason: list[str] = []
         alternatives: list[AlternativeMatch] = []
 
-        if manual_review_required:
+        if manual_review_required and variant_lookalike is not None:
+            # The two candidates differ in something small and printed — a
+            # bottle count, a volume, a cuvée name. Say where to look; "compare
+            # the photos" is not actionable when the boxes are identical from
+            # three metres away.
+            reason.append(
+                f"Twijfel tussen {matched_sku.sku_code} en {variant_lookalike[0].sku_code}. "
+                "Controleer op de doos wat er aan aantal en inhoud staat, en bevestig "
+                "alleen als dit product klopt."
+            )
+        elif manual_review_required:
             reason.append(
                 "Automatische fotovergelijking kon geen zekere match bevestigen. "
                 "Vergelijk de scan met de referentiefoto en bevestig alleen als dit product klopt."
@@ -862,7 +1172,16 @@ async def book_box(
         # The rejected-all fallback intentionally shows one option only. Its
         # purpose is a simple scan-vs-reference decision, not another candidate
         # picker. All existing uncertain/degraded paths keep their alternatives.
-        if not manual_review_required:
+        if variant_lookalike is not None:
+            # One alternative only, and it is the one the picker must rule out:
+            # the variant the visual pass believed it saw. Not bookable — it has
+            # no open line — but seeing that photo is what settles the question.
+            s, sim, img_path, _ref_desc = variant_lookalike
+            _add_alternative(
+                s, sim, img_path,
+                note=f"volgens fotovergelijking, maar staat niet open in {_scope_label(order)}",
+            )
+        elif not manual_review_required:
             if out_of_scope_lookalike is not None:
                 s, sim, img_path, _ref_desc = out_of_scope_lookalike
                 reason.append(f"closest catalogue match {s.sku_code} is not open in scope")
@@ -911,7 +1230,7 @@ async def book_box(
                 continue
             try:
                 alt_line, _alt_cap_remaining = _select_order_line_for_scope(db, order, alt.sku_id)
-            except HTTPException:
+            except ScanRejectionError:
                 alt.bookable = False
                 alt.confirmation_token = ""
                 if not alt.note:
@@ -1097,6 +1416,13 @@ def confirm_booking(
         context_order = db.get(Order, data["context_order_id"])
         context_order_reference = context_order.reference if context_order else None
 
+    # A booking of a SKU that a refused scan had on the table, minutes earlier
+    # in this same session, says that refusal was probably wrong. Score it.
+    record_booking(
+        session_id=str(data.get("context_order_id") or order.id),
+        sku_id=sku.id,
+    )
+
     return BookingResponse(
         id=result.last_booking_id,
         order_id=order.id,
@@ -1156,7 +1482,12 @@ async def register_reference_and_book(
     if not sku:
         raise HTTPException(404, "SKU niet gevonden")
 
-    order_line, cap_remaining_for_line = _select_order_line_for_scope(db, context_order, body.sku_id)
+    try:
+        order_line, cap_remaining_for_line = _select_order_line_for_scope(
+            db, context_order, body.sku_id
+        )
+    except ScanRejectionError as exc:
+        raise exc.rejection.as_http()
     order = order_line.order
 
     # Refuse to overwrite an existing reference — the koerier should only land
