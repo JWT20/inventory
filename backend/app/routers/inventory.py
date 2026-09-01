@@ -1256,6 +1256,7 @@ def inventory_overview(
     wijntype: str | None = None,
     producent: str | None = None,
     in_stock_only: bool = False,
+    sort: Literal["name", "stock_desc", "stock_asc"] = "name",
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -1331,7 +1332,18 @@ def inventory_overview(
             )
         )
 
-    rows = query.order_by(SKU.name).all()
+    available_quantity = (
+        func.coalesce(InventoryBalance.quantity_on_hand, 0)
+        - func.coalesce(InventoryBalance.quantity_reserved, 0)
+    )
+    if sort == "stock_desc":
+        query = query.order_by(available_quantity.desc(), SKU.name.asc())
+    elif sort == "stock_asc":
+        query = query.order_by(available_quantity.asc(), SKU.name.asc())
+    else:
+        query = query.order_by(SKU.name.asc())
+
+    rows = query.all()
 
     # Batch-load customer prices for all SKUs in result
     sku_ids = [sku.id for sku, _ in rows]

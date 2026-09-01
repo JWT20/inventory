@@ -9,6 +9,7 @@ import {
   type InventoryLocation,
 } from "@/lib/inventory-locations";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
   Dialog,
@@ -26,6 +27,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ArrowDown01, ArrowDownAZ, ArrowUp01 } from "lucide-react";
 
 interface CustomerPrice {
   customer_id: number;
@@ -59,6 +61,29 @@ interface Organization {
 }
 
 const LOW_STOCK_THRESHOLD = 3;
+
+type InventorySort = "name" | "stock_desc" | "stock_asc";
+
+const INVENTORY_SORT_OPTIONS: Record<
+  InventorySort,
+  { next: InventorySort; label: string; title: string }
+> = {
+  name: {
+    next: "stock_desc",
+    label: "Sortering: alfabetisch A–Z",
+    title: "Alfabetisch A–Z · klik voor voorraad hoog naar laag",
+  },
+  stock_desc: {
+    next: "stock_asc",
+    label: "Sortering: voorraad hoog naar laag",
+    title: "Voorraad hoog naar laag · klik voor laag naar hoog",
+  },
+  stock_asc: {
+    next: "name",
+    label: "Sortering: voorraad laag naar hoog",
+    title: "Voorraad laag naar hoog · klik voor alfabetisch A–Z",
+  },
+};
 
 export function parseTransferQuantity(value: string): number | null {
   const quantity = Number(value);
@@ -98,6 +123,7 @@ export function InventoryPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<InventorySort>("name");
   const [selected, setSelected] = useState<InventoryItem | null>(null);
   const needsOrganizationSelection = !!user && (user.is_platform_admin || user.role === "courier");
   const canViewPrices = !!user && user.role !== "courier";
@@ -127,6 +153,7 @@ export function InventoryPage() {
         params.set("organization_id", selectedOrganizationId);
       }
       params.set("inventory_location", inventoryLocation);
+      params.set("sort", sort);
       const qs = params.toString();
       setItems(await api.listInventoryOverview(qs ? `?${qs}` : ""));
     } catch {
@@ -134,7 +161,7 @@ export function InventoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [inventoryLocation, needsOrganizationSelection, query, selectedOrganizationId]);
+  }, [inventoryLocation, needsOrganizationSelection, query, selectedOrganizationId, sort]);
 
   useEffect(() => {
     load();
@@ -191,17 +218,37 @@ export function InventoryPage() {
         </div>
       )}
 
-      <Input
-        placeholder={
-          canBarcode
-            ? "Zoek op naam, EAN of leverancier..."
-            : "Zoek op naam of leverancier..."
-        }
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        className="mb-4"
-        disabled={needsOrganizationSelection && !selectedOrganizationId}
-      />
+      <div className="relative mb-4">
+        <Input
+          placeholder={
+            canBarcode
+              ? "Zoek op naam, EAN of leverancier..."
+              : "Zoek op naam of leverancier..."
+          }
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="pr-12"
+          disabled={needsOrganizationSelection && !selectedOrganizationId}
+        />
+        <Button
+          type="button"
+          size="icon"
+          variant={sort === "name" ? "ghost" : "secondary"}
+          className="absolute right-1 top-1 h-8 w-8"
+          aria-label={INVENTORY_SORT_OPTIONS[sort].label}
+          title={INVENTORY_SORT_OPTIONS[sort].title}
+          disabled={needsOrganizationSelection && !selectedOrganizationId}
+          onClick={() => setSort(INVENTORY_SORT_OPTIONS[sort].next)}
+        >
+          {sort === "stock_desc" ? (
+            <ArrowDown01 className="h-4 w-4" aria-hidden="true" />
+          ) : sort === "stock_asc" ? (
+            <ArrowUp01 className="h-4 w-4" aria-hidden="true" />
+          ) : (
+            <ArrowDownAZ className="h-4 w-4" aria-hidden="true" />
+          )}
+        </Button>
+      </div>
 
       <div className="space-y-3">
         {needsOrganizationSelection && !selectedOrganizationId ? (
