@@ -269,8 +269,8 @@ export function SKUsPage() {
         <Input
           placeholder={
             canBarcode
-              ? "Zoek op naam, code, EAN, producent..."
-              : "Zoek op naam, code, producent..."
+              ? "Zoek op naam, code, EAN, producent of status..."
+              : "Zoek op naam, code, producent of status..."
           }
           value={search}
           onChange={(e) => setSearch(e.target.value)}
