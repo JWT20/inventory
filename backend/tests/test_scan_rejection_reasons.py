@@ -165,6 +165,36 @@ def test_wine_that_was_never_ordered_tells_the_picker_to_set_it_aside(
     assert "TERR-GAUD" in detail["message"]
 
 
+def test_ad_hoc_order_rejection_names_the_order_instead_of_the_week(
+    client, courier_token, db, sample_org, tmp_path
+):
+    ordered = _make_sku(db, "CALY-BIANCO", "Calycanto Bianco")
+    stranger = _make_sku(db, "TERR-GAUD", "Terras Gauda O Rosal")
+    order = _make_open_order(db, sample_org, ordered)
+    order.delivery_week = None
+    db.commit()
+
+    resp = _scan(
+        client, courier_token, order, tmp_path,
+        matches=[
+            (stranger, 0.94, _ref(stranger), "Terras Gauda box"),
+            (ordered, 0.77, _ref(ordered), "Calycanto box"),
+        ],
+        verdict=RerankVerdict(
+            ran=True,
+            sku_id=stranger.id,
+            certainty="high",
+            considered_sku_ids=[stranger.id, ordered.id],
+        ),
+    )
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["error"] == "not_ordered"
+    assert "Niet besteld in deze order" in detail["message"]
+    assert "deze week" not in detail["message"]
+
+
 def test_no_stock_yet_points_at_the_packing_slip(
     client, courier_token, db, sample_org, tmp_path
 ):
@@ -210,6 +240,29 @@ def test_stock_promised_to_others_is_its_own_message(
     detail = resp.json()["detail"]
     assert detail["error"] == "cap_reached"
     assert "Alles verdeeld" in detail["message"]
+
+
+def test_fully_reserved_stock_is_distributed_not_missing(
+    client, courier_token, db, sample_org, tmp_path
+):
+    """Physical stock exists, so a zero available balance is not a missing pakbon."""
+    ordered = _make_sku(db, "TARA-RES", "Tarapaca Reserva")
+    order = _make_open_order(db, sample_org, ordered, quantity=3)
+    balance = db.query(InventoryBalance).filter(InventoryBalance.sku_id == ordered.id).one()
+    balance.quantity_on_hand = 3
+    balance.quantity_reserved = 3
+    db.commit()
+
+    resp = _scan(
+        client, courier_token, order, tmp_path,
+        matches=[(ordered, 0.93, _ref(ordered), "Tarapaca box")],
+    )
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["error"] == "cap_reached"
+    assert "Alles verdeeld" in detail["message"]
+    assert "Pakbon" not in detail["message"]
 
 
 def test_nothing_recognised_tells_the_picker_how_to_reshoot(

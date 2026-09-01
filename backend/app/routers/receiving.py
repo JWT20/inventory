@@ -142,16 +142,17 @@ def _reject_out_of_scope(
     distinguishing_feature: str = "",
 ) -> NoReturn:
     """Refuse a recognised SKU that has no bookable line left, saying which of the two it is."""
+    scope_phrase = "deze week" if context_order.delivery_week else "in deze order"
     if _scope_status(db, context_order, sku.id) == "full":
         reason_code = "sku_full"
         message = (
             f"Al compleet — alle bestellingen voor {sku.sku_code} ({sku.name}) zijn "
-            f"deze week geboekt. Deze {unit_word} blijft over."
+            f"{scope_phrase} geboekt. Deze {unit_word} blijft over."
         )
     else:
         reason_code = "not_ordered"
         message = (
-            f"Niet besteld deze week — {sku.sku_code} ({sku.name}). "
+            f"Niet besteld {scope_phrase} — {sku.sku_code} ({sku.name}). "
             f"Leg deze {unit_word} apart."
         )
     _reject(
@@ -271,7 +272,7 @@ def _reject_no_allocation(
         )
         .first()
     )
-    if not balance or balance.quantity_available <= 0:
+    if not balance or balance.quantity_on_hand <= 0:
         _reject(
             409,
             "no_stock",
