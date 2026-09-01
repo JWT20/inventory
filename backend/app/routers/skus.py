@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import logging
+import re
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile
@@ -86,6 +87,26 @@ DUPLICATE_LOCK_KEY = 0x57494E45
 # considered abandoned (worker died, deploy mid-flight, etc.) and may be
 # retried or swept to "failed" on startup.
 STALE_PROCESSING_TIMEOUT = datetime.timedelta(minutes=5)
+
+STATUS_SEARCH_TERMS = {"actief": True, "inactief": False}
+
+
+def _parse_status_search(search: str | None) -> tuple[str, bool | None]:
+    """Extract an exact Dutch status word from the free-text SKU search.
+
+    The last status word wins if someone enters both, while every other word
+    remains available for the normal catalogue search (for example
+    ``Brice inactief``).
+    """
+    status = None
+    text_terms: list[str] = []
+    for term in re.split(r"\s+", (search or "").strip()):
+        normalized = term.casefold()
+        if normalized in STATUS_SEARCH_TERMS:
+            status = STATUS_SEARCH_TERMS[normalized]
+        elif term:
+            text_terms.append(term)
+    return " ".join(text_terms), status
 
 
 def _utcnow() -> datetime.datetime:
@@ -513,8 +534,11 @@ def list_skus(
         selectinload(SKU.attributes),
         selectinload(SKU.supplier),
     )
-    if active_only:
+    text_search, status_search = _parse_status_search(search)
+    if active_only or status_search is True:
         query = query.filter(SKU.active.is_(True))
+    elif status_search is False:
+        query = query.filter(SKU.active.is_(False))
     if not user.is_platform_admin:
         if user.organization_id:
             query = query.filter(SKU.organization_id == user.organization_id)
@@ -524,8 +548,8 @@ def list_skus(
         user.is_platform_admin or user.role == "courier"
     ):
         query = query.filter(SKU.organization_id == organization_id)
-    if search and search.strip():
-        like = f"%{search.strip()}%"
+    if text_search:
+        like = f"%{text_search}%"
         # Search server-side so wines beyond the current page are still found.
         # Match name, SKU code, EAN, category, the producent attribute, or the
         # supplier (leverancier) name. Vision (wine) products have a NULL ean,

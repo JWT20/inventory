@@ -55,6 +55,56 @@ class TestListSKUs:
         assert resp.status_code == 200
         assert len(resp.json()) == 2
 
+    def test_list_skus_searches_by_inactive_status(
+        self, client, db, courier_token, sample_sku
+    ):
+        from app.models import SKU
+        inactive = SKU(sku_code="BRICE-ROSE", name="Brice Rosé", active=False)
+        db.add(inactive)
+        db.commit()
+
+        resp = client.get(
+            "/api/skus", params={"search": "INACTIEF"},
+            headers=auth_header(courier_token),
+        )
+
+        assert resp.status_code == 200
+        assert [sku["sku_code"] for sku in resp.json()] == ["BRICE-ROSE"]
+
+    def test_list_skus_combines_text_and_status_search(
+        self, client, db, courier_token, sample_sku
+    ):
+        from app.models import SKU
+        db.add_all([
+            SKU(sku_code="BRICE-ROSE", name="Brice Rosé", active=False),
+            SKU(sku_code="BRICE-BRUT", name="Brice Brut", active=True),
+            SKU(sku_code="OTHER", name="Andere wijn", active=False),
+        ])
+        db.commit()
+
+        resp = client.get(
+            "/api/skus", params={"search": "Brice inactief"},
+            headers=auth_header(courier_token),
+        )
+
+        assert resp.status_code == 200
+        assert [sku["sku_code"] for sku in resp.json()] == ["BRICE-ROSE"]
+
+    def test_list_skus_searches_by_active_status(
+        self, client, db, courier_token, sample_sku
+    ):
+        from app.models import SKU
+        db.add(SKU(sku_code="WINE-002", name="Inactive Wine", active=False))
+        db.commit()
+
+        resp = client.get(
+            "/api/skus", params={"search": "actief"},
+            headers=auth_header(courier_token),
+        )
+
+        assert resp.status_code == 200
+        assert [sku["sku_code"] for sku in resp.json()] == [sample_sku.sku_code]
+
 
 # ---------------------------------------------------------------------------
 # GET /api/skus/options

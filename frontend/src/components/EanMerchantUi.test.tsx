@@ -64,6 +64,7 @@ describe("EAN merchant UI", () => {
     expect(await screen.findByText("EAN product")).toBeTruthy();
     expect(screen.queryByText(/referentiebeeld/i)).toBeNull();
     expect(screen.queryByRole("button", { name: "Synchroniseer nu" })).toBeNull();
+    expect(screen.getByPlaceholderText(/producent of status/i)).toBeTruthy();
   });
 
   it("shows arrival date and items on scanner order cards", () => {
