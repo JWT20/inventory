@@ -165,6 +165,91 @@ class TestInventoryScope:
         assert row["default_price"] is None
         assert row["customer_prices"] == []
 
+    def test_inventory_overview_sorts_by_available_stock_both_directions(
+        self, client, db, admin_token, sample_org
+    ):
+        products = [
+            ("Alpha", 8, 3),
+            ("Bravo", 2, 0),
+            ("Charlie", 5, 0),
+        ]
+        for name, on_hand, reserved in products:
+            sku = SKU(
+                sku_code=f"SORT-{name.upper()}",
+                name=name,
+                organization_id=sample_org.id,
+            )
+            db.add(sku)
+            db.flush()
+            db.add(
+                InventoryBalance(
+                    sku_id=sku.id,
+                    organization_id=sample_org.id,
+                    quantity_on_hand=on_hand,
+                    quantity_reserved=reserved,
+                )
+            )
+        db.commit()
+
+        base_url = f"/api/inventory/overview?organization_id={sample_org.id}"
+        descending = client.get(
+            f"{base_url}&sort=stock_desc",
+            headers=auth_header(admin_token),
+        )
+        ascending = client.get(
+            f"{base_url}&sort=stock_asc",
+            headers=auth_header(admin_token),
+        )
+
+        assert descending.status_code == 200
+        assert ascending.status_code == 200
+        assert [row["sku_name"] for row in descending.json()] == [
+            "Alpha", "Charlie", "Bravo",
+        ]
+        assert [row["sku_name"] for row in ascending.json()] == [
+            "Bravo", "Alpha", "Charlie",
+        ]
+
+    def test_inventory_overview_stock_sort_uses_name_for_equal_quantities(
+        self, client, db, admin_token, sample_org
+    ):
+        for name in ("Zulu", "Alpha"):
+            sku = SKU(
+                sku_code=f"TIE-{name.upper()}",
+                name=name,
+                organization_id=sample_org.id,
+            )
+            db.add(sku)
+            db.flush()
+            db.add(
+                InventoryBalance(
+                    sku_id=sku.id,
+                    organization_id=sample_org.id,
+                    quantity_on_hand=4,
+                    quantity_reserved=1,
+                )
+            )
+        db.commit()
+
+        resp = client.get(
+            f"/api/inventory/overview?organization_id={sample_org.id}"
+            "&sort=stock_desc",
+            headers=auth_header(admin_token),
+        )
+
+        assert resp.status_code == 200
+        assert [row["sku_name"] for row in resp.json()] == ["Alpha", "Zulu"]
+
+    def test_inventory_overview_rejects_unknown_sort(
+        self, client, admin_token, sample_org
+    ):
+        resp = client.get(
+            f"/api/inventory/overview?organization_id={sample_org.id}&sort=unknown",
+            headers=auth_header(admin_token),
+        )
+
+        assert resp.status_code == 422
+
     def test_inventory_overview_search_by_supplier_name(
         self, client, db, admin_token, sample_org
     ):
