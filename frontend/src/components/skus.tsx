@@ -187,12 +187,10 @@ export function BottleSkuCombobox({
                   className="h-auto w-full justify-between gap-2 px-2 py-2 font-normal"
                   onClick={() => select(option.id)}
                 >
-                  <span className="min-w-0 text-left">
-                    <span className="block truncate">{option.name}</span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {[option.sku_code, option.producent, option.supplier_name]
-                        .filter(Boolean)
-                        .join(" · ")}
+                  <span className="min-w-0 truncate text-left">
+                    {option.name}{" "}
+                    <span className="text-muted-foreground">
+                      ({option.sku_code})
                     </span>
                   </span>
                   {option.id === value && <Check className="h-4 w-4 shrink-0" />}
