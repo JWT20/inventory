@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { AlertCircle, Loader2 } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, Loader2, Search } from "lucide-react";
 
 interface Supplier {
   id: number;
@@ -62,6 +62,8 @@ interface SKUOptionItem {
   sku_code: string;
   name: string;
   is_bottle: boolean;
+  producent: string | null;
+  supplier_name: string | null;
 }
 
 interface RefImage {
@@ -92,6 +94,117 @@ function SKUCardSkeleton() {
 }
 
 const PAGE_SIZE = 50;
+
+export function BottleSkuCombobox({
+  options,
+  value,
+  onChange,
+  disabled = false,
+}: {
+  options: SKUOptionItem[];
+  value: number | null;
+  onChange: (id: number | null) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const selected = options.find((option) => option.id === value) ?? null;
+  const normalizedQuery = query.trim().toLocaleLowerCase("nl");
+  const filteredOptions = normalizedQuery
+    ? options.filter((option) =>
+        [option.name, option.sku_code, option.producent, option.supplier_name]
+          .filter(Boolean)
+          .some((field) =>
+            field!.toLocaleLowerCase("nl").includes(normalizedQuery),
+          ),
+      )
+    : options;
+
+  function select(id: number | null) {
+    onChange(id);
+    setOpen(false);
+    setQuery("");
+  }
+
+  return (
+    <div className="space-y-1">
+      <Button
+        type="button"
+        variant="outline"
+        className="w-full justify-between px-3 font-normal"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className={selected ? "truncate" : "text-muted-foreground"}>
+          {selected
+            ? `${selected.name} (${selected.sku_code})`
+            : "Geen fles gekoppeld"}
+        </span>
+        <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+      </Button>
+      {open && (
+        <div className="rounded-md border border-border bg-card p-1 shadow-sm">
+          <div className="relative mb-1">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setOpen(false);
+              }}
+              placeholder="Zoek op naam, code, producent of leverancier..."
+              aria-label="Fles zoeken"
+              className="pl-8"
+            />
+          </div>
+          <div role="listbox" aria-label="Fles in deze doos" className="max-h-60 overflow-y-auto">
+            <Button
+              type="button"
+              variant="ghost"
+              role="option"
+              aria-selected={value === null}
+              className="h-auto w-full justify-between px-2 py-2 font-normal"
+              onClick={() => select(null)}
+            >
+              <span>Geen fles gekoppeld</span>
+              {value === null && <Check className="h-4 w-4" />}
+            </Button>
+            {filteredOptions.length === 0 ? (
+              <p className="px-2 py-3 text-sm text-muted-foreground">
+                Geen fles gevonden
+              </p>
+            ) : (
+              filteredOptions.map((option) => (
+                <Button
+                  key={option.id}
+                  type="button"
+                  variant="ghost"
+                  role="option"
+                  aria-selected={option.id === value}
+                  className="h-auto w-full justify-between gap-2 px-2 py-2 font-normal"
+                  onClick={() => select(option.id)}
+                >
+                  <span className="min-w-0 text-left">
+                    <span className="block truncate">{option.name}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {[option.sku_code, option.producent, option.supplier_name]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                  </span>
+                  {option.id === value && <Check className="h-4 w-4 shrink-0" />}
+                </Button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function SKUsPage() {
   const { user } = useAuth();
@@ -849,28 +962,12 @@ function SKUDialog({
               {(!isBottle || bottleSkuId !== null) && (
                 <div className="space-y-1">
                   <Label className="text-xs">Fles in deze doos</Label>
-                  <Select
-                    value={bottleSkuId ? String(bottleSkuId) : "none"}
-                    onValueChange={(v) =>
-                      setBottleSkuId(v === "none" ? null : Number(v))
-                    }
+                  <BottleSkuCombobox
+                    options={bottleOptions}
+                    value={bottleSkuId}
+                    onChange={setBottleSkuId}
                     disabled={isCourier}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Geen fles gekoppeld" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Geen fles gekoppeld</SelectItem>
-                      {bottleOptions.map((o) => (
-                        <SelectItem key={o.id} value={String(o.id)}>
-                          {o.name}{" "}
-                          <span className="text-muted-foreground">
-                            ({o.sku_code})
-                          </span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  />
                   <p className="text-xs text-muted-foreground">
                     {isBottle
                       ? "Een fles kan zelf geen fles bevatten. Zet dit op 'geen fles gekoppeld' om dit product een losse fles te maken."
