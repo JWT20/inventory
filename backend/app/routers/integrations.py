@@ -48,6 +48,7 @@ from app.services.advice_channel import (
     advice_is_live,
 )
 from app.services.advice_holds import was_picked
+from app.services.advice_shipping import create_parcels_best_effort
 from app.services.booking import recompute_order_status
 from app.services.stock import (
     adjust_reservation,
@@ -713,6 +714,7 @@ def _write_delivery_address(
     stored.city = address.city.strip()
     stored.country = address.country
     stored.phone = address.phone.strip() if address.phone else None
+    stored.email = address.email.strip() if address.email else None
     order.delivery_address = stored
     return stored
 
@@ -906,6 +908,15 @@ def receive_advice_order(
     connection.last_synced_at = datetime.datetime.utcnow()
 
     db.commit()
+
+    # Veloyd has no link of its own to the advice app, so the boxes only exist
+    # once Dockscan registers them — and the carrier prints from that. Best
+    # effort on purpose: an order Veloyd could not accept must still land here,
+    # because the retry endpoint can finish the job while a lost order cannot be
+    # recovered at all.
+    if order.status == "active":
+        create_parcels_best_effort(db, order)
+
     return AdviceOrderResponse(
         external_order_id=payload.external_order_id,
         order_id=order.id,

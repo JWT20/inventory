@@ -620,6 +620,12 @@ class Order(Base):
     )
     # Only a delivery order has one. See OrderDeliveryAddress for why it is not
     # a set of columns here.
+    # The boxes this order leaves in. Empty unless Dockscan created them.
+    parcels: Mapped[list["OrderParcel"]] = relationship(
+        back_populates="order",
+        cascade="all, delete-orphan",
+        order_by="OrderParcel.sequence",
+    )
     delivery_address: Mapped["OrderDeliveryAddress | None"] = relationship(
         back_populates="order", cascade="all, delete-orphan", uselist=False
     )
@@ -1047,6 +1053,12 @@ class CarrierConnection(Base):
     # Overrides settings.veloyd_api_base_url for this organization. NULL means
     # the configured default, which is what every account uses today.
     base_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # How many bottles fit in one box, and therefore how many parcels an order
+    # becomes. A setting rather than a constant: the number follows from the
+    # boxes a merchant happens to buy, and changing it must not need a deploy.
+    bottles_per_box: Mapped[int] = mapped_column(
+        Integer, default=6, server_default="6", nullable=False
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
@@ -1055,6 +1067,56 @@ class CarrierConnection(Base):
     )
 
     organization: Mapped["Organization"] = relationship()
+
+
+class OrderParcel(Base):
+    """One physical box of a delivery order, as it exists at the carrier.
+
+    A table rather than the single ``Order.veloyd_tracking_code`` column,
+    because a case of twelve bottles leaves the building as two boxes with two
+    labels — and both have to be scanned before the order may ship.
+
+    Only orders whose parcels Dockscan creates itself have rows here. Shopify
+    and bol parcels are created by Veloyd's own webshop links, which is why
+    those keep learning their one tracking code on the order itself.
+
+    ``tracking_code`` stays NULL until the carrier prints the label: Veloyd
+    assigns the track-and-trace value at that moment, not at creation.
+    """
+
+    __tablename__ = "order_parcels"
+    __table_args__ = (
+        UniqueConstraint("order_id", "sequence", name="uq_order_parcel_sequence"),
+        Index(
+            "uq_order_parcels_tracking_code",
+            "tracking_code",
+            unique=True,
+            postgresql_where=text("tracking_code IS NOT NULL"),
+            sqlite_where=text("tracking_code IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("orders.id", ondelete="CASCADE"), nullable=False
+    )
+    # 1-based, so "doos 2 van 3" needs no arithmetic at the packing table.
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Veloyd's own parcel id, returned by parcel/create. The handle for
+    # fetching the tracking code later and for removing an unprinted parcel.
+    # NULL means the row was claimed but Veloyd has not answered yet: the row
+    # is inserted *before* the call, so a second caller collides on the unique
+    # (order_id, sequence) instead of registering the same box twice.
+    veloyd_parcel_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, nullable=True
+    )
+    # Normalized like Order.veloyd_tracking_code, so one scan matches either.
+    tracking_code: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+    order: Mapped["Order"] = relationship(back_populates="parcels")
 
 
 class ChannelSyncLog(Base):
@@ -1330,6 +1392,10 @@ class OrderDeliveryAddress(Base):
     )
     # The number the carrier calls at the door.
     phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Where the carrier sends its track-and-trace mail. Optional: the advice app
+    # only started sending it with this release, and an older order must still
+    # be shippable without one.
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

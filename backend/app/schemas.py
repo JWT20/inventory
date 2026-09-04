@@ -1273,6 +1273,9 @@ class DeliveryAddressIn(BaseModel):
     # domestic, and a caller that omits it means the Netherlands.
     country: str = Field(default="NL", min_length=2, max_length=2)
     phone: str | None = Field(default=None, max_length=40)
+    # The carrier mails the track-and-trace here. Optional: the advice app only
+    # started sending it with this release.
+    email: str | None = Field(default=None, max_length=255)
 
     @field_validator("country")
     @classmethod
@@ -1289,6 +1292,7 @@ class DeliveryAddressResponse(BaseModel):
     city: str
     country: str
     phone: str | None = None
+    email: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -1356,6 +1360,17 @@ class AdviceOrderAdminLine(BaseModel):
     quantity: int
 
 
+class AdviceOrderParcel(BaseModel):
+    """One box of a delivery order at the carrier."""
+
+    sequence: int
+    veloyd_parcel_id: str
+    # NULL until the carrier prints the label; Veloyd assigns it there.
+    tracking_code: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class AdviceOrderAdminItem(BaseModel):
     """One advice-app delivery order, as the merchant sees it in Kanalen."""
 
@@ -1373,6 +1388,9 @@ class AdviceOrderAdminItem(BaseModel):
     # Products the advice app sent that the catalogue does not know. They have no
     # order line, so without this the order would look complete but ship short.
     unmatched_products: list[str] = []
+    # The boxes registered at the carrier. Empty while the order is not ready to
+    # ship, or when Veloyd could not be reached yet.
+    parcels: list[AdviceOrderParcel] = []
 
 
 class InventoryOverviewItem(BaseModel):
