@@ -42,6 +42,7 @@ from app.routers import (
     receiving,
     skus,
     suppliers,
+    veloyd_webhook,
 )
 from app.routers.skus import sweep_stale_reference_images
 
@@ -240,6 +241,7 @@ app.include_router(push.router, prefix="/api")
 app.include_router(integrations.router, prefix="/api")
 app.include_router(advice_reservations.router, prefix="/api")
 app.include_router(advice_orders.router, prefix="/api")
+app.include_router(veloyd_webhook.router, prefix="/api")
 
 
 @app.get("/api/health")

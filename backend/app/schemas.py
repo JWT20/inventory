@@ -668,6 +668,18 @@ class CarrierStatus(BaseModel):
     updated_at: datetime | None = None
 
 
+class VeloydWebhookUrl(BaseModel):
+    """The URL to paste into Veloyd, shown once because the secret is in it."""
+
+    url: str
+
+
+class VeloydWebhookAck(BaseModel):
+    """What the webhook did with one event; Veloyd only reads the status code."""
+
+    result: str
+
+
 class VeloydConnectRequest(BaseModel):
     """The API key of one merchant's client account at the carrier."""
 
@@ -1367,6 +1379,10 @@ class AdviceOrderParcel(BaseModel):
     veloyd_parcel_id: str
     # NULL until the carrier prints the label; Veloyd assigns it there.
     tracking_code: str | None = None
+    tracking_url: str | None = None
+    # Set when Veloyd reported the print, which is when this box stopped being
+    # cancellable. NULL means it can still be pulled back.
+    label_printed_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

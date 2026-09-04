@@ -41,6 +41,7 @@ from app.schemas import (
     ChannelSyncSummary,
     InventoryPushSummary,
     VeloydConnectRequest,
+    VeloydWebhookUrl,
 )
 from app.services.channel_import import CANCELLATION_REVIEW_REASONS
 from app.services.bol import (
@@ -66,6 +67,7 @@ from app.services.veloyd import (
     VeloydNotConnected,
     client_for_organization,
 )
+from app.services.veloyd_webhook import issue_webhook_token
 from app.services.inventory_sync import (
     push_available,
     push_bol_available,
@@ -946,3 +948,39 @@ def connect_veloyd(
         raise HTTPException(500, str(exc)) from exc
     db.commit()
     return _carrier_status_for(connection)
+
+
+@router.post("/veloyd/webhook-url", response_model=VeloydWebhookUrl)
+def issue_veloyd_webhook_url(
+    organization_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_platform_admin),
+):
+    """Mint the URL to paste into Veloyd's "Webhook URL zendingen" field.
+
+    Returned once and never again: Veloyd offers no header or signature on that
+    field, so the secret lives in the path and only its digest is stored here.
+    Calling this a second time issues a new URL and retires the old one, which
+    is also how a leaked URL is revoked.
+    """
+    org_id = _require_org_id(organization_id)
+    if not settings.domain:
+        raise HTTPException(
+            503, "DOMAIN is niet geconfigureerd; webhook-URL kan niet worden gemaakt"
+        )
+    connection = (
+        db.query(CarrierConnection)
+        .filter(
+            CarrierConnection.organization_id == org_id,
+            CarrierConnection.carrier == VELOYD_CARRIER,
+        )
+        .first()
+    )
+    if connection is None:
+        raise HTTPException(409, "Koppel eerst het Veloyd-account van deze organisatie")
+
+    token = issue_webhook_token(connection)
+    db.commit()
+    return VeloydWebhookUrl(
+        url=f"https://{settings.domain}/api/integrations/veloyd/webhook/{token}"
+    )
