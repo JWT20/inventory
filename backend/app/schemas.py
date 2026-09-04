@@ -775,13 +775,20 @@ class LabelOrderOpenResponse(BaseModel):
     """Order resolved from the barcode on a loose Veloyd shipping label."""
     order_id: int
     tracking_code: str
+    # Which box of the order this label is, when the order ships in several.
+    parcel_sequence: int | None = None
+    parcel_count: int | None = None
 
 
 class LabelScanResponse(BaseModel):
-    """Result of the shipping-label verification gate on a barcode order."""
+    """Result of the shipping-label verification gate on a channel order."""
     order_id: int
     status: str
     reference: str
+    # An order that ships in several boxes stays ``completed`` until every one
+    # is scanned. The courier needs to see how many are left, not guess.
+    parcels_total: int = 1
+    parcels_scanned: int = 1
 
 
 class ManualOrderLineCreate(BaseModel):

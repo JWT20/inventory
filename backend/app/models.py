@@ -1128,6 +1128,12 @@ class OrderParcel(Base):
     label_printed_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime, nullable=True
     )
+    # When this box was scanned onto the van. The order ships when no box is
+    # left, so a case of twelve never travels with one label checked and one
+    # not.
+    scanned_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
