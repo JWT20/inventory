@@ -6,15 +6,17 @@ out of the order list, Scan & Boek and the week planning. Without a view of thei
 own they would be invisible to the merchant who has to get the parcels out, which
 is the same gap the reservation view closed for pickups.
 
-Deliberately read-only, for the same reason as that view: the advice app owns the
-order. Changing it from this side would leave the two systems disagreeing about
-what the customer bought, and only a customer at the door would find out.
+Read-only *on the order*, for the same reason as that view: the advice app owns
+it. Changing what the customer bought from this side would leave the two systems
+disagreeing, and only a customer at the door would find out. Registering the
+order's boxes at the carrier is the one write here, and it touches Veloyd rather
+than the order.
 
 Not folded into the Shopify/bol reconciliation endpoints, though the row builder
 there is generic enough. Those require a platform admin who names an
 organization, while the advice organization is configured rather than chosen —
 and the row would have to carry a delivery address that means nothing for a
-channel whose labels are printed at the channel.
+channel whose parcels Veloyd's own webshop link already created.
 """
 
 import json
@@ -29,9 +31,11 @@ from app.models import ChannelSyncLog, Order, User
 from app.schemas import (
     AdviceOrderAdminItem,
     AdviceOrderAdminLine,
+    AdviceOrderParcel,
     DeliveryAddressResponse,
 )
 from app.services.advice_channel import ADVICE_CHANNEL, resolve_advice_organization
+from app.services.advice_shipping import AdviceShippingError, create_parcels
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +68,7 @@ def _to_item(order: Order, unmatched: list[str]) -> AdviceOrderAdminItem:
         ),
         lines=lines,
         unmatched_products=unmatched,
+        parcels=[AdviceOrderParcel.model_validate(parcel) for parcel in order.parcels],
     )
 
 
@@ -87,6 +92,7 @@ def list_advice_orders(
         .options(
             selectinload(Order.lines),
             selectinload(Order.delivery_address),
+            selectinload(Order.parcels),
         )
         .filter(
             Order.organization_id == org_id,
@@ -133,3 +139,34 @@ def list_advice_orders(
         _to_item(order, unmatched_by_external.get(order.external_id or "", []))
         for order in orders
     ]
+
+
+@router.post("/{order_id}/parcels", response_model=list[AdviceOrderParcel])
+def register_advice_parcels(
+    order_id: int,
+    organization_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_merchant),
+):
+    """Register this order's boxes at the carrier, or finish a partial attempt.
+
+    The import already tries this on its own. This is the way back when Veloyd
+    was unreachable at that moment, or when only part of a multi-box order was
+    accepted: it asks for the boxes that are still missing and never for one
+    that already exists.
+
+    Write-only in the direction of the carrier — the order itself is not
+    touched, because the advice app owns it.
+    """
+    org_id = resolve_advice_organization(db, user, organization_id)
+    order = db.get(Order, order_id)
+    if not order or order.organization_id != org_id or order.channel != ADVICE_CHANNEL:
+        raise HTTPException(404, "Order niet gevonden")
+    if order.status in ("cancelled", "closed"):
+        raise HTTPException(409, f"Order is {order.status}; geen zending aanmelden")
+
+    try:
+        parcels = create_parcels(db, order)
+    except AdviceShippingError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return [AdviceOrderParcel.model_validate(parcel) for parcel in parcels]

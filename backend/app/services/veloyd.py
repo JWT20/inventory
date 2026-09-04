@@ -37,6 +37,10 @@ class VeloydNotConnected(VeloydError):
     """This organization has no Veloyd account of its own."""
 
 
+class VeloydParcelPrinted(VeloydError):
+    """The carrier already printed this label, so Veloyd will not drop it."""
+
+
 @dataclass(frozen=True)
 class VeloydLabel:
     reference: str
@@ -104,6 +108,84 @@ class VeloydClient:
             tracking_url=parcel.get("trackTraceLink") or None,
             carrier=parcel.get("carrier") or None,
         )
+
+    def create_parcel(
+        self,
+        *,
+        address: dict[str, str],
+        reference: str,
+        options: list[str] | None = None,
+        comment: str = "",
+    ) -> str:
+        """Register one box at the carrier and return Veloyd's parcel id.
+
+        Deliberately does not fetch the label. Veloyd hands out the
+        track-and-trace value on ``parcel/label``, and that same call moves the
+        parcel to a state it refuses to remove — so as long as the carrier
+        prints, a parcel created here stays cancellable.
+        """
+        if not self.api_key:
+            raise VeloydError("Veloyd API is niet geconfigureerd")
+
+        payload = {
+            "parcel": {
+                "address": address,
+                "options": options or [],
+                "reference": reference,
+                "comment": comment,
+            }
+        }
+        try:
+            response = httpx.post(
+                f"{self.base_url}/parcel/create",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json=payload,
+                timeout=30.0,
+            )
+        except httpx.HTTPError as exc:
+            raise VeloydError("Veloyd is tijdelijk niet bereikbaar") from exc
+
+        if response.status_code in (401, 403):
+            raise VeloydError("Veloyd API-sleutel is ongeldig of nog niet geactiveerd")
+        if response.status_code == 400:
+            # Veloyd names the offending field; passing it on saves the operator
+            # a round trip through the logs.
+            raise VeloydError(
+                f"Veloyd weigerde de zending: {_error_description(response)}"
+            )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise VeloydError("Veloyd kon de zending niet aanmaken") from exc
+
+        parcel_id = str((response.json() or {}).get("id") or "").strip()
+        if not parcel_id:
+            raise VeloydError("Veloyd gaf geen zendingnummer terug")
+        return parcel_id
+
+    def remove_parcel(self, parcel_id: str) -> None:
+        """Drop a parcel the carrier has not printed yet."""
+        if not self.api_key:
+            raise VeloydError("Veloyd API is niet geconfigureerd")
+        try:
+            response = httpx.get(
+                f"{self.base_url}/parcel/remove/{quote(parcel_id, safe='')}",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=15.0,
+            )
+        except httpx.HTTPError as exc:
+            raise VeloydError("Veloyd is tijdelijk niet bereikbaar") from exc
+
+        if response.status_code == 403:
+            raise VeloydParcelPrinted(
+                "Veloyd heeft dit label al gedrukt; annuleren kan alleen bij de vervoerder"
+            )
+        if response.status_code == 401:
+            raise VeloydError("Veloyd API-sleutel is ongeldig of nog niet geactiveerd")
+        try:
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise VeloydError("Veloyd kon de zending niet verwijderen") from exc
 
     def validate_credentials(self) -> None:
         """Prove the key is accepted, without creating anything.
@@ -277,3 +359,11 @@ def verify_veloyd_label(
     if label.reference != expected:
         raise VeloydLabelMismatch("Label hoort bij een andere order")
     return label
+
+
+def _error_description(response: httpx.Response) -> str:
+    try:
+        payload = response.json() or {}
+    except (TypeError, ValueError):
+        return "onbekende fout"
+    return str(payload.get("description") or payload.get("error") or "onbekende fout").strip()

@@ -104,6 +104,7 @@ def test_merchant_sees_the_order_with_the_address_it_ships_to(
         "city": "Groningen",
         "country": "NL",
         "phone": "0612345678",
+        "email": None,
     }
 
 
