@@ -150,10 +150,15 @@ def create_parcels(db: Session, order: Order, *, client=None) -> list[OrderParce
             # registered here — and it may or may not exist at the carrier, so
             # say so loudly rather than leave the order unshippable.
             logger.warning(
-                "Doos %s van order %s bleef onvoltooid; opnieuw aanmelden kan een "
-                "dubbele zending bij de vervoerder opleveren",
+                "Doos %s van %s bleef onvoltooid sinds %s; opnieuw aanmelden kan "
+                "een dubbele zending opleveren. Zoek bij de vervoerder op "
+                "referentie %s, comment 'Doos %s van %s'",
                 sequence,
                 order.reference,
+                parcel.created_at,
+                order.channel_reference,
+                sequence,
+                wanted,
             )
 
         try:
