@@ -29,9 +29,11 @@ from app.services.fulfillment_sync import (
     fulfill_shopify_order,
 )
 from app.services.veloyd import (
-    VeloydClient,
     VeloydError,
     VeloydLabelMismatch,
+    VeloydNotConnected,
+    client_for_organization,
+    clients_for_user,
     verify_veloyd_label,
 )
 from app.schemas import (
@@ -177,12 +179,30 @@ def open_order_by_label(
             tracking_code=normalized_scanned,
         )
 
-    try:
-        veloyd_label = VeloydClient().parcel_by_tracking_number(scanned_code)
-    except VeloydLabelMismatch as exc:
-        raise HTTPException(404, "Geen order gevonden voor dit Veloyd-label") from exc
-    except VeloydError as exc:
-        raise HTTPException(502, str(exc)) from exc
+    # A courier rides for several merchants and has no organization, so the
+    # label may belong to any connected account. Asking only one would answer
+    # "unknown" for every parcel of the others.
+    clients = clients_for_user(db, user)
+    if not clients:
+        raise HTTPException(409, "Geen Veloyd-account gekoppeld voor deze scan")
+
+    veloyd_label = None
+    outage: VeloydError | None = None
+    for client in clients:
+        try:
+            veloyd_label = client.parcel_by_tracking_number(scanned_code)
+            break
+        except VeloydLabelMismatch:
+            # Not this merchant's parcel; the next account may know it.
+            continue
+        except VeloydError as exc:
+            # Remember the outage: an account that could not answer must not be
+            # reported as a label nobody knows.
+            outage = exc
+    if veloyd_label is None:
+        if outage is not None:
+            raise HTTPException(502, str(outage))
+        raise HTTPException(404, "Geen order gevonden voor dit Veloyd-label")
 
     tracking_code = _normalize_tracking_code(veloyd_label.tracking_number)
     if not tracking_code:
@@ -562,8 +582,15 @@ def scan_label(
     tracking_info = None
     if label != order.channel_reference:
         try:
-            veloyd_label = verify_veloyd_label(label, order.channel_reference)
+            veloyd_label = verify_veloyd_label(
+                label,
+                order.channel_reference,
+                client=client_for_organization(db, order.organization_id),
+            )
             tracking_info = veloyd_label.shopify_tracking_info
+        except VeloydNotConnected as exc:
+            # Configuration, not an outage: this merchant has no account yet.
+            raise HTTPException(409, str(exc)) from exc
         except VeloydLabelMismatch as exc:
             raise HTTPException(409, str(exc)) from exc
         except VeloydError as exc:

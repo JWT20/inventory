@@ -1010,6 +1010,53 @@ class ChannelConnection(Base):
     organization: Mapped["Organization"] = relationship()
 
 
+class CarrierConnection(Base):
+    """The shipping-carrier account (Veloyd) of one organization.
+
+    Deliberately not a ``ChannelConnection``: a carrier is not a sales channel.
+    One Veloyd account carries the parcels of every channel an organization
+    sells through, so hanging it off a channel row would ask which of two
+    equally valid rows owns the key.
+
+    It exists per organization because the carrier's Veloyd tenant holds a
+    client account per merchant, each with its own sender address, tariffs and
+    invoice. Dockscan runs several of those merchants in one process, so a
+    single process-wide API key would print one merchant's parcels under
+    another's sender address.
+    """
+
+    __tablename__ = "carrier_connections"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "carrier", name="uq_carrier_conn_org_carrier"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False
+    )
+    # Only "veloyd" today. A column rather than a table per carrier, so a second
+    # one needs a row instead of a migration.
+    carrier: Mapped[str] = mapped_column(String(20))
+    # Authenticated-encrypted with the same server-side key as the channel
+    # credentials, under a carrier-specific AAD: a channel ciphertext copied
+    # into this column cannot be decrypted here.
+    api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    api_key_key_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Overrides settings.veloyd_api_base_url for this organization. NULL means
+    # the configured default, which is what every account uses today.
+    base_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    organization: Mapped["Organization"] = relationship()
+
+
 class ChannelSyncLog(Base):
     """One record per imported channel order — the data the observe/reconciliation
     view (PR 4) reads: did it import, how many lines matched a SKU, and which
