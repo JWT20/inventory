@@ -186,14 +186,16 @@ def test_an_order_that_is_already_registered_calls_nothing(db, sample_org):
     assert len(parcels) == 1
 
 
-def test_a_foreign_address_is_refused_because_of_the_age_check(db, sample_org):
+def test_a_foreign_parcel_ships_without_the_age_check(db, sample_org):
+    """Veloyd offers no age check abroad; the merchant chose to ship anyway."""
     order = _order(db, sample_org, country="BE")
     veloyd = FakeVeloyd()
 
-    with pytest.raises(AdviceShippingError, match="alleen voor Nederland"):
-        create_parcels(db, order, client=veloyd)
+    create_parcels(db, order, client=veloyd)
 
-    assert veloyd.calls == []
+    assert len(veloyd.calls) == 1
+    assert veloyd.calls[0]["options"] == []
+    assert veloyd.calls[0]["address"]["country"] == "BE"
 
 
 def test_an_order_without_an_address_is_refused(db, sample_org):
@@ -215,9 +217,13 @@ def test_a_channel_order_is_never_registered_here(db, sample_org):
         create_parcels(db, order, client=FakeVeloyd())
 
 
-def test_best_effort_swallows_a_carrier_outage(db, sample_org):
+def test_best_effort_swallows_a_carrier_outage(db, sample_org, monkeypatch):
     """The advice app is waiting; a lost order is worse than a missing parcel."""
-    order = _order(db, sample_org, country="BE")
+    order = _order(db, sample_org)
+    monkeypatch.setattr(
+        "app.services.advice_shipping.client_for_organization",
+        lambda _db, _org_id, **_kwargs: FakeVeloyd(fail_on=1),
+    )
 
     create_parcels_best_effort(db, order)
 

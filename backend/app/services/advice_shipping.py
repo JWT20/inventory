@@ -32,9 +32,11 @@ logger = logging.getLogger(__name__)
 #: Boxes hold six bottles unless the merchant's carrier row says otherwise.
 DEFAULT_BOTTLES_PER_BOX = 6
 
-#: Wine may not be handed to a minor, so every parcel carries the check. Veloyd
-#: only offers it for Dutch deliveries, which is why a foreign address is
-#: refused rather than quietly shipped without one.
+#: Wine may not be handed to a minor, so every Dutch parcel carries the check.
+#: Veloyd does not offer it outside the Netherlands — the option is simply
+#: absent from ``parcel/options`` for a foreign address — so a cross-border
+#: parcel ships without one. That is a deliberate call by the merchant, not an
+#: oversight: refusing those deliveries was the alternative.
 AGE_CHECK_OPTION = "Leeftijdscheck 18+"
 
 #: The statuses in which registering boxes is meaningful. An observed order must
@@ -75,11 +77,6 @@ def _veloyd_address(order: Order) -> dict[str, str]:
     address = order.delivery_address
     if address is None:
         raise AdviceShippingError("Order mist een bezorgadres")
-    if address.country.upper() != "NL":
-        raise AdviceShippingError(
-            "Leeftijdscheck 18+ bestaat alleen voor Nederland; "
-            "regel deze zending handmatig bij de vervoerder"
-        )
     payload = {
         "name": address.recipient_name,
         "street": address.street,
@@ -96,6 +93,18 @@ def _veloyd_address(order: Order) -> dict[str, str]:
         # sends none, which is why this stays optional.
         payload["email"] = address.email
     return payload
+
+
+def parcel_options(order: Order) -> list[str]:
+    """The Veloyd options one box of this order carries.
+
+    Only Dutch deliveries get the age check, because Veloyd offers it nowhere
+    else. See ``AGE_CHECK_OPTION`` for why a foreign parcel then goes without
+    rather than not at all.
+    """
+    address = order.delivery_address
+    country = (address.country if address else "NL").upper()
+    return [AGE_CHECK_OPTION] if country == "NL" else []
 
 
 def create_parcels(db: Session, order: Order, *, client=None) -> list[OrderParcel]:
@@ -122,6 +131,7 @@ def create_parcels(db: Session, order: Order, *, client=None) -> list[OrderParce
         raise AdviceShippingError("Order mist een referentie voor op het label")
 
     address = _veloyd_address(order)
+    options = parcel_options(order)
     wanted = required_parcel_count(order, bottles_per_box(db, order.organization_id))
     rows = {
         parcel.sequence: parcel
@@ -165,7 +175,7 @@ def create_parcels(db: Session, order: Order, *, client=None) -> list[OrderParce
             parcel_id = veloyd.create_parcel(
                 address=address,
                 reference=order.channel_reference,
-                options=[AGE_CHECK_OPTION],
+                options=options,
                 comment=f"Doos {sequence} van {wanted} — {order.reference}",
             )
         except VeloydError as exc:
