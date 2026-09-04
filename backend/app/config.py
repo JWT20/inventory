@@ -185,6 +185,25 @@ class Settings(BaseSettings):
             and self.push_dispatch_interval_seconds > 0
         )
 
+    @field_validator(
+        "veloyd_legacy_organization_id",
+        "advice_stock_organization_id",
+        mode="before",
+    )
+    @classmethod
+    def _blank_is_unset(cls, value):
+        """Compose hands an unconfigured variable through as "", not as absent.
+
+        ``${VAR:-}`` in docker-compose.yml substitutes an empty string for a
+        variable that is simply not set, and pydantic refuses to read that as an
+        optional int. That refusal happens at import time, so the whole process
+        fails to start — removing an optional line from .env should not be able
+        to do that.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("database_url")
     @classmethod
     def _check_database_url(cls, v: str) -> str:
