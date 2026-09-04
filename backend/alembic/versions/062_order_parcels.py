@@ -31,7 +31,10 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("order_id", sa.Integer(), nullable=False),
         sa.Column("sequence", sa.Integer(), nullable=False),
-        sa.Column("veloyd_parcel_id", sa.String(length=64), nullable=False),
+        # Nullable: the row is claimed before Veloyd is called, so a second
+        # caller collides on (order_id, sequence) rather than creating the same
+        # box twice at the carrier.
+        sa.Column("veloyd_parcel_id", sa.String(length=64), nullable=True),
         sa.Column("tracking_code", sa.String(length=255), nullable=True),
         sa.Column(
             "created_at",

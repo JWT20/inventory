@@ -11,6 +11,7 @@ import pytest
 from app.config import settings
 from app.models import (
     AdviceReservation,
+    CarrierConnection,
     AdviceReservationLine,
     ChannelConnection,
     InventoryBalance,
@@ -20,6 +21,7 @@ from app.models import (
     StockMovement,
 )
 from app.services.booking import apply_booking, undo_booking
+from app.services.channel_credentials import store_carrier_api_key
 
 
 WRITE_KEY = "test-advice-write-key"
@@ -50,6 +52,16 @@ def _live(db, org) -> ChannelConnection:
         organization_id=org.id, channel="advice", mode="live"
     )
     db.add(connection)
+    db.commit()
+    return connection
+
+
+def _carrier_account(db, org):
+    """A merchant that goes live has its own account at the carrier."""
+    connection = CarrierConnection(organization_id=org.id, carrier="veloyd")
+    db.add(connection)
+    db.flush()
+    store_carrier_api_key(connection, f"{org.slug}-veloyd-key")
     db.commit()
     return connection
 
@@ -362,6 +374,7 @@ class TestTheSwitch:
         from tests.conftest import auth_header
 
         _configure(monkeypatch, sample_org.id)
+        _carrier_account(db, sample_org)
 
         resp = client.post(
             self.URL, json={"mode": "live"}, headers=auth_header(admin_token)
@@ -369,6 +382,35 @@ class TestTheSwitch:
 
         assert resp.status_code == 200, resp.text
         assert resp.json()["mode"] == "live"
+
+    def test_going_live_without_a_carrier_account_is_refused(
+        self, client, db, sample_org, admin_token, monkeypatch
+    ):
+        """A live order is announced at the carrier the moment it arrives."""
+        from tests.conftest import auth_header
+
+        _configure(monkeypatch, sample_org.id)
+
+        resp = client.post(
+            self.URL, json={"mode": "live"}, headers=auth_header(admin_token)
+        )
+
+        assert resp.status_code == 409
+        assert "Veloyd" in resp.json()["detail"]
+
+    def test_going_back_to_observe_needs_no_carrier_account(
+        self, client, db, sample_org, admin_token, monkeypatch
+    ):
+        from tests.conftest import auth_header
+
+        _configure(monkeypatch, sample_org.id)
+
+        resp = client.post(
+            self.URL, json={"mode": "observe"}, headers=auth_header(admin_token)
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["mode"] == "observe"
 
     def test_a_merchant_may_read_but_not_flip(
         self, client, db, sample_org, owner_token, monkeypatch

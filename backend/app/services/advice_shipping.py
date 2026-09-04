@@ -16,9 +16,11 @@ simply be redone. Two rules follow from that, and both are load-bearing:
 """
 from __future__ import annotations
 
+import datetime
 import logging
 import math
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import CarrierConnection, Order, OrderParcel
@@ -34,6 +36,15 @@ DEFAULT_BOTTLES_PER_BOX = 6
 #: only offers it for Dutch deliveries, which is why a foreign address is
 #: refused rather than quietly shipped without one.
 AGE_CHECK_OPTION = "Leeftijdscheck 18+"
+
+#: The statuses in which registering boxes is meaningful. An observed order must
+#: reach nothing outside — that is what observing means. A ``pending_product``
+#: order would ship short, and a shipped one is already gone.
+SHIPPABLE_STATUSES = frozenset({"active", "completed"})
+
+#: How long a claimed-but-unanswered box is assumed to be someone else's work in
+#: progress. Past that it is treated as the debris of a crash, and retried.
+PENDING_CLAIM_TIMEOUT = datetime.timedelta(minutes=5)
 
 
 class AdviceShippingError(RuntimeError):
@@ -90,30 +101,61 @@ def _veloyd_address(order: Order) -> dict[str, str]:
 def create_parcels(db: Session, order: Order, *, client=None) -> list[OrderParcel]:
     """Register the boxes this order still needs, and return all of them.
 
+    Every box is claimed in the database *before* Veloyd is called, and the
+    unique ``(order_id, sequence)`` makes that claim the mutex: two callers
+    racing on the same order — a retried webhook and an operator pressing the
+    button — cannot both register box one, because the loser never reaches the
+    carrier. Each row is then committed on its own, because a parcel that exists
+    at the carrier but not here is the one outcome nobody can repair from this
+    side.
+
     Idempotent on the boxes that already exist: a retry after a failed third
-    parcel asks Veloyd only for the third. The order's own transaction is not
-    used — each parcel is committed on its own, because a parcel that exists at
-    the carrier but not here is the one outcome that cannot be repaired from
-    this side.
+    parcel asks Veloyd only for the third.
     """
     if order.channel != ADVICE_CHANNEL:
         raise AdviceShippingError("Alleen advies-orders worden hier aangemeld")
+    if order.status not in SHIPPABLE_STATUSES:
+        raise AdviceShippingError(
+            f"Order met status {order.status} wordt niet bij de vervoerder aangemeld"
+        )
     if not order.channel_reference:
         raise AdviceShippingError("Order mist een referentie voor op het label")
 
     address = _veloyd_address(order)
     wanted = required_parcel_count(order, bottles_per_box(db, order.organization_id))
-    existing = (
-        db.query(OrderParcel)
+    rows = {
+        parcel.sequence: parcel
+        for parcel in db.query(OrderParcel)
         .filter(OrderParcel.order_id == order.id)
         .order_by(OrderParcel.sequence)
         .all()
-    )
-    if len(existing) >= wanted:
-        return existing
+    }
 
-    veloyd = client or client_for_organization(db, order.organization_id)
-    for sequence in range(len(existing) + 1, wanted + 1):
+    veloyd = client or client_for_organization(
+        db, order.organization_id, allow_legacy_fallback=False
+    )
+    for sequence in range(1, wanted + 1):
+        parcel = rows.get(sequence)
+        if parcel is not None and parcel.veloyd_parcel_id:
+            continue
+        if parcel is None:
+            parcel = _claim(db, order, sequence)
+            rows[sequence] = parcel
+        elif not _claim_is_stale(parcel):
+            raise AdviceShippingError(
+                f"Doos {sequence} wordt op dit moment al aangemeld; probeer zo opnieuw"
+            )
+        else:
+            # A claim nobody finished. Whatever happened, the box is not
+            # registered here — and it may or may not exist at the carrier, so
+            # say so loudly rather than leave the order unshippable.
+            logger.warning(
+                "Doos %s van order %s bleef onvoltooid; opnieuw aanmelden kan een "
+                "dubbele zending bij de vervoerder opleveren",
+                sequence,
+                order.reference,
+            )
+
         try:
             parcel_id = veloyd.create_parcel(
                 address=address,
@@ -122,17 +164,37 @@ def create_parcels(db: Session, order: Order, *, client=None) -> list[OrderParce
                 comment=f"Doos {sequence} van {wanted} — {order.reference}",
             )
         except VeloydError as exc:
-            # Whatever was accepted before this box is already committed and
-            # stays usable; the caller retries for the rest.
+            # Give the claim back, so the next attempt is a clean one rather
+            # than a five-minute wait on a box that was never registered.
+            db.delete(parcel)
+            db.commit()
             raise AdviceShippingError(str(exc)) from exc
-        parcel = OrderParcel(
-            order_id=order.id, sequence=sequence, veloyd_parcel_id=parcel_id
-        )
-        db.add(parcel)
-        db.commit()
-        existing.append(parcel)
 
-    return existing
+        parcel.veloyd_parcel_id = parcel_id
+        db.commit()
+
+    return [rows[sequence] for sequence in sorted(rows)]
+
+
+def _claim(db: Session, order: Order, sequence: int) -> OrderParcel:
+    """Reserve one box, or refuse because another caller got there first."""
+    parcel = OrderParcel(order_id=order.id, sequence=sequence)
+    db.add(parcel)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise AdviceShippingError(
+            f"Doos {sequence} wordt op dit moment al aangemeld; probeer zo opnieuw"
+        ) from exc
+    return parcel
+
+
+def _claim_is_stale(parcel: OrderParcel) -> bool:
+    claimed_at = parcel.created_at
+    if claimed_at is None:
+        return True
+    return datetime.datetime.utcnow() - claimed_at > PENDING_CLAIM_TIMEOUT
 
 
 def create_parcels_best_effort(db: Session, order: Order) -> None:

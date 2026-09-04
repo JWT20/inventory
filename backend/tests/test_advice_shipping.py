@@ -1,5 +1,7 @@
 """Registering an advice-app delivery order's boxes at the carrier."""
 
+import datetime
+
 import pytest
 
 from app.models import (
@@ -16,7 +18,7 @@ from app.services.advice_shipping import (
     create_parcels,
     create_parcels_best_effort,
 )
-from app.services.veloyd import VeloydError
+from app.services.veloyd import VeloydError, VeloydNotConnected
 
 
 class FakeVeloyd:
@@ -241,7 +243,7 @@ def test_retry_endpoint_registers_the_missing_boxes(
     veloyd = FakeVeloyd()
     monkeypatch.setattr(
         "app.services.advice_shipping.client_for_organization",
-        lambda _db, _org_id: veloyd,
+        lambda _db, _org_id, **_kwargs: veloyd,
     )
 
     resp = client.post(
@@ -261,7 +263,7 @@ def test_retry_endpoint_is_idempotent(
     first = FakeVeloyd()
     monkeypatch.setattr(
         "app.services.advice_shipping.client_for_organization",
-        lambda _db, _org_id: first,
+        lambda _db, _org_id, **_kwargs: first,
     )
     client.post(
         f"/api/advice-orders/{order.id}/parcels", headers=auth_header(owner_token)
@@ -270,7 +272,7 @@ def test_retry_endpoint_is_idempotent(
     second = FakeVeloyd(prefix="second")
     monkeypatch.setattr(
         "app.services.advice_shipping.client_for_organization",
-        lambda _db, _org_id: second,
+        lambda _db, _org_id, **_kwargs: second,
     )
     resp = client.post(
         f"/api/advice-orders/{order.id}/parcels", headers=auth_header(owner_token)
@@ -289,7 +291,7 @@ def test_retry_endpoint_refuses_a_closed_order(
     db.commit()
     monkeypatch.setattr(
         "app.services.advice_shipping.client_for_organization",
-        lambda _db, _org_id: FakeVeloyd(),
+        lambda _db, _org_id, **_kwargs: FakeVeloyd(),
     )
 
     resp = client.post(
@@ -339,7 +341,7 @@ def test_an_arriving_live_order_is_registered_at_the_carrier(
     veloyd = FakeVeloyd()
     monkeypatch.setattr(
         "app.services.advice_shipping.client_for_organization",
-        lambda _db, _org_id: veloyd,
+        lambda _db, _org_id, **_kwargs: veloyd,
     )
 
     resp = client.post(
@@ -387,7 +389,7 @@ def test_an_observed_order_is_not_registered_at_the_carrier(
     veloyd = FakeVeloyd()
     monkeypatch.setattr(
         "app.services.advice_shipping.client_for_organization",
-        lambda _db, _org_id: veloyd,
+        lambda _db, _org_id, **_kwargs: veloyd,
     )
 
     resp = client.post(
@@ -410,4 +412,97 @@ def test_an_observed_order_is_not_registered_at_the_carrier(
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "observed"
+    assert veloyd.calls == []
+
+
+@pytest.mark.parametrize(
+    "status", ["observed", "pending_product", "pending_images", "shipped", "closed"]
+)
+def test_only_a_shippable_order_reaches_the_carrier(db, sample_org, status):
+    """Observe mode, an incomplete order and a shipped one all stay put."""
+    order = _order(db, sample_org)
+    order.status = status
+    db.commit()
+    veloyd = FakeVeloyd()
+
+    with pytest.raises(AdviceShippingError, match="niet bij de vervoerder"):
+        create_parcels(db, order, client=veloyd)
+
+    assert veloyd.calls == []
+
+
+def test_a_box_already_being_registered_is_not_registered_twice(db, sample_org):
+    """The claim row is the mutex: the loser never reaches Veloyd."""
+    order = _order(db, sample_org, bottles=6)
+    db.add(OrderParcel(order_id=order.id, sequence=1))
+    db.commit()
+    veloyd = FakeVeloyd()
+
+    with pytest.raises(AdviceShippingError, match="al aangemeld"):
+        create_parcels(db, order, client=veloyd)
+
+    assert veloyd.calls == []
+
+
+def test_a_claim_nobody_finished_is_retried(db, sample_org):
+    """A crash mid-call must not leave the order unshippable forever."""
+    order = _order(db, sample_org, bottles=6)
+    stale = OrderParcel(order_id=order.id, sequence=1)
+    db.add(stale)
+    db.commit()
+    stale.created_at = datetime.datetime.utcnow() - datetime.timedelta(hours=1)
+    db.commit()
+    veloyd = FakeVeloyd()
+
+    parcels = create_parcels(db, order, client=veloyd)
+
+    assert len(veloyd.calls) == 1
+    assert parcels[0].veloyd_parcel_id == "parcel-1"
+
+
+def test_a_refused_box_gives_its_claim_back(db, sample_org):
+    """The next attempt must be clean, not blocked by its own failed try."""
+    order = _order(db, sample_org, bottles=6)
+
+    with pytest.raises(AdviceShippingError):
+        create_parcels(db, order, client=FakeVeloyd(fail_on=1))
+
+    assert db.query(OrderParcel).filter(OrderParcel.order_id == order.id).count() == 0
+
+    retry = FakeVeloyd(prefix="retry")
+    parcels = create_parcels(db, order, client=retry)
+
+    assert len(retry.calls) == 1
+    assert parcels[0].veloyd_parcel_id == "retry-1"
+
+
+def test_creating_a_parcel_never_falls_back_to_the_shared_account(
+    db, sample_org, monkeypatch
+):
+    """Shipping under another merchant's sender address is not recoverable."""
+    monkeypatch.setattr(settings, "veloyd_api_key", "environment-key")
+    monkeypatch.setattr(settings, "veloyd_legacy_organization_id", sample_org.id)
+    order = _order(db, sample_org)
+
+    with pytest.raises(VeloydNotConnected):
+        create_parcels(db, order)
+
+
+def test_the_retry_endpoint_refuses_an_observed_order(
+    client, db, owner_token, sample_org, monkeypatch
+):
+    order = _order(db, sample_org)
+    order.status = "observed"
+    db.commit()
+    veloyd = FakeVeloyd()
+    monkeypatch.setattr(
+        "app.services.advice_shipping.client_for_organization",
+        lambda _db, _org_id, **_kwargs: veloyd,
+    )
+
+    resp = client.post(
+        f"/api/advice-orders/{order.id}/parcels", headers=auth_header(owner_token)
+    )
+
+    assert resp.status_code == 409
     assert veloyd.calls == []

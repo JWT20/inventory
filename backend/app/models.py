@@ -1104,7 +1104,12 @@ class OrderParcel(Base):
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     # Veloyd's own parcel id, returned by parcel/create. The handle for
     # fetching the tracking code later and for removing an unprinted parcel.
-    veloyd_parcel_id: Mapped[str] = mapped_column(String(64), unique=True)
+    # NULL means the row was claimed but Veloyd has not answered yet: the row
+    # is inserted *before* the call, so a second caller collides on the unique
+    # (order_id, sequence) instead of registering the same box twice.
+    veloyd_parcel_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, nullable=True
+    )
     # Normalized like Order.veloyd_tracking_code, so one scan matches either.
     tracking_code: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(

@@ -59,7 +59,13 @@ from app.services.channel_credentials import (
     store_carrier_api_key,
     has_carrier_api_key,
 )
-from app.services.veloyd import VELOYD_CARRIER, VeloydClient, VeloydError
+from app.services.veloyd import (
+    VELOYD_CARRIER,
+    VeloydClient,
+    VeloydError,
+    VeloydNotConnected,
+    client_for_organization,
+)
 from app.services.inventory_sync import (
     push_available,
     push_bol_available,
@@ -805,6 +811,19 @@ def set_advice_mode(
         raise HTTPException(
             400, "De wijnadvies-koppeling is niet geconfigureerd op deze server"
         )
+
+    if mode == "live":
+        # A live order is registered at the carrier the moment it arrives, and
+        # that may never happen under another merchant's account. Refusing here
+        # is the difference between a switch that cannot work and a stream of
+        # orders whose boxes silently fail to be announced.
+        try:
+            client_for_organization(db, org_id, allow_legacy_fallback=False)
+        except VeloydNotConnected as exc:
+            raise HTTPException(
+                409,
+                "Koppel eerst het eigen Veloyd-account van deze organisatie",
+            ) from exc
 
     connection = advice_connection(db, org_id)
     connection.mode = mode

@@ -35,7 +35,11 @@ from app.schemas import (
     DeliveryAddressResponse,
 )
 from app.services.advice_channel import ADVICE_CHANNEL, resolve_advice_organization
-from app.services.advice_shipping import AdviceShippingError, create_parcels
+from app.services.advice_shipping import (
+    SHIPPABLE_STATUSES,
+    AdviceShippingError,
+    create_parcels,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -162,8 +166,13 @@ def register_advice_parcels(
     order = db.get(Order, order_id)
     if not order or order.organization_id != org_id or order.channel != ADVICE_CHANNEL:
         raise HTTPException(404, "Order niet gevonden")
-    if order.status in ("cancelled", "closed"):
-        raise HTTPException(409, f"Order is {order.status}; geen zending aanmelden")
+    if order.status not in SHIPPABLE_STATUSES:
+        # An observed order must reach nothing outside, an incomplete one would
+        # ship short, and a shipped one is already gone. The service refuses
+        # these too; this is only the friendlier status code.
+        raise HTTPException(
+            409, f"Order met status {order.status} wordt niet aangemeld"
+        )
 
     try:
         parcels = create_parcels(db, order)
