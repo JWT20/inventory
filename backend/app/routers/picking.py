@@ -12,6 +12,7 @@ machinery rather than forking a second model:
 Gated on the order's ``barcode_picking`` module. Scoped to the selected order
 (the courier picks one order at a time), unlike the week-wide vision scope.
 """
+import datetime
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -19,9 +20,19 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth import assert_order_module, require_inbound_booker
+from app.modules import PICKING_MODULE_BY_PRODUCT_TYPE
 from app.database import get_db
 from app.events import publish_event
-from app.models import Booking, Location, Order, OrderLine, SKU, SKULocation, User
+from app.models import (
+    Booking,
+    Location,
+    Order,
+    OrderLine,
+    OrderParcel,
+    SKU,
+    SKULocation,
+    User,
+)
 from app.services.inventory_sync import push_inventory_to_channels
 from app.services.fulfillment_sync import (
     ShopifyFulfillmentError,
@@ -72,9 +83,31 @@ def _can_access_order(user: User, order: Order) -> bool:
 _normalize_tracking_code = normalize_tracking_code
 
 
-def _is_barcode_order(order: Order) -> bool:
-    return bool(order.lines) and all(
-        line.sku.product_type == "barcode" for line in order.lines
+def _picking_module_for(order: Order) -> str | None:
+    """The module that owns how this order is picked, or None if it is unclear.
+
+    The shipping-label gate used to demand ``barcode_picking``, because the only
+    orders that reached it were picked by scanning EANs. That conflated two
+    different things: the label is always a barcode, whatever is inside the box
+    was identified some other way. A merchant who picks wine by image ships
+    parcels just the same, and was locked out of the gate for it.
+
+    An order whose lines disagree about their method has no single owner, and is
+    refused rather than guessed at.
+    """
+    methods = {
+        PICKING_MODULE_BY_PRODUCT_TYPE.get(line.sku.product_type)
+        for line in order.lines
+    }
+    if len(methods) != 1:
+        return None
+    return methods.pop()
+
+
+def _organization_picks_this_order(order: Order) -> bool:
+    module = _picking_module_for(order)
+    return bool(
+        module and order.organization and module in order.organization.modules
     )
 
 
@@ -85,9 +118,67 @@ def _assert_openable_label_order(order: Order, user: User) -> None:
         raise HTTPException(409, f"Order kan niet worden geopend (status: {order.status})")
     if order.channel == "manual" or not order.channel_reference:
         raise HTTPException(409, "Label hoort niet bij een kanaalorder")
-    if not _is_barcode_order(order):
-        raise HTTPException(409, "Label hoort niet bij een EAN-order")
-    assert_order_module(order, "barcode_picking", user)
+    module = _picking_module_for(order)
+    if module is None:
+        raise HTTPException(409, "Order heeft geen eenduidige pickmethode")
+    assert_order_module(order, module, user)
+
+
+def _open_response(order: Order, parcel: OrderParcel) -> LabelOrderOpenResponse:
+    return LabelOrderOpenResponse(
+        order_id=order.id,
+        tracking_code=parcel.tracking_code or "",
+        parcel_sequence=parcel.sequence,
+        parcel_count=len(order.parcels),
+    )
+
+
+def _parcel_by_tracking_code(db: Session, tracking_code: str) -> OrderParcel | None:
+    if not tracking_code:
+        return None
+    return (
+        db.query(OrderParcel)
+        .filter(OrderParcel.tracking_code == tracking_code)
+        .first()
+    )
+
+
+def _parcel_by_veloyd_id(db: Session, parcel_id: str | None) -> OrderParcel | None:
+    """Resolve the exact box behind a label Dockscan itself registered.
+
+    Veloyd returns its own parcel id alongside the tracking code, and that id
+    is stored on the box. It is a stronger match than the order number, which
+    cannot say *which* of an order's boxes is on the table — and it cannot
+    collide with another merchant in the carrier's account, because an id we
+    did not create resolves to nothing.
+    """
+    if not parcel_id:
+        return None
+    return (
+        db.query(OrderParcel)
+        .filter(OrderParcel.veloyd_parcel_id == parcel_id)
+        .first()
+    )
+
+
+def _link_parcel_tracking_code(
+    db: Session, parcel: OrderParcel, tracking_code: str
+) -> None:
+    """Remember the code on the box, so a second scan needs no Veloyd call."""
+    if not tracking_code or parcel.tracking_code == tracking_code:
+        return
+    if parcel.tracking_code:
+        # The box already carries another label. Overwriting would lose the one
+        # that is physically stuck on it.
+        raise HTTPException(409, "Deze doos is al aan een ander label gekoppeld")
+    parcel.tracking_code = tracking_code
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            409, "Dit Veloyd-label is al aan een andere doos gekoppeld"
+        ) from exc
 
 
 def _find_open_orders_by_channel_reference(
@@ -120,9 +211,7 @@ def _find_open_orders_by_channel_reference(
         order
         for order in query.all()
         if (not require_unlinked or order.veloyd_tracking_code is None)
-        and _is_barcode_order(order)
-        and order.organization
-        and "barcode_picking" in order.organization.modules
+        and _organization_picks_this_order(order)
     ]
 
 
@@ -152,6 +241,11 @@ def open_order_by_label(
     normalized_scanned = _normalize_tracking_code(scanned_code)
     if not normalized_scanned:
         raise HTTPException(400, "Geen Veloyd-label gescand")
+
+    known_parcel = _parcel_by_tracking_code(db, normalized_scanned)
+    if known_parcel:
+        _assert_openable_label_order(known_parcel.order, user)
+        return _open_response(known_parcel.order, known_parcel)
 
     known = (
         db.query(Order)
@@ -207,6 +301,18 @@ def open_order_by_label(
     tracking_code = _normalize_tracking_code(veloyd_label.tracking_number)
     if not tracking_code:
         raise HTTPException(502, "Veloyd gaf een ongeldige trackingcode terug")
+
+    # A box Dockscan registered itself is identified by Veloyd's parcel id.
+    # That says which box of the order this is, which the order number cannot.
+    parcel = _parcel_by_veloyd_id(db, veloyd_label.parcel_id) or _parcel_by_tracking_code(
+        db, tracking_code
+    )
+    if parcel:
+        _assert_openable_label_order(parcel.order, user)
+        _link_parcel_tracking_code(db, parcel, tracking_code)
+        db.commit()
+        return _open_response(parcel.order, parcel)
+
     # Veloyd may return a canonical tracking value that differs in casing or
     # formatting from the scanner input. Check that value before matching anew.
     known = (
@@ -529,18 +635,127 @@ def scan_location(
     )
 
 
+def _scan_parcel_label(
+    db: Session,
+    order: Order,
+    label: str,
+    normalized_label: str,
+    user: User,
+) -> LabelScanResponse:
+    """Check one box off an order Dockscan registered at the carrier.
+
+    Matching happens on the box, never on the order number: with two boxes the
+    number is on both, so it cannot tell them apart — and scanning the same
+    label twice would otherwise ship an order whose second box nobody looked at.
+
+    The order is released only when no box is left. Until then it stays
+    ``completed`` and the response says how far the courier is.
+    """
+    parcel = next(
+        (
+            candidate
+            for candidate in order.parcels
+            if candidate.tracking_code == normalized_label
+        ),
+        None,
+    )
+    if parcel is None:
+        # Not a code this order already knows. Ask Veloyd whose box it is —
+        # the answer is either one of ours, or someone else's label entirely.
+        try:
+            veloyd_label = client_for_organization(
+                db, order.organization_id
+            ).parcel_by_tracking_number(label)
+        except VeloydNotConnected as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except VeloydLabelMismatch as exc:
+            raise HTTPException(409, "Label hoort bij een andere order") from exc
+        except VeloydError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+        tracking_code = _normalize_tracking_code(veloyd_label.tracking_number)
+        parcel = next(
+            (
+                candidate
+                for candidate in order.parcels
+                if candidate.veloyd_parcel_id == veloyd_label.parcel_id
+                or (tracking_code and candidate.tracking_code == tracking_code)
+            ),
+            None,
+        )
+        if parcel is None:
+            raise HTTPException(409, "Label hoort bij een andere order")
+        _link_parcel_tracking_code(db, parcel, tracking_code)
+
+    if parcel.scanned_at is None:
+        parcel.scanned_at = datetime.datetime.utcnow()
+
+    unscanned = [box for box in order.parcels if box.scanned_at is None]
+    scanned = len(order.parcels) - len(unscanned)
+    if unscanned:
+        db.commit()
+        publish_event(
+            "order_parcel_scanned",
+            details={
+                "order_reference": order.reference,
+                "parcel_sequence": parcel.sequence,
+                "parcels_total": len(order.parcels),
+                "parcels_scanned": scanned,
+            },
+            user=user,
+            resource_type="order",
+            resource_id=order.id,
+        )
+        return LabelScanResponse(
+            order_id=order.id,
+            status=order.status,
+            reference=order.channel_reference,
+            parcels_total=len(order.parcels),
+            parcels_scanned=scanned,
+        )
+
+    order.status = "shipped"
+    order.mark_finalized()  # idempotent: already stamped at completion
+    db.commit()
+
+    publish_event(
+        "order_shipped",
+        details={
+            "order_reference": order.reference,
+            "channel_reference": order.channel_reference,
+            "pick_method": "parcel_label",
+            "parcels_total": len(order.parcels),
+        },
+        user=user,
+        resource_type="order",
+        resource_id=order.id,
+    )
+    return LabelScanResponse(
+        order_id=order.id,
+        status=order.status,
+        reference=order.channel_reference,
+        parcels_total=len(order.parcels),
+        parcels_scanned=scanned,
+    )
+
+
 @router.post("/scan-label", response_model=LabelScanResponse)
 def scan_label(
     body: LabelScanRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_inbound_booker),
 ):
-    """Shipping-label verification gate: the final step on a barcode order.
+    """Shipping-label verification gate: the final step on a channel order.
 
     Veloyd prints the channel order number (``channel_reference``) on the label.
     A fully picked order (status ``completed``) is only released to ``shipped``
     when the scanned label matches that reference — this is what stops the right
     box leaving with the wrong customer's label.
+
+    An order whose boxes Dockscan registered itself is checked box by box
+    instead. Each label resolves to one parcel, and the order ships only when
+    none is left unscanned: a case of twelve bottles must never travel with one
+    label checked and the second unread.
     """
     order = db.get(Order, body.order_id)
     if not order:
@@ -551,7 +766,10 @@ def scan_label(
         and order.organization_id != user.organization_id
     ):
         raise HTTPException(403, "Geen toegang tot deze organisatie")
-    assert_order_module(order, "barcode_picking", user)
+    module = _picking_module_for(order)
+    if module is None:
+        raise HTTPException(409, "Order heeft geen eenduidige pickmethode")
+    assert_order_module(order, module, user)
 
     # Lock the order before checking status: without this a concurrent undo can
     # reopen the order between the check and the ``shipped`` write, shipping an
@@ -571,6 +789,10 @@ def scan_label(
     # without it (see Order.channel_reference).
     label = body.label_reference.strip().lstrip("#")
     normalized_label = _normalize_tracking_code(label)
+
+    if order.parcels:
+        return _scan_parcel_label(db, order, label, normalized_label, user)
+
     if (
         order.veloyd_tracking_code
         and normalized_label != order.veloyd_tracking_code

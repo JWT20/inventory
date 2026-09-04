@@ -48,6 +48,9 @@ class VeloydLabel:
     tracking_number: str
     tracking_url: str | None = None
     carrier: str | None = None
+    # Veloyd's own parcel id. For a parcel Dockscan created it identifies the
+    # exact box, which the order number cannot do once an order ships in two.
+    parcel_id: str | None = None
 
     @property
     def shopify_tracking_info(self) -> dict[str, str]:
@@ -108,6 +111,7 @@ class VeloydClient:
             tracking_number=returned_tracking,
             tracking_url=parcel.get("trackTraceLink") or None,
             carrier=parcel.get("carrier") or None,
+            parcel_id=str(parcel.get("id") or "").strip() or None,
         )
 
     def create_parcel(

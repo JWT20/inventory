@@ -339,6 +339,8 @@ def test_loose_label_opens_order_and_persists_tracking_code(
     assert resp.json() == {
         "order_id": order.id,
         "tracking_code": "v793auds9f4mb",
+        "parcel_sequence": None,
+        "parcel_count": None,
     }
     db.refresh(order)
     assert order.veloyd_tracking_code == "v793auds9f4mb"
@@ -385,7 +387,12 @@ def test_channel_reference_barcode_opens_order_without_veloyd(
     resp = _open_by_label(client, courier_token, "#1280")
 
     assert resp.status_code == 200
-    assert resp.json() == {"order_id": order.id, "tracking_code": "1280"}
+    assert resp.json() == {
+        "order_id": order.id,
+        "tracking_code": "1280",
+        "parcel_sequence": None,
+        "parcel_count": None,
+    }
     db.refresh(order)
     assert order.veloyd_tracking_code is None
 
