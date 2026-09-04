@@ -18,6 +18,7 @@ from app.models import CarrierConnection, User
 from app.services.channel_credentials import (
     CredentialEncryptionError,
     get_carrier_api_key,
+    has_carrier_api_key,
 )
 
 #: The only carrier today. Stored on ``CarrierConnection.carrier``.
@@ -30,6 +31,10 @@ class VeloydError(RuntimeError):
 
 class VeloydLabelMismatch(VeloydError):
     """The label is valid, but belongs to another order."""
+
+
+class VeloydNotConnected(VeloydError):
+    """This organization has no Veloyd account of its own."""
 
 
 @dataclass(frozen=True)
@@ -154,40 +159,96 @@ def carrier_connection(
     )
 
 
-def client_for_organization(db: Session, organization_id: int | None) -> VeloydClient:
+def _is_legacy_organization(organization_id: int | None) -> bool:
+    """Whether this is the one organization still configured through .env.
+
+    Named explicitly rather than "any organization without a row": the whole
+    point of storing keys per organization is that a merchant never ends up on
+    someone else's account, and an open-ended fallback quietly reintroduces
+    exactly that.
+    """
+    legacy = settings.veloyd_legacy_organization_id
+    return bool(legacy) and organization_id == legacy
+
+
+def client_for_organization(
+    db: Session,
+    organization_id: int | None,
+    *,
+    allow_legacy_fallback: bool = True,
+) -> VeloydClient:
     """The Veloyd account of one merchant.
 
-    Falls back to the environment key while an organization has no row of its
-    own. The first merchant on Veloyd was configured that way, and a deploy
-    must not close its label gate halfway through a shift; storing that key
-    per organization is what retires the fallback.
+    Only the organization named by ``VELOYD_LEGACY_ORGANIZATION_ID`` may fall
+    back to the environment key: it was configured that way before keys were
+    stored per organization, and a deploy must not close its label gate halfway
+    through a shift. Every other merchant without a stored key is not connected,
+    and says so.
+
+    Callers that create something at the carrier pass
+    ``allow_legacy_fallback=False``. Reading a label under a stale account is
+    recoverable; shipping a parcel under another merchant's sender address and
+    invoice is not.
     """
     connection = carrier_connection(db, organization_id)
-    if connection is None:
-        return VeloydClient()
+    if connection is None or not has_carrier_api_key(connection):
+        if allow_legacy_fallback and _is_legacy_organization(organization_id):
+            return VeloydClient(
+                base_url=connection.base_url if connection else None
+            )
+        raise VeloydNotConnected(
+            "Deze organisatie heeft geen eigen Veloyd-account gekoppeld"
+        )
     try:
         api_key = get_carrier_api_key(connection)
     except CredentialEncryptionError as exc:
         raise VeloydError(
             "Veloyd-sleutel kan niet veilig worden ontsleuteld"
         ) from exc
-    if not api_key:
-        return VeloydClient(base_url=connection.base_url or None)
     return VeloydClient(api_key=api_key, base_url=connection.base_url or None)
 
 
-def client_for_user(db: Session, user: User) -> VeloydClient:
-    """The Veloyd account a scanning user acts for.
+def connected_organization_ids(db: Session) -> list[int]:
+    """Every organization that can talk to Veloyd, legacy one included."""
+    org_ids = [
+        connection.organization_id
+        for connection in db.query(CarrierConnection)
+        .filter(CarrierConnection.carrier == VELOYD_CARRIER)
+        .order_by(CarrierConnection.organization_id)
+        .all()
+        if has_carrier_api_key(connection)
+    ]
+    legacy = settings.veloyd_legacy_organization_id
+    if legacy and legacy not in org_ids:
+        org_ids.append(legacy)
+    return org_ids
 
-    An owner or member acts for their own merchant. A courier and a platform
-    admin work across merchants and have no organization of their own, so they
-    keep the environment key until the label flow can resolve a parcel per
-    merchant — which is what the loose-label scan will do once Dockscan itself
-    creates the parcels and already knows the tracking code.
+
+def clients_for_user(db: Session, user: User) -> list[VeloydClient]:
+    """Every Veloyd account this user may resolve a scanned label against.
+
+    An owner or member has exactly one: their own merchant's. A courier and a
+    platform admin work across merchants and have no organization of their own,
+    so a label they scan may belong to any connected one — and asking only the
+    environment account would answer "unknown" for every other merchant's
+    parcel. The order is deterministic, so the same scan takes the same route
+    every time.
     """
     if user.organization_id:
-        return client_for_organization(db, user.organization_id)
-    return VeloydClient()
+        try:
+            return [client_for_organization(db, user.organization_id)]
+        except VeloydNotConnected:
+            # Never raises: an empty list is the one answer that means "no
+            # account to ask", whether the user has one merchant or many.
+            return []
+
+    clients: list[VeloydClient] = []
+    for organization_id in connected_organization_ids(db):
+        try:
+            clients.append(client_for_organization(db, organization_id))
+        except VeloydNotConnected:
+            continue
+    return clients
 
 
 def _is_missing_parcel_response(response: httpx.Response) -> bool:

@@ -7,9 +7,19 @@ not the courier's) and resolves the EAN within that org.
 import pytest
 
 from app.auth import create_token, hash_password
-from app.models import Customer, InventoryBalance, Order, OrderLine, Organization, SKU, User
+from app.models import (
+    CarrierConnection,
+    Customer,
+    InventoryBalance,
+    Order,
+    OrderLine,
+    Organization,
+    SKU,
+    User,
+)
+from app.services.channel_credentials import store_carrier_api_key
 from app.services.fulfillment_sync import ShopifyFulfillmentError
-from app.services.veloyd import VeloydLabel, VeloydLabelMismatch
+from app.services.veloyd import VeloydError, VeloydLabel, VeloydLabelMismatch
 from tests.conftest import auth_header
 
 
@@ -71,7 +81,17 @@ def _scan(client, token, order_id, ean):
 
 
 def _barcode_org(db, slug="socks-pick"):
-    return _make_org(db, slug, ["inventory", "orders", "barcode_picking", "channel_orders"])
+    org = _make_org(
+        db, slug, ["inventory", "orders", "barcode_picking", "channel_orders"]
+    )
+    # A merchant that ships has its own account at the carrier; without one the
+    # label flow refuses to reach Veloyd at all.
+    connection = CarrierConnection(organization_id=org.id, carrier="veloyd")
+    db.add(connection)
+    db.flush()
+    store_carrier_api_key(connection, f"{slug}-veloyd-key")
+    db.commit()
+    return org
 
 
 def _make_owner_token(db, org, username):
@@ -399,6 +419,10 @@ def test_channel_reference_barcode_blocks_ambiguous_orders(
 def test_unknown_loose_veloyd_label_returns_404(
     client, db, courier_token, monkeypatch
 ):
+    # A connected merchant to ask; without one the scan fails on configuration
+    # rather than on the label.
+    _barcode_org(db, "socks-unknown-label")
+
     def _unknown(_self, _scanned):
         raise VeloydLabelMismatch("Label hoort bij een andere order")
 
@@ -747,3 +771,63 @@ def test_shipped_order_in_courier_history_not_worklist(client, db, courier_token
     by_id = {o["id"]: o for o in history}
     assert order.id in by_id
     assert by_id[order.id]["status"] == "shipped"
+
+
+def test_a_courier_label_is_resolved_against_the_second_merchant(
+    client, db, courier_token, monkeypatch
+):
+    """A courier rides for several merchants; the first account may not know it."""
+    _barcode_org(db, "socks-first-merchant")
+    second = _barcode_org(db, "socks-second-merchant")
+    order = _complete_order(db, second, "SOK-TWO", "8700000002101", "2201")
+    asked: list[str] = []
+
+    def _by_account(self, scanned):
+        asked.append(self.api_key)
+        if self.api_key == "socks-first-merchant-veloyd-key":
+            raise VeloydLabelMismatch("Label is niet bekend bij Veloyd")
+        return VeloydLabel(reference="2201", tracking_number="V-SECOND-1")
+
+    monkeypatch.setattr(
+        "app.services.veloyd.VeloydClient.parcel_by_tracking_number", _by_account
+    )
+
+    resp = _open_by_label(client, courier_token, "V-SECOND-1")
+
+    assert resp.status_code == 200
+    assert resp.json()["order_id"] == order.id
+    assert asked == [
+        "socks-first-merchant-veloyd-key",
+        "socks-second-merchant-veloyd-key",
+    ]
+
+
+def test_an_unreachable_account_is_not_reported_as_an_unknown_label(
+    client, db, courier_token, monkeypatch
+):
+    """"Not found" would send the courier looking for a label that is fine."""
+    _barcode_org(db, "socks-outage")
+
+    def _down(_self, _scanned):
+        raise VeloydError("Veloyd is tijdelijk niet bereikbaar")
+
+    monkeypatch.setattr(
+        "app.services.veloyd.VeloydClient.parcel_by_tracking_number", _down
+    )
+
+    resp = _open_by_label(client, courier_token, "V-OUTAGE")
+
+    assert resp.status_code == 502
+
+
+def test_a_merchant_without_a_carrier_account_cannot_scan_a_label(
+    client, db, monkeypatch
+):
+    org = _make_org(
+        db, "socks-no-carrier", ["inventory", "orders", "barcode_picking", "channel_orders"]
+    )
+    token = _make_owner_token(db, org, "owner-no-carrier")
+
+    resp = _open_by_label(client, token, "V-NO-ACCOUNT")
+
+    assert resp.status_code == 409

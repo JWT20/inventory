@@ -122,6 +122,12 @@ class Settings(BaseSettings):
     # rather than the visible Shopify order reference. The server uses this key
     # to resolve the barcode and verify its reference before shipping.
     veloyd_api_key: str = ""
+    # The one organization whose Veloyd account was configured through the
+    # environment, before keys were stored per organization. Only that
+    # organization may fall back to VELOYD_API_KEY; anyone else without a
+    # carrier row is simply not connected, because silently borrowing another
+    # merchant's account is exactly what per-organization keys exist to stop.
+    veloyd_legacy_organization_id: int | None = None
     veloyd_api_base_url: str = "https://app.veloyd.nl/api"
 
     # Read-only stock feed for the wine advice app. The organization is bound
