@@ -7,6 +7,7 @@ the call, never a process-wide setting.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from urllib.parse import quote
 
@@ -224,6 +225,16 @@ class VeloydClient:
         except httpx.HTTPError as exc:
             raise VeloydError("Veloyd kon de sleutel niet controleren") from exc
 
+
+
+def normalize_tracking_code(value: str) -> str:
+    """Stable key for scanner, Veloyd and webhook variants of one barcode.
+
+    The same physical code arrives spaced, hyphenated or in lower case
+    depending on who reports it, so everything that stores or matches one
+    reduces it here first.
+    """
+    return re.sub(r"[^a-z0-9]", "", value.casefold())
 
 
 def carrier_connection(

@@ -1059,6 +1059,13 @@ class CarrierConnection(Base):
     bottles_per_box: Mapped[int] = mapped_column(
         Integer, default=6, server_default="6", nullable=False
     )
+    # SHA-256 of the secret in this organization's Veloyd webhook URL. Veloyd's
+    # webhook field carries no authentication of its own, so the path *is* the
+    # credential: unguessable, one per organization, and stored as a digest so
+    # a database leak cannot replay it.
+    webhook_token_hash: Mapped[str | None] = mapped_column(
+        String(64), unique=True, nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
@@ -1112,6 +1119,15 @@ class OrderParcel(Base):
     )
     # Normalized like Order.veloyd_tracking_code, so one scan matches either.
     tracking_code: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The carrier's public tracking page, as Veloyd reports it. Kept so the
+    # advice app can show the customer a link without asking Veloyd again.
+    tracking_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # When Veloyd first reported a track-and-trace value, which is the moment
+    # the carrier printed the label — and therefore the moment this parcel
+    # stopped being removable. NULL means it can still be cancelled.
+    label_printed_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

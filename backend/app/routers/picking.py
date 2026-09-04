@@ -13,7 +13,6 @@ Gated on the order's ``barcode_picking`` module. Scoped to the selected order
 (the courier picks one order at a time), unlike the week-wide vision scope.
 """
 import logging
-import re
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
@@ -34,6 +33,7 @@ from app.services.veloyd import (
     VeloydNotConnected,
     client_for_organization,
     clients_for_user,
+    normalize_tracking_code,
     verify_veloyd_label,
 )
 from app.schemas import (
@@ -67,9 +67,9 @@ def _can_access_order(user: User, order: Order) -> bool:
     return False
 
 
-def _normalize_tracking_code(value: str) -> str:
-    """Stable key for scanner and Veloyd variants of one physical barcode."""
-    return re.sub(r"[^a-z0-9]", "", value.casefold())
+#: Kept as a local alias: this module matches on it in half a dozen places, and
+#: the rule itself now lives with the client that also writes these codes.
+_normalize_tracking_code = normalize_tracking_code
 
 
 def _is_barcode_order(order: Order) -> bool:
