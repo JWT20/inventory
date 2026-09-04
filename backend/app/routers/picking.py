@@ -29,9 +29,10 @@ from app.services.fulfillment_sync import (
     fulfill_shopify_order,
 )
 from app.services.veloyd import (
-    VeloydClient,
     VeloydError,
     VeloydLabelMismatch,
+    client_for_organization,
+    client_for_user,
     verify_veloyd_label,
 )
 from app.schemas import (
@@ -178,7 +179,9 @@ def open_order_by_label(
         )
 
     try:
-        veloyd_label = VeloydClient().parcel_by_tracking_number(scanned_code)
+        veloyd_label = client_for_user(db, user).parcel_by_tracking_number(
+            scanned_code
+        )
     except VeloydLabelMismatch as exc:
         raise HTTPException(404, "Geen order gevonden voor dit Veloyd-label") from exc
     except VeloydError as exc:
@@ -562,7 +565,11 @@ def scan_label(
     tracking_info = None
     if label != order.channel_reference:
         try:
-            veloyd_label = verify_veloyd_label(label, order.channel_reference)
+            veloyd_label = verify_veloyd_label(
+                label,
+                order.channel_reference,
+                client=client_for_organization(db, order.organization_id),
+            )
             tracking_info = veloyd_label.shopify_tracking_info
         except VeloydLabelMismatch as exc:
             raise HTTPException(409, str(exc)) from exc

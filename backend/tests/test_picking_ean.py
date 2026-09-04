@@ -307,7 +307,7 @@ def test_loose_label_opens_order_and_persists_tracking_code(
     db.commit()
 
     monkeypatch.setattr(
-        "app.routers.picking.VeloydClient.parcel_by_tracking_number",
+        "app.services.veloyd.VeloydClient.parcel_by_tracking_number",
         lambda _self, scanned: VeloydLabel(
             reference="1262", tracking_number="V793AUDS9F4MB"
         ),
@@ -338,7 +338,7 @@ def test_known_loose_label_opens_locally_without_veloyd(
         raise AssertionError("known tracking code must not call Veloyd")
 
     monkeypatch.setattr(
-        "app.routers.picking.VeloydClient.parcel_by_tracking_number", _unexpected
+        "app.services.veloyd.VeloydClient.parcel_by_tracking_number", _unexpected
     )
 
     resp = _open_by_label(client, courier_token, "VKNOWN")
@@ -359,7 +359,7 @@ def test_channel_reference_barcode_opens_order_without_veloyd(
         raise AssertionError("channel reference must resolve without Veloyd")
 
     monkeypatch.setattr(
-        "app.routers.picking.VeloydClient.parcel_by_tracking_number", _unexpected
+        "app.services.veloyd.VeloydClient.parcel_by_tracking_number", _unexpected
     )
 
     resp = _open_by_label(client, courier_token, "#1280")
@@ -387,7 +387,7 @@ def test_channel_reference_barcode_blocks_ambiguous_orders(
         raise AssertionError("ambiguous reference must not call Veloyd")
 
     monkeypatch.setattr(
-        "app.routers.picking.VeloydClient.parcel_by_tracking_number", _unexpected
+        "app.services.veloyd.VeloydClient.parcel_by_tracking_number", _unexpected
     )
 
     resp = _open_by_label(client, courier_token, "1281")
@@ -403,7 +403,7 @@ def test_unknown_loose_veloyd_label_returns_404(
         raise VeloydLabelMismatch("Label hoort bij een andere order")
 
     monkeypatch.setattr(
-        "app.routers.picking.VeloydClient.parcel_by_tracking_number", _unknown
+        "app.services.veloyd.VeloydClient.parcel_by_tracking_number", _unknown
     )
 
     resp = _open_by_label(client, courier_token, "VUNKNOWN")
@@ -425,7 +425,7 @@ def test_loose_label_blocks_ambiguous_channel_order_number(
     db.commit()
 
     monkeypatch.setattr(
-        "app.routers.picking.VeloydClient.parcel_by_tracking_number",
+        "app.services.veloyd.VeloydClient.parcel_by_tracking_number",
         lambda _self, scanned: VeloydLabel(
             reference="1264", tracking_number="VAMBIGUOUS"
         ),
@@ -543,7 +543,7 @@ def test_veloyd_tracking_barcode_is_resolved_before_shopify_fulfillment(
             "company": "Break Away",
         }
 
-    def _verify(scanned, expected):
+    def _verify(scanned, expected, *, client=None):
         seen["verify"] = (scanned, expected)
         return ResolvedLabel()
 
@@ -572,7 +572,7 @@ def test_loose_label_full_flow_accepts_same_barcode_with_different_formatting(
     db.commit()
 
     monkeypatch.setattr(
-        "app.routers.picking.VeloydClient.parcel_by_tracking_number",
+        "app.services.veloyd.VeloydClient.parcel_by_tracking_number",
         lambda _self, scanned: VeloydLabel(
             reference="1267", tracking_number="V-ABC-123"
         ),
@@ -588,7 +588,7 @@ def test_loose_label_full_flow_accepts_same_barcode_with_different_formatting(
 
     monkeypatch.setattr(
         "app.routers.picking.verify_veloyd_label",
-        lambda scanned, expected: VeloydLabel(
+        lambda scanned, expected, *, client=None: VeloydLabel(
             reference=expected, tracking_number="V-ABC-123"
         ),
     )
@@ -605,7 +605,7 @@ def test_final_scan_backfills_normalized_tracking_code(
 
     monkeypatch.setattr(
         "app.routers.picking.verify_veloyd_label",
-        lambda scanned, expected: VeloydLabel(
+        lambda scanned, expected, *, client=None: VeloydLabel(
             reference=expected, tracking_number="V-BACK-FILL"
         ),
     )
@@ -627,7 +627,7 @@ def test_final_scan_tracking_conflict_blocks_before_shopify(
 
     monkeypatch.setattr(
         "app.routers.picking.verify_veloyd_label",
-        lambda scanned, expected: VeloydLabel(
+        lambda scanned, expected, *, client=None: VeloydLabel(
             reference=expected, tracking_number="V-CONFLICT"
         ),
     )
@@ -686,7 +686,7 @@ def test_label_mismatch_blocks(client, db, courier_token, monkeypatch):
     org = _barcode_org(db, "socks-lbl-bad")
     order = _complete_order(db, org, "SOK-L3", "8700000002003", "1262")
 
-    def _mismatch(_scanned, _expected):
+    def _mismatch(_scanned, _expected, *, client=None):
         from app.services.veloyd import VeloydLabelMismatch
 
         raise VeloydLabelMismatch("Label hoort bij een andere order")

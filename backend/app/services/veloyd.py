@@ -1,12 +1,27 @@
-"""Resolve a scanned Veloyd label barcode to its visible order reference."""
+"""Talk to the Veloyd account of one organization.
+
+Veloyd runs at the carrier, who keeps a client account per merchant: its own
+sender address, its own tariffs, its own invoice. Dockscan serves several of
+those merchants from one process, so which account a call goes to is part of
+the call, never a process-wide setting.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from urllib.parse import quote
 
 import httpx
+from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.models import CarrierConnection, User
+from app.services.channel_credentials import (
+    CredentialEncryptionError,
+    get_carrier_api_key,
+)
+
+#: The only carrier today. Stored on ``CarrierConnection.carrier``.
+VELOYD_CARRIER = "veloyd"
 
 
 class VeloydError(RuntimeError):
@@ -47,7 +62,10 @@ class VeloydClient:
         if not self.api_key:
             raise VeloydError("Veloyd API is niet geconfigureerd")
 
-        encoded = quote(tracking_number, safe="")
+        # Veloyd matches the track-and-trace value case-sensitively: the same
+        # code in lowercase comes back as "not found". Scanners deliver upper
+        # case, a typed-in code does not.
+        encoded = quote(tracking_number.strip().upper(), safe="")
         try:
             response = httpx.get(
                 f"{self.base_url}/parcel/get/tracktrace/{encoded}",
@@ -81,6 +99,95 @@ class VeloydClient:
             tracking_url=parcel.get("trackTraceLink") or None,
             carrier=parcel.get("carrier") or None,
         )
+
+    def validate_credentials(self) -> None:
+        """Prove the key is accepted, without creating anything.
+
+        ``parcel/options`` is the only endpoint that answers for an account as
+        a whole: it needs an address but changes nothing, and an unknown key
+        comes back 401 the same way every other endpoint does.
+        """
+        if not self.api_key:
+            raise VeloydError("Veloyd API is niet geconfigureerd")
+        probe = {
+            "parcel": {
+                "address": {
+                    "name": "Dockscan",
+                    "street": "Teststraat",
+                    "nr": "1",
+                    "postalCode": "9711AA",
+                    "city": "Groningen",
+                    "country": "NL",
+                }
+            }
+        }
+        try:
+            response = httpx.post(
+                f"{self.base_url}/parcel/options",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json=probe,
+                timeout=15.0,
+            )
+        except httpx.HTTPError as exc:
+            raise VeloydError("Veloyd is tijdelijk niet bereikbaar") from exc
+        if response.status_code in (401, 403):
+            raise VeloydError("Veloyd API-sleutel is ongeldig of nog niet geactiveerd")
+        try:
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise VeloydError("Veloyd kon de sleutel niet controleren") from exc
+
+
+
+def carrier_connection(
+    db: Session, organization_id: int | None
+) -> CarrierConnection | None:
+    if not organization_id:
+        return None
+    return (
+        db.query(CarrierConnection)
+        .filter(
+            CarrierConnection.organization_id == organization_id,
+            CarrierConnection.carrier == VELOYD_CARRIER,
+        )
+        .first()
+    )
+
+
+def client_for_organization(db: Session, organization_id: int | None) -> VeloydClient:
+    """The Veloyd account of one merchant.
+
+    Falls back to the environment key while an organization has no row of its
+    own. The first merchant on Veloyd was configured that way, and a deploy
+    must not close its label gate halfway through a shift; storing that key
+    per organization is what retires the fallback.
+    """
+    connection = carrier_connection(db, organization_id)
+    if connection is None:
+        return VeloydClient()
+    try:
+        api_key = get_carrier_api_key(connection)
+    except CredentialEncryptionError as exc:
+        raise VeloydError(
+            "Veloyd-sleutel kan niet veilig worden ontsleuteld"
+        ) from exc
+    if not api_key:
+        return VeloydClient(base_url=connection.base_url or None)
+    return VeloydClient(api_key=api_key, base_url=connection.base_url or None)
+
+
+def client_for_user(db: Session, user: User) -> VeloydClient:
+    """The Veloyd account a scanning user acts for.
+
+    An owner or member acts for their own merchant. A courier and a platform
+    admin work across merchants and have no organization of their own, so they
+    keep the environment key until the label flow can resolve a parcel per
+    merchant — which is what the loose-label scan will do once Dockscan itself
+    creates the parcels and already knows the tracking code.
+    """
+    if user.organization_id:
+        return client_for_organization(db, user.organization_id)
+    return VeloydClient()
 
 
 def _is_missing_parcel_response(response: httpx.Response) -> bool:

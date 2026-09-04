@@ -20,6 +20,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import (
     Booking,
+    CarrierConnection,
     ChannelConnection,
     ChannelSyncLog,
     Order,
@@ -29,6 +30,7 @@ from app.models import (
     User,
 )
 from app.schemas import (
+    CarrierStatus,
     ChannelConnectUrl,
     ChannelModeRequest,
     ChannelOrderRow,
@@ -38,6 +40,7 @@ from app.schemas import (
     ChannelStatus,
     ChannelSyncSummary,
     InventoryPushSummary,
+    VeloydConnectRequest,
 )
 from app.services.channel_import import CANCELLATION_REVIEW_REASONS
 from app.services.bol import (
@@ -53,7 +56,10 @@ from app.services.channel_credentials import (
     get_access_token,
     has_access_token,
     store_access_token,
+    store_carrier_api_key,
+    has_carrier_api_key,
 )
+from app.services.veloyd import VELOYD_CARRIER, VeloydClient, VeloydError
 from app.services.inventory_sync import (
     push_available,
     push_bol_available,
@@ -842,3 +848,82 @@ def bol_reconciliation(
         "bol",
         _bol_status_for(_get_connection(db, org_id, "bol")),
     )
+
+
+def _carrier_status_for(conn: CarrierConnection | None) -> CarrierStatus:
+    return CarrierStatus(
+        carrier=VELOYD_CARRIER,
+        connected=has_carrier_api_key(conn),
+        base_url=conn.base_url if conn else None,
+        updated_at=conn.updated_at if conn else None,
+    )
+
+
+@router.get("/veloyd/status", response_model=CarrierStatus)
+def veloyd_status(
+    organization_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_platform_admin),
+):
+    org_id = _require_org_id(organization_id)
+    connection = (
+        db.query(CarrierConnection)
+        .filter(
+            CarrierConnection.organization_id == org_id,
+            CarrierConnection.carrier == VELOYD_CARRIER,
+        )
+        .first()
+    )
+    return _carrier_status_for(connection)
+
+
+@router.post("/veloyd/connect", response_model=CarrierStatus)
+def connect_veloyd(
+    body: VeloydConnectRequest,
+    organization_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_platform_admin),
+):
+    """Bind one merchant's carrier account to its organization.
+
+    The key is checked against Veloyd before it is stored, so a typo surfaces
+    here instead of at the shipping-label gate with a packed box on the table.
+
+    Deliberately not gated on the ``channel_orders`` module like the sales
+    channels are: a carrier is not a channel. The merchant that ships the
+    advice app's delivery orders picks on images and has no channel at all, and
+    it still needs an account to print labels from.
+    """
+    org_id = _require_org_id(organization_id)
+    if db.get(Organization, org_id) is None:
+        raise HTTPException(404, "Organisatie niet gevonden")
+
+    api_key = body.api_key.strip()
+    base_url = (body.base_url or "").strip() or None
+    try:
+        VeloydClient(api_key=api_key, base_url=base_url).validate_credentials()
+    except VeloydError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    connection = (
+        db.query(CarrierConnection)
+        .filter(
+            CarrierConnection.organization_id == org_id,
+            CarrierConnection.carrier == VELOYD_CARRIER,
+        )
+        .first()
+    )
+    if connection is None:
+        connection = CarrierConnection(
+            organization_id=org_id, carrier=VELOYD_CARRIER
+        )
+        db.add(connection)
+        db.flush()
+    connection.base_url = base_url
+    try:
+        store_carrier_api_key(connection, api_key)
+    except CredentialEncryptionError as exc:
+        db.rollback()
+        raise HTTPException(500, str(exc)) from exc
+    db.commit()
+    return _carrier_status_for(connection)

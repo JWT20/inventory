@@ -659,6 +659,24 @@ class ChannelStatus(BaseModel):
     last_synced_at: datetime | None = None
 
 
+class CarrierStatus(BaseModel):
+    """Whether an organization can talk to its own carrier account."""
+
+    carrier: str
+    connected: bool
+    base_url: str | None = None
+    updated_at: datetime | None = None
+
+
+class VeloydConnectRequest(BaseModel):
+    """The API key of one merchant's client account at the carrier."""
+
+    api_key: str = Field(..., min_length=8, max_length=200)
+    # Only for a carrier that runs a second Veloyd install; NULL keeps the
+    # configured default.
+    base_url: str | None = Field(default=None, max_length=255)
+
+
 class ChannelReviewResolveRequest(BaseModel):
     """Resolve a cancelled channel order after picking already started."""
     action: Literal["cancel_restock", "cancel_without_restock"]
