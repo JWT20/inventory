@@ -674,6 +674,13 @@ class VeloydWebhookUrl(BaseModel):
     url: str
 
 
+class VeloydWebhookHeader(BaseModel):
+    """The Authorization header Veloyd must send, shown once."""
+
+    header_name: str = "Authorization"
+    value: str
+
+
 class VeloydWebhookAck(BaseModel):
     """What the webhook did with one event; Veloyd only reads the status code."""
 
