@@ -85,6 +85,11 @@ def apply_parcel_event(
     webhook it considers failed, and an event about someone else's parcel — the
     carrier's account holds several merchants — is not an error on our side. It
     is simply not ours, and is dropped.
+
+    Repeats are applied field by field rather than skipped wholesale. Veloyd
+    may send the tracking code first and the tracking link only in a later
+    event, and a repeat that is refused outright would leave that link empty
+    for good.
     """
     body = _parcel_body(payload if isinstance(payload, dict) else {})
     parcel_id = _first_value(body, "id", "parcelId", "parcel_id")
@@ -110,15 +115,37 @@ def apply_parcel_event(
     if not tracking_code:
         return "ignored_unusable_tracking_code"
 
-    if parcel.tracking_code == tracking_code:
+    if parcel.tracking_code and parcel.tracking_code != tracking_code:
+        # Veloyd reporting a second code for the same box is not something this
+        # side can resolve, and overwriting would strand the label already on it.
+        logger.warning(
+            "Veloyd meldde een tweede trackingcode voor doos %s van order %s",
+            parcel.sequence,
+            parcel.order.reference,
+        )
+        return "conflict"
+
+    # Field by field, because a repeat is not always a duplicate: the first
+    # event may carry only the code and a later one the link as well. Leaving
+    # early on a matching code would keep the URL empty forever.
+    changed = False
+    if parcel.tracking_code != tracking_code:
+        parcel.tracking_code = tracking_code
+        changed = True
+    reported_url = _first_value(body, "trackTraceLink", "trackTraceUrl") or None
+    if reported_url and parcel.tracking_url != reported_url:
+        parcel.tracking_url = reported_url
+        changed = True
+    if parcel.label_printed_at is None:
+        # The print is what assigns the code, so this is when the cancel window
+        # shut. Only ever set once: a later event must not move it.
+        parcel.label_printed_at = datetime.datetime.utcnow()
+        changed = True
+    if not changed:
         # Veloyd repeats an event it is unsure about; saying yes again is the
         # cheapest way to make it stop.
         return "unchanged"
 
-    parcel.tracking_code = tracking_code
-    parcel.tracking_url = _first_value(body, "trackTraceLink", "trackTraceUrl") or None
-    # The print is what assigns the code, so this is when the cancel window shut.
-    parcel.label_printed_at = parcel.label_printed_at or datetime.datetime.utcnow()
     try:
         db.commit()
     except IntegrityError:

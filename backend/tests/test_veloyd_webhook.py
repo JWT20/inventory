@@ -258,3 +258,53 @@ def test_a_merchant_cannot_issue_a_webhook_url(
     )
 
     assert resp.status_code == 403
+
+
+def test_a_later_event_still_fills_in_the_tracking_link(client, db, sample_org):
+    """Veloyd may report the code first and the link only afterwards."""
+    _carrier(db, sample_org)
+    parcel = _parcel(db, sample_org)
+
+    client.post(
+        f"{WEBHOOK_URL}/secret-token",
+        json={"parcel": {"id": "veloyd-1", "trackTrace": "3SIJVT018280390"}},
+    )
+    db.refresh(parcel)
+    assert parcel.tracking_url is None
+    printed_at = parcel.label_printed_at
+
+    resp = client.post(
+        f"{WEBHOOK_URL}/secret-token",
+        json={
+            "parcel": {
+                "id": "veloyd-1",
+                "trackTrace": "3SIJVT018280390",
+                "trackTraceLink": "https://jouw.postnl.nl/track-and-trace/3SIJVT018280390",
+            }
+        },
+    )
+
+    assert resp.json()["result"] == "linked"
+    db.refresh(parcel)
+    assert parcel.tracking_url.endswith("3SIJVT018280390")
+    # The print moment is the one thing a later event may not move.
+    assert parcel.label_printed_at == printed_at
+
+
+def test_a_second_code_for_the_same_box_is_refused(client, db, sample_org):
+    """Overwriting would strand the label that is already on the box."""
+    _carrier(db, sample_org)
+    parcel = _parcel(db, sample_org)
+    client.post(
+        f"{WEBHOOK_URL}/secret-token",
+        json={"parcel": {"id": "veloyd-1", "trackTrace": "3SIJVT018280390"}},
+    )
+
+    resp = client.post(
+        f"{WEBHOOK_URL}/secret-token",
+        json={"parcel": {"id": "veloyd-1", "trackTrace": "VSOMETHINGELSE"}},
+    )
+
+    assert resp.json()["result"] == "conflict"
+    db.refresh(parcel)
+    assert parcel.tracking_code == "3sijvt018280390"
