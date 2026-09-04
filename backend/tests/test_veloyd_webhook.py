@@ -308,3 +308,145 @@ def test_a_second_code_for_the_same_box_is_refused(client, db, sample_org):
     assert resp.json()["result"] == "conflict"
     db.refresh(parcel)
     assert parcel.tracking_code == "3sijvt018280390"
+
+
+# ---------------------------------------------------------------------------
+# The Authorization header Veloyd sends along
+# ---------------------------------------------------------------------------
+
+from app.services.veloyd_webhook import issue_webhook_auth_token  # noqa: E402
+
+
+def _with_header(db, org, value="Bearer expected-value"):
+    connection = (
+        db.query(CarrierConnection)
+        .filter(CarrierConnection.organization_id == org.id)
+        .one()
+    )
+    connection.webhook_auth_token_hash = hash_webhook_token(value)
+    db.commit()
+    return value
+
+
+def test_an_event_with_the_expected_header_is_accepted(client, db, sample_org):
+    _carrier(db, sample_org)
+    parcel = _parcel(db, sample_org)
+    value = _with_header(db, sample_org)
+
+    resp = client.post(
+        f"{WEBHOOK_URL}/secret-token",
+        headers={"Authorization": value},
+        json={"parcel": {"id": "veloyd-1", "trackTrace": "3SIJVT018280390"}},
+    )
+
+    assert resp.status_code == 200
+    db.refresh(parcel)
+    assert parcel.tracking_code == "3sijvt018280390"
+
+
+def test_a_wrong_header_looks_exactly_like_a_wrong_url(client, db, sample_org):
+    """A prober must not learn that only the header was off."""
+    _carrier(db, sample_org)
+    parcel = _parcel(db, sample_org)
+    _with_header(db, sample_org)
+
+    wrong = client.post(
+        f"{WEBHOOK_URL}/secret-token",
+        headers={"Authorization": "Bearer something-else"},
+        json={"parcel": {"id": "veloyd-1", "trackTrace": "3SIJVT018280390"}},
+    )
+    missing = client.post(
+        f"{WEBHOOK_URL}/secret-token",
+        json={"parcel": {"id": "veloyd-1", "trackTrace": "3SIJVT018280390"}},
+    )
+
+    assert wrong.status_code == 404
+    assert missing.status_code == 404
+    assert wrong.json() == missing.json()
+    db.refresh(parcel)
+    assert parcel.tracking_code is None
+
+
+def test_an_organization_without_a_header_keeps_working(client, db, sample_org):
+    """One merchant is switched over at a time; the other must not break."""
+    _carrier(db, sample_org)
+    parcel = _parcel(db, sample_org)
+
+    resp = client.post(
+        f"{WEBHOOK_URL}/secret-token",
+        json={"parcel": {"id": "veloyd-1", "trackTrace": "3SIJVT018280390"}},
+    )
+
+    assert resp.status_code == 200
+    db.refresh(parcel)
+    assert parcel.tracking_code == "3sijvt018280390"
+
+
+def test_the_header_value_is_issued_once_and_rotates(
+    client, db, admin_token, sample_org
+):
+    connection = _carrier(db, sample_org, token=None)
+
+    first = client.post(
+        f"/api/channels/veloyd/webhook-header?organization_id={sample_org.id}",
+        headers=auth_header(admin_token),
+    )
+
+    assert first.status_code == 200
+    assert first.json()["header_name"] == "Authorization"
+    value = first.json()["value"]
+    assert value.startswith("Bearer ")
+    db.refresh(connection)
+    # Only the digest is kept, exactly like the path secret.
+    assert value not in (connection.webhook_auth_token_hash or "")
+    assert connection.webhook_auth_token_hash == hash_webhook_token(value)
+
+    second = client.post(
+        f"/api/channels/veloyd/webhook-header?organization_id={sample_org.id}",
+        headers=auth_header(admin_token),
+    )
+
+    assert second.json()["value"] != value
+
+
+def test_the_header_value_cannot_be_minted_before_connecting(
+    client, db, admin_token, sample_org
+):
+    resp = client.post(
+        f"/api/channels/veloyd/webhook-header?organization_id={sample_org.id}",
+        headers=auth_header(admin_token),
+    )
+
+    assert resp.status_code == 409
+
+
+def test_a_merchant_cannot_mint_a_header_value(
+    client, db, owner_token, sample_org
+):
+    _carrier(db, sample_org, token=None)
+
+    resp = client.post(
+        f"/api/channels/veloyd/webhook-header?organization_id={sample_org.id}",
+        headers=auth_header(owner_token),
+    )
+
+    assert resp.status_code == 403
+
+
+def test_minting_binds_the_value_to_that_organization_only(db, sample_org):
+    """Two merchants, two values: one must never open the other's webhook."""
+    first = _carrier(db, sample_org, token=None)
+    other = Organization(name="Tweede", slug="tweede-header-org")
+    other.modules = ["inventory", "orders"]
+    db.add(other)
+    db.flush()
+    second = CarrierConnection(organization_id=other.id, carrier="veloyd")
+    db.add(second)
+    db.flush()
+
+    first_value = issue_webhook_auth_token(first)
+    second_value = issue_webhook_auth_token(second)
+    db.commit()
+
+    assert first_value != second_value
+    assert first.webhook_auth_token_hash != second.webhook_auth_token_hash

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import hmac
 import logging
 import secrets
 
@@ -39,6 +40,35 @@ def issue_webhook_token(connection: CarrierConnection) -> str:
     token = secrets.token_urlsafe(_TOKEN_BYTES)
     connection.webhook_token_hash = hash_webhook_token(token)
     return token
+
+
+def issue_webhook_auth_token(connection: CarrierConnection) -> str:
+    """Mint the Authorization header value Veloyd should send from now on.
+
+    Returned whole, header value and all, because that is what gets compared:
+    Veloyd sends the field back verbatim and guessing at how it formats a bare
+    token would be one assumption too many.
+    """
+    token = f"Bearer {secrets.token_urlsafe(_TOKEN_BYTES)}"
+    connection.webhook_auth_token_hash = hash_webhook_token(token)
+    return token
+
+
+def authorization_is_valid(
+    connection: CarrierConnection, header: str | None
+) -> bool:
+    """Whether this event carries the header the organization expects.
+
+    An organization without a stored value has not been switched over yet and
+    keeps running on the path secret alone — otherwise enabling this for one
+    merchant would break the webhook of the other.
+    """
+    expected = connection.webhook_auth_token_hash
+    if not expected:
+        return True
+    if not header:
+        return False
+    return hmac.compare_digest(hash_webhook_token(header), expected)
 
 
 def connection_for_token(db: Session, token: str) -> CarrierConnection | None:

@@ -1066,6 +1066,14 @@ class CarrierConnection(Base):
     webhook_token_hash: Mapped[str | None] = mapped_column(
         String(64), unique=True, nullable=True
     )
+    # SHA-256 of the exact Authorization header Veloyd is configured to send
+    # with this organization's webhook. Set means required: an event without it
+    # is refused. NULL keeps the path secret as the only credential, so the two
+    # organizations can be switched over one at a time. Deliberately not unique
+    # — it is checked against one connection, never looked up by.
+    webhook_auth_token_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

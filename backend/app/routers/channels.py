@@ -41,6 +41,7 @@ from app.schemas import (
     ChannelSyncSummary,
     InventoryPushSummary,
     VeloydConnectRequest,
+    VeloydWebhookHeader,
     VeloydWebhookUrl,
 )
 from app.services.channel_import import CANCELLATION_REVIEW_REASONS
@@ -67,7 +68,10 @@ from app.services.veloyd import (
     VeloydNotConnected,
     client_for_organization,
 )
-from app.services.veloyd_webhook import issue_webhook_token
+from app.services.veloyd_webhook import (
+    issue_webhook_auth_token,
+    issue_webhook_token,
+)
 from app.services.inventory_sync import (
     push_available,
     push_bol_available,
@@ -984,3 +988,36 @@ def issue_veloyd_webhook_url(
     return VeloydWebhookUrl(
         url=f"https://{settings.domain}/api/integrations/veloyd/webhook/{token}"
     )
+
+
+@router.post("/veloyd/webhook-header", response_model=VeloydWebhookHeader)
+def issue_veloyd_webhook_header(
+    organization_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_platform_admin),
+):
+    """Mint the value for Veloyd's "Webhook Authorization header" field.
+
+    Once it is stored, this organization's webhook refuses an event that does
+    not carry it — so paste it into Veloyd right away. Until then the path
+    secret stands on its own, which is what lets the two organizations be
+    switched over one at a time.
+
+    Shown once, like the URL: only its digest is kept. Calling again mints a new
+    value and retires the old.
+    """
+    org_id = _require_org_id(organization_id)
+    connection = (
+        db.query(CarrierConnection)
+        .filter(
+            CarrierConnection.organization_id == org_id,
+            CarrierConnection.carrier == VELOYD_CARRIER,
+        )
+        .first()
+    )
+    if connection is None:
+        raise HTTPException(409, "Koppel eerst het Veloyd-account van deze organisatie")
+
+    value = issue_webhook_auth_token(connection)
+    db.commit()
+    return VeloydWebhookHeader(value=value)
