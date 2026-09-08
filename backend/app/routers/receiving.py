@@ -1105,6 +1105,20 @@ async def _scan_and_propose(
                     candidates=[c.model_dump() for c in missing_refs],
                 )
 
+            if verdict.rejected_all and verdict.distinguishing_feature:
+                # The visual pass read the box fine and was confident it matches
+                # none of the candidates — the photo is not the problem, the
+                # catalogue is missing this product. Say what was actually seen
+                # instead of sending the picker off to retake a clear photo.
+                _reject(
+                    404,
+                    "no_catalog_match",
+                    f"{unit_word.capitalize()} herkend, maar komt niet overeen met "
+                    f"een SKU in de catalogus — gezien: {verdict.distinguishing_feature}. "
+                    "Meld dit product bij inkoop/beheer.",
+                    distinguishing_feature=verdict.distinguishing_feature,
+                )
+
             _reject(
                 404,
                 "not_recognized",

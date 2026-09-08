@@ -283,6 +283,38 @@ def test_nothing_recognised_tells_the_picker_how_to_reshoot(
     assert "verder af" in detail["message"]
 
 
+def test_a_confident_no_match_names_what_it_saw_instead_of_blaming_the_photo(
+    client, courier_token, db, sample_org, tmp_path
+):
+    """The visual pass can read a box perfectly and still recognise none of the
+    candidates — the catalogue is missing that product, not the photo unclear.
+    Sending the picker off to reshoot never fixes that, so this refusal must
+    say what was actually seen and carry a reason code a reshoot can't clear.
+    """
+    ordered = _make_sku(db, "CALY-BIANCO", "Calycanto Bianco")
+    stranger = _make_sku(db, "TERR-GAUD", "Terras Gauda O Rosal")
+    order = _make_open_order(db, sample_org, ordered)
+    db.commit()
+
+    resp = _scan(
+        client, courier_token, order, tmp_path,
+        matches=[(stranger, 0.85, _ref(stranger), "Terras Gauda box")],
+        verdict=RerankVerdict(
+            ran=True,
+            sku_id=None,
+            certainty="high",
+            distinguishing_feature="etiket zegt Terras Gauda O Rosal",
+            considered_sku_ids=[stranger.id],
+        ),
+    )
+
+    assert resp.status_code == 404
+    detail = resp.json()["detail"]
+    assert detail["error"] == "no_catalog_match"
+    assert "Terras Gauda O Rosal" in detail["message"]
+    assert "verder af" not in detail["message"]
+
+
 def test_the_trace_carries_what_the_decision_rested_on(
     client, courier_token, db, sample_org, tmp_path, monkeypatch
 ):
