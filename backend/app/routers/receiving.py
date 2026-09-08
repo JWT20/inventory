@@ -1142,6 +1142,18 @@ async def _scan_and_propose(
                 "Controleer op de doos wat er aan aantal en inhoud staat, en bevestig "
                 "alleen als dit product klopt."
             )
+        elif manual_review_required and verdict.rejected_all and verdict.distinguishing_feature:
+            # The visual pass did not fail to decide — it decided this is none
+            # of the candidates, confidently, and said what it saw instead. The
+            # vector-similarity fallback below still proposes the nearest
+            # in-scope SKU so the picker is not dead-ended, but "no certain
+            # match" undersells a check that actively disagrees with the
+            # proposal. Say what it actually found.
+            reason.append(
+                f"Visuele check herkent dit niet als {matched_sku.sku_code} — "
+                f"gezien: {verdict.distinguishing_feature}. Controleer dit goed "
+                "voordat je bevestigt."
+            )
         elif manual_review_required:
             reason.append(
                 "Automatische fotovergelijking kon geen zekere match bevestigen. "
