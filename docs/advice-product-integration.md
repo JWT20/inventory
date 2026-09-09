@@ -220,10 +220,18 @@ bij `warehouse`. Een gekruiste combinatie wordt geweigerd met HTTP 422, en een
 bestaande order-ID opnieuw aanmelden met een andere route geeft 409 — anders
 zou de tweede aanvraag een andere pot reserveren dan de eerste vasthoudt.
 
-Let op: een `dockscan`-reservering houdt alleen magazijnvoorraad vast. Er komt
-geen Dockscan-order van, dus de koerier ziet hem niet in Scan & Boek. Zolang
-die stroom niet bestaat, is `pickup` de enige route die in de praktijk gebruikt
-wordt.
+Een `dockscan`-reservering houdt alleen webshopvoorraad vast; er komt geen
+Dockscan-order van, dus personeel ziet hem niet in Scan & Boek — dat past bij
+een gewone bezorging, waar `POST /api/integrations/advice/orders` die order al
+wél aanmaakt zodra er een afleveradres bij zit (zie de docstring van
+`receive_advice_order`).
+
+Voor een afhaalpunt buiten de toonbank (vandaag: Stavangerweg) bestaat
+daarnaast `POST /api/integrations/advice/pickup-orders` — zelfde idee als
+`/orders`, maar zonder adres en zonder ooit een Veloyd-pakket aan te maken: de
+order komt wel op de picklijst (webshopschap), verlaat het pand alleen nooit
+per koerier. Zie de docstring van `receive_advice_pickup_order`
+(`app/routers/integrations.py`) voor de exacte velden.
 
 ## Handmatig synchroniseren
 

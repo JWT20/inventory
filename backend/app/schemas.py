@@ -1379,6 +1379,41 @@ class AdviceOrderResponse(BaseModel):
     unmatched: list[str]
 
 
+class AdvicePickupOrderLineIn(BaseModel):
+    source_product_id: str = Field(..., min_length=1, max_length=100)
+    quantity: int = Field(..., gt=0)
+
+
+class AdvicePickupOrderRequest(BaseModel):
+    """One paid pickup order from the advice app that still needs a pick.
+
+    A counter pickup reserves store stock through ``/reservations`` and is
+    handed over from there — that one never needs a pick task. This is for the
+    other kind: collected somewhere other than the counter (today, only
+    Stavangerweg), so the bottles have to be picked off the webshop shelf the
+    same way a delivery's are. No address travels with it — nothing is shipped,
+    so there is nothing to write one down for.
+    """
+
+    external_order_id: str = Field(..., min_length=1, max_length=100)
+    order_reference: str | None = Field(default=None, max_length=100)
+    # Printed on the pick screen in place of a Dockscan customer, which an
+    # anonymous webshop buyer does not have.
+    customer_name: str | None = Field(default=None, max_length=200)
+    ordered_at: datetime | None = None
+    lines: list[AdvicePickupOrderLineIn] = Field(..., min_length=1)
+
+
+class AdvicePickupOrderResponse(BaseModel):
+    external_order_id: str
+    order_id: int
+    reference: str
+    status: str
+    duplicate: bool = False
+    matched: list[AdviceOrderMatchedLine]
+    unmatched: list[str]
+
+
 class AdviceOrderAdminLine(BaseModel):
     sku_id: int
     sku_code: str

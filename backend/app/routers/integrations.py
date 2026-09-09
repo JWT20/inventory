@@ -32,6 +32,8 @@ from app.schemas import (
     AdviceStockPool,
     AdviceOrderRequest,
     AdviceOrderResponse,
+    AdvicePickupOrderRequest,
+    AdvicePickupOrderResponse,
     AdviceReservationLineResponse,
     AdviceReservationRequest,
     AdviceReservationResponse,
@@ -918,6 +920,190 @@ def receive_advice_order(
         create_parcels_best_effort(db, order)
 
     return AdviceOrderResponse(
+        external_order_id=payload.external_order_id,
+        order_id=order.id,
+        reference=order.reference,
+        status=order.status,
+        duplicate=not created,
+        matched=matched,
+        unmatched=unmatched,
+    )
+
+
+@router.post("/pickup-orders", response_model=AdvicePickupOrderResponse)
+def receive_advice_pickup_order(
+    payload: AdvicePickupOrderRequest,
+    db: Session = Depends(get_db),
+    organization_id: int = Depends(_authenticate_advice_sales_request),
+) -> AdvicePickupOrderResponse:
+    """Take in one paid non-counter pickup order from the advice app, to pick.
+
+    Same shape as :func:`receive_advice_order` minus everything about shipping:
+    no address ever travels with it, and it never becomes a parcel — there is
+    nothing to post. It still reserves from and books off the webshop shelf,
+    exactly like a delivery does, because that shelf is where this kind of
+    pickup physically happens; the difference is entirely in how the bottles
+    leave the building afterwards, which is not this endpoint's concern.
+
+    Idempotent on ``(organization, channel, external_id)``, same key and same
+    reason as a delivery order: the advice app retries.
+    """
+    if db.get(Organization, organization_id) is None:
+        raise HTTPException(
+            503,
+            "Advice stock organization is not configured correctly",
+        )
+
+    connection = advice_connection(db, organization_id)
+    live = advice_is_live(connection)
+
+    requested: dict[str, int] = {}
+    product_order: list[str] = []
+    for line in payload.lines:
+        if line.source_product_id not in requested:
+            product_order.append(line.source_product_id)
+            requested[line.source_product_id] = 0
+        requested[line.source_product_id] += line.quantity
+
+    skus = {
+        sku.source_product_id: sku
+        for sku in db.query(SKU)
+        .filter(
+            SKU.organization_id == organization_id,
+            SKU.is_bottle.is_(True),
+            SKU.source_product_id.in_(list(requested)),
+        )
+        .all()
+    }
+
+    def _load_order() -> Order | None:
+        return (
+            db.query(Order)
+            .filter(
+                Order.organization_id == organization_id,
+                Order.channel == ADVICE_CHANNEL,
+                Order.external_id == payload.external_order_id,
+            )
+            .with_for_update()
+            .first()
+        )
+
+    order = _load_order()
+    created = order is None
+    if order is None:
+        candidate = Order(
+            organization_id=organization_id,
+            channel=ADVICE_CHANNEL,
+            external_id=payload.external_order_id,
+            reference=f"ADV-{uuid.uuid4().hex[:8].upper()}",
+            channel_reference=payload.order_reference,
+            status="observed",
+            inventory_location="webshop",
+            ordered_at=payload.ordered_at,
+            created_by=None,
+            delivery_week=None,
+        )
+        try:
+            with db.begin_nested():
+                db.add(candidate)
+                db.flush()
+            order = candidate
+        except IntegrityError:
+            # Two retries of the same order raced on the unique
+            # (organization, channel, external_id) index; the other one won.
+            order = _load_order()
+            if order is None:
+                raise
+            created = False
+
+    writable = created or order.status == "observed"
+    if writable:
+        order.channel_reference = payload.order_reference
+        if payload.ordered_at is not None:
+            order.ordered_at = payload.ordered_at
+
+    # Printed on the pick screen in place of a Dockscan customer row, which an
+    # anonymous webshop buyer does not have — the same stand-in a delivery
+    # order's line uses for its recipient name.
+    customer_label = (payload.customer_name or "").strip() or "Afhalen Stavangerweg"
+
+    matched: list[AdviceOrderMatchedLine] = []
+    unmatched: list[str] = []
+    lines_by_sku = {line.sku_id: line for line in order.lines}
+    seen_sku_ids: set[int] = set()
+    for product_id in product_order:
+        sku = skus.get(product_id)
+        if sku is None:
+            unmatched.append(product_id)
+            continue
+        quantity = requested[product_id]
+        matched.append(
+            AdviceOrderMatchedLine(
+                source_product_id=product_id,
+                sku_code=sku.sku_code,
+                quantity=quantity,
+            )
+        )
+        seen_sku_ids.add(sku.id)
+        if not writable:
+            continue
+        line = lines_by_sku.get(sku.id)
+        if line is None:
+            line = OrderLine(order_id=order.id, sku_id=sku.id)
+            db.add(line)
+        line.quantity = quantity
+        line.klant = customer_label
+        line.customer_id = None
+    if writable:
+        for sku_id, line in lines_by_sku.items():
+            if sku_id not in seen_sku_ids:
+                db.delete(line)
+
+    # Same promotion rules as a delivery order: only an order that *arrives*
+    # while the connection is live becomes work, and only once every line has
+    # a product match and a reference photo to pick against.
+    if live and created:
+        db.flush()
+        if unmatched or not matched:
+            order.status = "pending_product"
+        else:
+            db.refresh(order)
+            recompute_order_status(order, list(order.lines))
+            if order.status == "observed":
+                order.status = (
+                    "active"
+                    if all(line.sku.reference_images for line in order.lines)
+                    else "pending_images"
+                )
+
+    log = (
+        db.query(ChannelSyncLog)
+        .filter(
+            ChannelSyncLog.organization_id == organization_id,
+            ChannelSyncLog.channel == ADVICE_CHANNEL,
+            ChannelSyncLog.external_id == payload.external_order_id,
+        )
+        .first()
+    )
+    if log is None:
+        log = ChannelSyncLog(
+            organization_id=organization_id,
+            channel=ADVICE_CHANNEL,
+            external_id=payload.external_order_id,
+        )
+        db.add(log)
+    log.action = "created" if created else "updated"
+    log.matched_lines = len(matched)
+    log.unmatched_eans = json.dumps(unmatched)
+    log.synced_at = datetime.datetime.utcnow()
+    connection.last_synced_at = datetime.datetime.utcnow()
+
+    db.commit()
+
+    # Deliberately no create_parcels_best_effort call here, ever: a pickup
+    # order is collected in person, so it must never become a Veloyd parcel.
+
+    return AdvicePickupOrderResponse(
         external_order_id=payload.external_order_id,
         order_id=order.id,
         reference=order.reference,
