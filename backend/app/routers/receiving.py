@@ -1105,6 +1105,20 @@ async def _scan_and_propose(
                     candidates=[c.model_dump() for c in missing_refs],
                 )
 
+            if verdict.rejected_all and verdict.distinguishing_feature:
+                # The visual pass read the box fine and was confident it matches
+                # none of the candidates — the photo is not the problem, the
+                # catalogue is missing this product. Say what was actually seen
+                # instead of sending the picker off to retake a clear photo.
+                _reject(
+                    404,
+                    "no_catalog_match",
+                    f"{unit_word.capitalize()} herkend, maar komt niet overeen met "
+                    f"een SKU in de catalogus — gezien: {verdict.distinguishing_feature}. "
+                    "Meld dit product bij inkoop/beheer.",
+                    distinguishing_feature=verdict.distinguishing_feature,
+                )
+
             _reject(
                 404,
                 "not_recognized",
@@ -1127,6 +1141,18 @@ async def _scan_and_propose(
                 f"Twijfel tussen {matched_sku.sku_code} en {variant_lookalike[0].sku_code}. "
                 "Controleer op de doos wat er aan aantal en inhoud staat, en bevestig "
                 "alleen als dit product klopt."
+            )
+        elif manual_review_required and verdict.rejected_all and verdict.distinguishing_feature:
+            # The visual pass did not fail to decide — it decided this is none
+            # of the candidates, confidently, and said what it saw instead. The
+            # vector-similarity fallback below still proposes the nearest
+            # in-scope SKU so the picker is not dead-ended, but "no certain
+            # match" undersells a check that actively disagrees with the
+            # proposal. Say what it actually found.
+            reason.append(
+                f"Visuele check herkent dit niet als {matched_sku.sku_code} — "
+                f"gezien: {verdict.distinguishing_feature}. Controleer dit goed "
+                "voordat je bevestigt."
             )
         elif manual_review_required:
             reason.append(
