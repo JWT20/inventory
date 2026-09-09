@@ -1002,6 +1002,9 @@ def receive_advice_pickup_order(
             ordered_at=payload.ordered_at,
             created_by=None,
             delivery_week=None,
+            # Surfaced in the merchant order view's notes, so a picker never
+            # mistakes this for a delivery — there is no parcel to hand off.
+            remarks="Afhalen bij Breakaway (Stavangerweg) — niet verzenden.",
         )
         try:
             with db.begin_nested():

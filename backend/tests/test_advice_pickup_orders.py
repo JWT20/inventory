@@ -96,6 +96,9 @@ def test_a_pickup_order_lands_as_an_observed_order(client, db, sample_org, monke
     # where a non-counter pickup physically sits.
     assert order.inventory_location == "webshop"
     assert order.delivery_week is None
+    # Shown in the merchant order notes, so a picker never mistakes it for a
+    # delivery.
+    assert "niet verzenden" in order.remarks.lower()
     assert [(line.sku_id, line.quantity, line.klant) for line in order.lines] == [
         (sku.id, 2, "Anna de Vries")
     ]
