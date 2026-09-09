@@ -12,7 +12,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Trash2, X, MapPin } from "lucide-react";
+
+interface Organization {
+  id: number;
+  name: string;
+}
 
 interface LocationSKU {
   sku_id: number;
@@ -69,19 +81,42 @@ function locationSubtitle(l: Location): string {
   return parts.join(" · ");
 }
 
+const ORG_FILTER_STORAGE_KEY = "courier.locations.selectedOrgId";
+
 export function LocationsPage() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [showNew, setShowNew] = useState(false);
   const [showBulk, setShowBulk] = useState(false);
   const [manageFor, setManageFor] = useState<Location | null>(null);
+  const [orgs, setOrgs] = useState<Organization[]>([]);
+  const [orgFilter, setOrgFilter] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    const stored = window.localStorage.getItem(ORG_FILTER_STORAGE_KEY);
+    return stored ? Number(stored) : null;
+  });
+
+  useEffect(() => {
+    api
+      .listOrganizations()
+      .then((list: Organization[]) => setOrgs(list))
+      .catch(() => toast.error("Kan organisaties niet laden"));
+  }, []);
+
+  useEffect(() => {
+    if (orgFilter === null) {
+      window.localStorage.removeItem(ORG_FILTER_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(ORG_FILTER_STORAGE_KEY, String(orgFilter));
+    }
+  }, [orgFilter]);
 
   const load = useCallback(async () => {
     try {
-      setLocations(await api.listLocations());
+      setLocations(await api.listLocations(orgFilter ?? undefined));
     } catch {
       toast.error("Kan locaties niet laden");
     }
-  }, []);
+  }, [orgFilter]);
 
   useEffect(() => {
     load();
@@ -115,6 +150,26 @@ export function LocationsPage() {
         Piklocaties voor barcode-producten en losse flessen. Hele wijndozen
         krijgen geen locatie: die worden per order op foto herkend.
       </p>
+
+      <div className="mb-4 space-y-1 max-w-xs">
+        <Label className="text-xs">Organisatie</Label>
+        <Select
+          value={orgFilter ? String(orgFilter) : "all"}
+          onValueChange={(v) => setOrgFilter(v === "all" ? null : Number(v))}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Alle organisaties" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Alle organisaties</SelectItem>
+            {orgs.map((o) => (
+              <SelectItem key={o.id} value={String(o.id)}>
+                {o.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
 
       <div className="space-y-3 mb-8">
         {locations.map((l) => (

@@ -89,18 +89,26 @@ def _load(db: Session, location_id: int) -> Location:
 
 
 @router.get("", response_model=list[LocationResponse])
-def list_locations(db: Session = Depends(get_db)):
-    """All pick locations, sorted for a natural walking route (row/cabinet/shelf)."""
-    locations = (
-        db.query(Location)
-        .options(
-            joinedload(Location.sku_links)
-            .joinedload(SKULocation.sku)
-            .joinedload(SKU.organization)
-        )
-        .order_by(Location.rij, Location.kast, Location.plank, Location.code)
-        .all()
+def list_locations(organization_id: int | None = None, db: Session = Depends(get_db)):
+    """All pick locations, sorted for a natural walking route (row/cabinet/shelf).
+
+    ``organization_id`` filters to locations that stock at least one SKU of that
+    merchant — locations themselves are warehouse-global (a shelf can hold
+    products from several merchants), so the filter runs through the SKU link,
+    not a column on ``Location``.
+    """
+    query = db.query(Location).options(
+        joinedload(Location.sku_links)
+        .joinedload(SKULocation.sku)
+        .joinedload(SKU.organization)
     )
+    if organization_id is not None:
+        query = query.filter(
+            Location.sku_links.any(SKULocation.sku.has(SKU.organization_id == organization_id))
+        )
+    locations = query.order_by(
+        Location.rij, Location.kast, Location.plank, Location.code
+    ).all()
     return [_to_response(loc) for loc in locations]
 
 

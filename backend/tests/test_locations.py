@@ -62,6 +62,44 @@ def test_courier_creates_and_lists_location(client, db, courier_token):
     assert "AB123" in codes
 
 
+def test_filter_by_organization(client, db, courier_token):
+    """organization_id filters to locations stocking a SKU of that merchant.
+
+    Locations are warehouse-global, so a shelf shared by two merchants must
+    still show up for both org filters, and a shelf with no products at all
+    must show up for neither.
+    """
+    org_a = _org(db, "filt-org-a")
+    org_b = _org(db, "filt-org-b")
+    sku_a = _barcode_sku(db, org_a, code="FA-1", ean="8711111111112")
+    sku_b = _barcode_sku(db, org_b, code="FB-1", ean="8711111111113")
+
+    loc_a = _create(client, courier_token, "FILA").json()["id"]
+    loc_b = _create(client, courier_token, "FILB").json()["id"]
+    loc_shared = _create(client, courier_token, "FILC").json()["id"]
+    _create(client, courier_token, "FILD")  # no SKUs linked at all
+
+    client.post(f"/api/locations/{loc_a}/skus", json={"sku_id": sku_a.id},
+                headers=auth_header(courier_token))
+    client.post(f"/api/locations/{loc_b}/skus", json={"sku_id": sku_b.id},
+                headers=auth_header(courier_token))
+    client.post(f"/api/locations/{loc_shared}/skus", json={"sku_id": sku_a.id},
+                headers=auth_header(courier_token))
+    client.post(f"/api/locations/{loc_shared}/skus", json={"sku_id": sku_b.id},
+                headers=auth_header(courier_token))
+
+    resp_a = client.get(f"/api/locations?organization_id={org_a.id}",
+                        headers=auth_header(courier_token))
+    assert resp_a.status_code == 200
+    codes_a = {l["code"] for l in resp_a.json()}
+    assert codes_a == {"FILA", "FILC"}
+
+    resp_b = client.get(f"/api/locations?organization_id={org_b.id}",
+                        headers=auth_header(courier_token))
+    codes_b = {l["code"] for l in resp_b.json()}
+    assert codes_b == {"FILB", "FILC"}
+
+
 def test_duplicate_code_rejected(client, db, courier_token):
     assert _create(client, courier_token, "DUP1").status_code == 201
     assert _create(client, courier_token, "DUP1").status_code == 409

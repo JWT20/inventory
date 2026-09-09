@@ -253,7 +253,8 @@ export const api = {
   deleteSupplier: (id: number) => request(`/suppliers/${id}`, { method: "DELETE" }),
 
   // Pick locations (courier-only; barcode products and loose bottles)
-  listLocations: () => request("/locations"),
+  listLocations: (organizationId?: number) =>
+    request(organizationId ? `/locations?organization_id=${organizationId}` : "/locations"),
   createLocation: (data: { code: string; rij?: string; kast?: string; plank?: string }) =>
     json("/locations", "POST", data),
   updateLocation: (
