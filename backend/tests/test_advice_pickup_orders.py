@@ -15,6 +15,7 @@ from app.models import (
     Order,
     OrderDeliveryAddress,
     OrderParcel,
+    Organization,
     ReferenceImage,
     SKU,
 )
@@ -302,3 +303,95 @@ def test_the_wrong_key_is_refused(client, db, sample_org, monkeypatch):
 
     assert response.status_code == 401
     assert db.query(Order).count() == 0
+
+
+STATUS_URL = "/api/integrations/advice/pickup-orders/status"
+
+
+def test_the_poll_reports_the_current_order_status(client, db, sample_org, monkeypatch):
+    _configure(monkeypatch, sample_org.id)
+    sku = _bottle(db, sample_org, "prd_a")
+    db.add(ReferenceImage(sku_id=sku.id, image_path="f.jpg", processing_status="done"))
+    _go_live(db, sample_org)
+
+    client.post(BASE_URL, json=_payload(), headers=_headers())
+
+    response = client.get(
+        STATUS_URL,
+        params={"external_order_id": "order_123"},
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["orders"] == [
+        {"external_order_id": "order_123", "found": True, "status": "active"}
+    ]
+
+
+def test_the_poll_answers_several_ids_at_once(client, db, sample_org, monkeypatch):
+    _configure(monkeypatch, sample_org.id)
+    _bottle(db, sample_org, "prd_a")
+
+    client.post(BASE_URL, json=_payload(), headers=_headers())
+    client.post(
+        BASE_URL,
+        json=_payload(external_order_id="order_456"),
+        headers=_headers(),
+    )
+
+    response = client.get(
+        STATUS_URL,
+        params=[
+            ("external_order_id", "order_123"),
+            ("external_order_id", "order_456"),
+            ("external_order_id", "order_unknown"),
+        ],
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    by_id = {row["external_order_id"]: row for row in response.json()["orders"]}
+    assert by_id["order_123"]["found"] is True
+    assert by_id["order_456"]["found"] is True
+    assert by_id["order_unknown"] == {
+        "external_order_id": "order_unknown",
+        "found": False,
+        "status": None,
+    }
+
+
+def test_the_poll_never_sees_another_organizations_order(
+    client, db, sample_org, monkeypatch
+):
+    _configure(monkeypatch, sample_org.id)
+    _bottle(db, sample_org, "prd_a")
+    client.post(BASE_URL, json=_payload(), headers=_headers())
+
+    other = Organization(name="Andere handelaar", slug="andere-handelaar")
+    db.add(other)
+    db.commit()
+    # Same external id, different organization's key.
+    monkeypatch.setattr(settings, "advice_stock_organization_id", other.id)
+
+    response = client.get(
+        STATUS_URL,
+        params={"external_order_id": "order_123"},
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["orders"] == [
+        {"external_order_id": "order_123", "found": False, "status": None}
+    ]
+
+
+def test_the_poll_wrong_key_is_refused(client, db, sample_org, monkeypatch):
+    _configure(monkeypatch, sample_org.id)
+
+    response = client.get(
+        STATUS_URL,
+        params={"external_order_id": "order_123"},
+        headers={"Authorization": "Bearer nope"},
+    )
+
+    assert response.status_code == 401

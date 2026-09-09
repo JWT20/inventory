@@ -6,7 +6,7 @@ import secrets
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from sqlalchemy import and_, case, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -34,6 +34,8 @@ from app.schemas import (
     AdviceOrderResponse,
     AdvicePickupOrderRequest,
     AdvicePickupOrderResponse,
+    AdvicePickupOrderStatus,
+    AdvicePickupOrderStatusResponse,
     AdviceReservationLineResponse,
     AdviceReservationRequest,
     AdviceReservationResponse,
@@ -1114,4 +1116,48 @@ def receive_advice_pickup_order(
         duplicate=not created,
         matched=matched,
         unmatched=unmatched,
+    )
+
+
+@router.get("/pickup-orders/status", response_model=AdvicePickupOrderStatusResponse)
+def advice_pickup_order_status(
+    external_order_id: list[str] = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+    organization_id: int = Depends(_authenticate_advice_sales_request),
+) -> AdvicePickupOrderStatusResponse:
+    """Where each advice-channel order stands, for wijnadvies1's poll.
+
+    Built for the pickup-order side of the integration: wijnadvies1 has no
+    other way to learn that Stavangerweg bottles have been picked, so it polls
+    this for orders it is still waiting to hear "completed" from, and flips its
+    own order to collected once this says so.
+
+    Read-only and cheap: one indexed lookup per id, nothing this caller could
+    not already see on the order it created. Not scoped to pickup orders
+    specifically — the same lookup works for any advice-channel order — but
+    that is an implementation detail; today only pickup-orders has a caller
+    that needs it.
+    """
+    if len(external_order_id) > 100:
+        raise HTTPException(422, "Te veel order-ids in één aanvraag")
+
+    orders = {
+        order.external_id: order
+        for order in db.query(Order)
+        .filter(
+            Order.organization_id == organization_id,
+            Order.channel == ADVICE_CHANNEL,
+            Order.external_id.in_(external_order_id),
+        )
+        .all()
+    }
+    return AdvicePickupOrderStatusResponse(
+        orders=[
+            AdvicePickupOrderStatus(
+                external_order_id=ext_id,
+                found=ext_id in orders,
+                status=orders[ext_id].status if ext_id in orders else None,
+            )
+            for ext_id in external_order_id
+        ]
     )

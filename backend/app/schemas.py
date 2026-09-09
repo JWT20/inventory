@@ -1414,6 +1414,19 @@ class AdvicePickupOrderResponse(BaseModel):
     unmatched: list[str]
 
 
+class AdvicePickupOrderStatus(BaseModel):
+    external_order_id: str
+    # False when this id was never taken in here at all — a wrong id, or one
+    # from before this endpoint existed. Distinct from a real status so the
+    # advice app's poller does not read "not found" as some new order state.
+    found: bool
+    status: str | None = None
+
+
+class AdvicePickupOrderStatusResponse(BaseModel):
+    orders: list[AdvicePickupOrderStatus]
+
+
 class AdviceOrderAdminLine(BaseModel):
     sku_id: int
     sku_code: str
