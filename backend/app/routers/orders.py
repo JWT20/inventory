@@ -26,6 +26,7 @@ from app.models import (
     CustomerSKU,
     InventoryBalance,
     Order,
+    OrderDeliveryAddress,
     OrderLine,
     Organization,
     SKU,
@@ -939,7 +940,18 @@ def _monthly_units_by_organization(
     when the case lands on the shelf and again on the customer order that later
     ships them. That is correct for "work done" and wrong for "goods sold"; this
     report is the former.
+
+    A webshop order also needs a delivery address: that is what makes it a
+    parcel-out-the-door job. An advice pickup order (``/integrations/advice/
+    pickup-orders``) shares the advice channel and its webshop shelf but never
+    gets an address — nothing is shipped — so on the address alone it counts as
+    ordinary customer work instead, the same job as a counter pickup.
     """
+    has_delivery_address = (
+        db.query(OrderDeliveryAddress.id)
+        .filter(OrderDeliveryAddress.order_id == Order.id)
+        .exists()
+    )
     # Per finalized order: its organization, finalize moment and booked boxes.
     #
     # ``finalized_at`` alone decides membership — deliberately *not* the current
@@ -967,9 +979,9 @@ def _monthly_units_by_organization(
         .join(SKU, OrderLine.sku_id == SKU.id)
         .filter(Order.finalized_at.isnot(None))
         .filter(
-            Order.channel == ADVICE_CHANNEL
+            and_(Order.channel == ADVICE_CHANNEL, has_delivery_address)
             if webshop
-            else Order.channel != ADVICE_CHANNEL
+            else or_(Order.channel != ADVICE_CHANNEL, ~has_delivery_address)
         )
         .group_by(
             Order.id,
