@@ -2,14 +2,17 @@
 
 import datetime
 
-from app.models import Customer, Order, OrderLine, SKU
+from app.models import Customer, Order, OrderDeliveryAddress, OrderLine, SKU
 from tests.conftest import auth_header
 
 
-def _make_order(db, org, ref, status, finalized_at=None, week="2026-W21"):
+def _make_order(
+    db, org, ref, status, finalized_at=None, week="2026-W21", channel="manual"
+):
     order = Order(
         organization_id=org.id,
         reference=ref,
+        channel=channel,
         status=status,
         delivery_week=week,
         finalized_at=finalized_at,
@@ -115,6 +118,87 @@ def test_groups_by_finalized_month(client, db, courier_token, sample_org):
         _month("2026-03", boxes=17),
     ]
     assert org["total_boxes"] == 24
+
+
+def test_advice_pickup_order_without_address_counts_as_customer_work(
+    db, client, courier_token, sample_org
+):
+    # A pickup order (e.g. /integrations/advice/pickup-orders) shares the
+    # advice channel and webshop shelf with a real delivery, but never gets a
+    # delivery address — nothing is shipped. It should land in the customer
+    # bucket, not the webshop one.
+    order = _make_order(
+        db,
+        sample_org,
+        "PICKUP",
+        status="closed",
+        finalized_at=datetime.datetime(2026, 3, 15, 9, 0),
+        channel="advice",
+    )
+    sku = SKU(sku_code="SKU-PICKUP", name="Wine pickup", is_bottle=True, product_type="vision")
+    db.add(sku)
+    db.flush()
+    customer = Customer(name="Afhalen Stavangerweg", organization_id=sample_org.id)
+    db.add(customer)
+    db.flush()
+    _make_line(db, order, sku, customer, quantity=4, booked_count=4)
+    db.commit()
+
+    resp = client.get(
+        "/api/orders/reports/monthly-boxes",
+        headers=auth_header(courier_token),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["webshop"] == []
+    org = body["organizations"][0]
+    assert org["total_bottles"] == 4
+    assert org["months"] == [_month("2026-03", bottles=4)]
+
+
+def test_advice_delivery_order_with_address_counts_as_webshop_work(
+    db, client, courier_token, sample_org
+):
+    # A real delivery order does get a delivery address — that is what makes
+    # it a parcel-out-the-door job — so it stays in the webshop bucket.
+    order = _make_order(
+        db,
+        sample_org,
+        "DELIVERY",
+        status="closed",
+        finalized_at=datetime.datetime(2026, 3, 15, 9, 0),
+        channel="advice",
+    )
+    db.add(
+        OrderDeliveryAddress(
+            order_id=order.id,
+            recipient_name="Anna de Vries",
+            street="Turfsingel",
+            house_number="8",
+            postal_code="9712 KR",
+            city="Groningen",
+            country="NL",
+        )
+    )
+    sku = SKU(sku_code="SKU-DELIVERY", name="Wine delivery", is_bottle=True, product_type="vision")
+    db.add(sku)
+    db.flush()
+    customer = Customer(name="Anna de Vries", organization_id=sample_org.id)
+    db.add(customer)
+    db.flush()
+    _make_line(db, order, sku, customer, quantity=3, booked_count=3)
+    db.commit()
+
+    resp = client.get(
+        "/api/orders/reports/monthly-boxes",
+        headers=auth_header(courier_token),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["organizations"] == []
+    webshop_org = body["webshop"][0]
+    assert webshop_org["total_bottles"] == 3
+    assert webshop_org["months"] == [_month("2026-03", bottles=3)]
 
 
 def test_bottles_counted_separately(client, db, courier_token, sample_org):
