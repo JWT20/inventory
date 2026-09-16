@@ -85,6 +85,15 @@ const ORG_FILTER_STORAGE_KEY = "courier.locations.selectedOrgId";
 
 export function LocationsPage() {
   const [locations, setLocations] = useState<Location[]>([]);
+  const [search, setSearch] = useState("");
+  const searchTerm = search.trim().toLowerCase();
+  const visibleLocations = locations.filter((location) =>
+    location.code.toLowerCase().includes(searchTerm) ||
+    location.skus.some((sku) =>
+      sku.sku_code.toLowerCase().includes(searchTerm) ||
+      sku.name.toLowerCase().includes(searchTerm),
+    ),
+  );
   const [showNew, setShowNew] = useState(false);
   const [showBulk, setShowBulk] = useState(false);
   const [manageFor, setManageFor] = useState<Location | null>(null);
@@ -151,28 +160,40 @@ export function LocationsPage() {
         krijgen geen locatie: die worden per order op foto herkend.
       </p>
 
-      <div className="mb-4 space-y-1 max-w-xs">
-        <Label className="text-xs">Organisatie</Label>
-        <Select
-          value={orgFilter ? String(orgFilter) : "all"}
-          onValueChange={(v) => setOrgFilter(v === "all" ? null : Number(v))}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="Alle organisaties" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Alle organisaties</SelectItem>
-            {orgs.map((o) => (
-              <SelectItem key={o.id} value={String(o.id)}>
-                {o.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="mb-4 flex flex-wrap items-end gap-3">
+        <div className="space-y-1 w-full sm:w-64">
+          <Label className="text-xs">Organisatie</Label>
+          <Select
+            value={orgFilter ? String(orgFilter) : "all"}
+            onValueChange={(v) => setOrgFilter(v === "all" ? null : Number(v))}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Alle organisaties" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Alle organisaties</SelectItem>
+              {orgs.map((o) => (
+                <SelectItem key={o.id} value={String(o.id)}>
+                  {o.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1 w-full sm:w-auto sm:flex-1">
+          <Label htmlFor="location-search" className="text-xs">Zoeken</Label>
+          <Input
+            id="location-search"
+            type="search"
+            placeholder="Zoek locatie, SKU of productnaam…"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </div>
       </div>
 
       <div className="space-y-3 mb-8">
-        {locations.map((l) => (
+        {visibleLocations.map((l) => (
           <Card key={l.id} className="p-4">
             <div className="flex justify-between items-start">
               <div>
@@ -215,8 +236,10 @@ export function LocationsPage() {
             </Button>
           </Card>
         ))}
-        {locations.length === 0 && (
-          <p className="text-center text-muted-foreground py-4">Geen locaties</p>
+        {visibleLocations.length === 0 && (
+          <p className="text-center text-muted-foreground py-4">
+            {searchTerm ? "Geen locaties gevonden" : "Geen locaties"}
+          </p>
         )}
       </div>
 
