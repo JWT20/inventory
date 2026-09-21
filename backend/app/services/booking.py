@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models import SKU, Booking, Order, OrderLine
+from app.modules import PICKING_MODULE_BY_PRODUCT_TYPE
 from app.services import advice_holds
 from app.services.advice_holds import hold_for_order
 from app.services.stock import (
@@ -110,6 +111,40 @@ def rolcontainer_label(line: OrderLine) -> str:
     if line.order.order_kind == "replenishment":
         return line.klant.upper()
     return f"KLANT {line.customer_name.upper()}"
+
+
+def picking_module_for(order: Order) -> str | None:
+    """The module that owns how this order is picked, or None if it is unclear.
+
+    An order whose lines disagree about their method has no single owner, and is
+    refused rather than guessed at. Shared with ``picking.scan_label``'s own gate
+    so both agree on exactly the same set of orders.
+    """
+    methods = {
+        PICKING_MODULE_BY_PRODUCT_TYPE.get(line.sku.product_type)
+        for line in order.lines
+    }
+    if len(methods) != 1:
+        return None
+    return methods.pop()
+
+
+def needs_shipping_label(order: Order) -> bool:
+    """Whether this order must clear the shipping-label gate before it ships.
+
+    Only a channel order (webshop/advice-app/Shopify/bol) carries a physical
+    carrier label; a manual b2b order goes straight onto a rolcontainer with
+    nothing to scan. Mirrors what ``picking.scan_label`` itself requires, so a
+    courier is only pointed at the label screen when scanning one will actually
+    work — a vision-picked advice-app order needs this exactly as much as a
+    barcode-picked one, which is what this predicate is for.
+    """
+    if order.channel == "manual" or not order.channel_reference:
+        return False
+    module = picking_module_for(order)
+    return bool(
+        module and order.organization and module in order.organization.modules
+    )
 
 
 def replenishment_credit(

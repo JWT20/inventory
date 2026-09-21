@@ -877,6 +877,11 @@ class BookingResponse(BaseModel):
     booked_quantity: int = 1
     remaining_quantity: int = 0
     order_completed: bool = False
+    # True once this booking completed a channel order (advice-app, Shopify,
+    # bol) that still has to clear the shipping-label gate — vision-picked
+    # orders get one exactly like barcode-picked ones. Always False otherwise,
+    # including a completed manual/b2b order, which has no label to scan.
+    needs_label: bool = False
 
     model_config = {"from_attributes": True}
 

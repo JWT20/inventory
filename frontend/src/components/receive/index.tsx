@@ -5,6 +5,7 @@ import { ScanStep } from "./ScanStep";
 import { EanScanStep } from "./EanScanStep";
 import { ConfirmStep } from "./ConfirmStep";
 import { ResultStep } from "./ResultStep";
+import { LabelScanStep } from "./LabelScanStep";
 import { getISOWeek } from "./week";
 import type {
   BookingResult,
@@ -13,7 +14,7 @@ import type {
   ScanMode,
 } from "./types";
 
-type Step = "select-order" | "this-week" | "scan" | "result" | "confirm";
+type Step = "select-order" | "this-week" | "scan" | "result" | "confirm" | "label";
 
 export function ReceivePage() {
   const [step, setStep] = useState<Step>("select-order");
@@ -48,6 +49,10 @@ export function ReceivePage() {
     setLastBooking(null);
     setPendingConfirmation(null);
     setStep("scan");
+  }
+
+  function goToLabel() {
+    setStep("label");
   }
 
   function reset() {
@@ -99,6 +104,17 @@ export function ReceivePage() {
         <ResultStep
           booking={lastBooking}
           order={selectedOrder}
+          scanMode={scanMode}
+          onNext={scanNext}
+          onDone={reset}
+          onNeedsLabel={goToLabel}
+        />
+      )}
+
+      {step === "label" && lastBooking && (
+        <LabelScanStep
+          orderId={lastBooking.order_id}
+          orderReference={lastBooking.order_reference}
           scanMode={scanMode}
           onNext={scanNext}
           onDone={reset}
