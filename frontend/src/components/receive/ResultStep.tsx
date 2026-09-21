@@ -17,12 +17,14 @@ export function ResultStep({
   scanMode,
   onNext,
   onDone,
+  onNeedsLabel,
 }: {
   booking: BookingResult;
   order: Order;
   scanMode: ScanMode;
   onNext: () => void;
   onDone: () => void;
+  onNeedsLabel: () => void;
 }) {
   const referenceImages = booking.reference_image_urls ?? [];
   const [remaining, setRemaining] = useState(booking.remaining_quantity ?? 0);
@@ -31,10 +33,12 @@ export function ResultStep({
   const [totalBooked, setTotalBooked] = useState(booking.booked_quantity ?? 1);
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
 
-  // Celebrate when this booking was the one that completed the order.
+  // Celebrate when this booking was the one that completed the order — unless
+  // it still needs its shipping label scanned, where the label step itself
+  // celebrates once that happens.
   useEffect(() => {
-    if (booking.order_completed) fireCompletion();
-  }, [booking.order_completed]);
+    if (booking.order_completed && !booking.needs_label) fireCompletion();
+  }, [booking.order_completed, booking.needs_label]);
 
   async function handleBookMore() {
     if (!booking.order_line_id) return;
@@ -182,14 +186,24 @@ export function ResultStep({
         <DistributionPanel orderId={order.id} skuId={booking.sku_id} refreshKey={totalBooked} />
       )}
 
-      <div className="flex flex-col gap-3">
-        <Button size="lg" className="w-full h-14 text-lg" onClick={onNext}>
-          Volgende {SCAN_MODE_WORD[scanMode]} scannen
+      {booking.order_completed && booking.needs_label ? (
+        <Button
+          size="lg"
+          className="w-full h-14 text-lg bg-amber-600 hover:bg-amber-700"
+          onClick={onNeedsLabel}
+        >
+          Verzendlabel scannen →
         </Button>
-        <Button variant="secondary" className="w-full" onClick={onDone}>
-          Terug naar orders
-        </Button>
-      </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          <Button size="lg" className="w-full h-14 text-lg" onClick={onNext}>
+            Volgende {SCAN_MODE_WORD[scanMode]} scannen
+          </Button>
+          <Button variant="secondary" className="w-full" onClick={onDone}>
+            Terug naar orders
+          </Button>
+        </div>
+      )}
 
       <ImageLightbox
         images={lightbox?.images ?? []}

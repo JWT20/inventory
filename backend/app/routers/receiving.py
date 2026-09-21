@@ -18,6 +18,7 @@ from app.models import SKU, InventoryBalance, Order, OrderLine, Organization, Re
 from app.routers.skus import _check_duplicate_embedding, _sku_to_response
 from app.services.booking import (
     apply_booking,
+    needs_shipping_label,
     promote_pending_images_orders_for_sku,
     rolcontainer_label,
 )
@@ -1468,6 +1469,7 @@ def confirm_booking(
         booked_quantity=result.booked_quantity,
         remaining_quantity=remaining,
         order_completed=result.order_completed,
+        needs_label=result.order_completed and needs_shipping_label(order),
     )
 
 
@@ -1723,6 +1725,7 @@ def book_more(
         booked_quantity=result.booked_quantity,
         remaining_quantity=remaining,
         order_completed=result.order_completed,
+        needs_label=result.order_completed and needs_shipping_label(order),
     )
 
 

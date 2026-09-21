@@ -271,6 +271,73 @@ def test_confirm_signals_order_completed_on_last_unit(
     assert resp.json()["order_completed"] is True
 
 
+def test_confirm_flags_needs_label_for_a_vision_picked_channel_order(
+    client, db, courier_token, courier_user, sample_org
+):
+    """An advice-app order ships by carrier even though wine is picked by photo —
+    it must get the same shipping-label prompt a barcode order gets."""
+    sku = _make_sku(db)
+    sku.product_type = "vision"
+    order = _make_order(db, sample_org, "ADV-SOLO")
+    order.channel = "advice"
+    order.channel_reference = "8123"
+    customer = _make_customer(db, sample_org, "Solo")
+    line = _make_line(db, order, sku, customer, quantity=1)
+    _set_stock(db, sku, sample_org, 1)
+    db.commit()
+
+    token = _signer.dumps({
+        "order_id": order.id,
+        "order_line_id": line.id,
+        "sku_id": sku.id,
+        "confidence": 0.99,
+        "scan_image_key": "scans/test.jpg",
+        "user_id": courier_user.id,
+    })
+
+    resp = client.post(
+        "/api/receiving/book/confirm",
+        json={"confirmation_token": token, "quantity": 1},
+        headers=auth_header(courier_token),
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["order_completed"] is True
+    assert resp.json()["needs_label"] is True
+
+
+def test_confirm_does_not_flag_needs_label_for_a_manual_order(
+    client, db, courier_token, courier_user, sample_org
+):
+    """A manual (b2b) order has no carrier label — it stays on the rolcontainer."""
+    sku = _make_sku(db)
+    sku.product_type = "vision"
+    customer = _make_customer(db, sample_org, "Horeca")
+    order = _make_order(db, sample_org, "B2B-SOLO")
+    line = _make_line(db, order, sku, customer, quantity=1)
+    _set_stock(db, sku, sample_org, 1)
+    db.commit()
+
+    token = _signer.dumps({
+        "order_id": order.id,
+        "order_line_id": line.id,
+        "sku_id": sku.id,
+        "confidence": 0.99,
+        "scan_image_key": "scans/test.jpg",
+        "user_id": courier_user.id,
+    })
+
+    resp = client.post(
+        "/api/receiving/book/confirm",
+        json={"confirmation_token": token, "quantity": 1},
+        headers=auth_header(courier_token),
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["order_completed"] is True
+    assert resp.json()["needs_label"] is False
+
+
 def test_book_more_uses_order_line_id(client, db, courier_token, sample_org):
     sku = _make_sku(db)
     start_customer = _make_customer(db, sample_org, "Start")

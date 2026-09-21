@@ -20,7 +20,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.auth import assert_order_module, require_inbound_booker
-from app.modules import PICKING_MODULE_BY_PRODUCT_TYPE
 from app.database import get_db
 from app.events import publish_event
 from app.models import (
@@ -60,7 +59,7 @@ from app.schemas import (
     UndoScanRequest,
     UndoScanResponse,
 )
-from app.services.booking import apply_booking, undo_booking
+from app.services.booking import apply_booking, picking_module_for, undo_booking
 
 logger = logging.getLogger(__name__)
 
@@ -83,25 +82,13 @@ def _can_access_order(user: User, order: Order) -> bool:
 _normalize_tracking_code = normalize_tracking_code
 
 
-def _picking_module_for(order: Order) -> str | None:
-    """The module that owns how this order is picked, or None if it is unclear.
-
-    The shipping-label gate used to demand ``barcode_picking``, because the only
-    orders that reached it were picked by scanning EANs. That conflated two
-    different things: the label is always a barcode, whatever is inside the box
-    was identified some other way. A merchant who picks wine by image ships
-    parcels just the same, and was locked out of the gate for it.
-
-    An order whose lines disagree about their method has no single owner, and is
-    refused rather than guessed at.
-    """
-    methods = {
-        PICKING_MODULE_BY_PRODUCT_TYPE.get(line.sku.product_type)
-        for line in order.lines
-    }
-    if len(methods) != 1:
-        return None
-    return methods.pop()
+#: The shipping-label gate used to demand ``barcode_picking``, because the only
+#: orders that reached it were picked by scanning EANs. That conflated two
+#: different things: the label is always a barcode, whatever is inside the box
+#: was identified some other way. A merchant who picks wine by image ships
+#: parcels just the same, and was locked out of the gate for it. Shared with
+#: ``services.booking.needs_shipping_label`` so the two never drift apart.
+_picking_module_for = picking_module_for
 
 
 def _organization_picks_this_order(order: Order) -> bool:

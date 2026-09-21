@@ -61,6 +61,10 @@ export interface LabelScanResult {
   order_id: number;
   status: string;
   reference: string;
+  // An order shipping in several boxes stays "completed" until every one is
+  // scanned.
+  parcels_total: number;
+  parcels_scanned: number;
 }
 
 export interface LabelOrderOpenResult {
@@ -105,6 +109,10 @@ export interface BookingResult {
   booked_quantity?: number;
   remaining_quantity?: number;
   order_completed?: boolean;
+  // True once this booking completed a channel order (advice-app, Shopify,
+  // bol) that still needs its Veloyd shipping label scanned. False for a
+  // manual/b2b order, which finishes straight onto the rolcontainer.
+  needs_label?: boolean;
 }
 
 export interface AlternativeMatch {
