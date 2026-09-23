@@ -2,7 +2,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatBookedBoxesBottles } from "@/lib/units";
 import { DELIVERY_DAY_SHORT } from "./constants";
-import type { Order } from "./types";
+import { orderRequiresShippingLabel, type Order } from "./types";
 
 export function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (order: Order) => void }) {
   const days = [...new Set(o.lines?.map((l) => l.delivery_day) ?? [])];
@@ -28,7 +28,7 @@ export function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (ord
       <div className="flex justify-between items-center mb-1">
         <span className="font-semibold">{o.reference}</span>
         <div className="flex gap-1 items-center">
-          {o.status === "completed" && (
+          {o.status === "completed" && orderRequiresShippingLabel(o) && (
             <Badge variant="active" className="text-xs">
               Te verzenden
             </Badge>

@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { OrderCard } from "./OrderCard";
 import { CameraBarcodeScanner } from "./CameraBarcodeScanner";
 import { getISOWeek, shiftWeek } from "./week";
-import type { LabelOrderOpenResult, Order } from "./types";
+import { orderRequiresShippingLabel, type LabelOrderOpenResult, type Order } from "./types";
 
 export function OrderSelectStep({
   onSelect,
@@ -45,7 +45,7 @@ export function OrderSelectStep({
             o.status === "active" ||
             (o.status === "completed" &&
               o.pick_method === "barcode" &&
-              (o.channel ?? "manual") !== "manual"),
+              orderRequiresShippingLabel(o)),
         );
         worklist.sort((a: Order, b: Order) => {
           // "Te verzenden" (completed) first — they are one step from done.

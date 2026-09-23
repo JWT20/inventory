@@ -229,6 +229,10 @@ def _order_to_response(
         reference=order.reference,
         status=order.status,
         channel=order.channel,
+        requires_shipping_label=(
+            order.channel != "manual"
+            and (order.channel != ADVICE_CHANNEL or order.delivery_address is not None)
+        ),
         inventory_location=order.inventory_location,
         order_kind=order.order_kind,
         destination_location=order.destination_location,
@@ -632,6 +636,10 @@ def list_orders(
                         Order.status == "completed",
                         Order.channel != "manual",
                         Order.channel_reference.isnot(None),
+                        or_(
+                            Order.channel != ADVICE_CHANNEL,
+                            Order.delivery_address.has(),
+                        ),
                     ),
                 )
             )

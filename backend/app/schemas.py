@@ -554,6 +554,9 @@ class OrderResponse(BaseModel):
     status: str
     # Order provenance: "manual" (in-app/customer), "shopify" or "bol".
     channel: str = "manual"
+    # Whether this order has a parcel to verify after picking. Advice pickups
+    # are channel orders too, but have no shipping label.
+    requires_shipping_label: bool = False
     inventory_location: InventoryLocation = "warehouse"
     # "customer" (leaves the building) or "replenishment" (the merchant's own
     # stock). A replenishment order names the pool its goods land in.

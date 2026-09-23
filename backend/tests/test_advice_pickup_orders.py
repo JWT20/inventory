@@ -19,6 +19,7 @@ from app.models import (
     ReferenceImage,
     SKU,
 )
+from tests.conftest import auth_header
 
 
 API_KEY = "test-advice-write-key"
@@ -259,14 +260,14 @@ def test_the_reconciliation_view_gets_one_log_row_per_order(
 
 
 def test_a_delivery_and_a_pickup_order_can_share_one_channel_connection(
-    client, db, sample_org, monkeypatch
+    client, db, owner_token, sample_org, monkeypatch
 ):
     """Both are advice-app orders; one live/observe switch governs both."""
     _configure(monkeypatch, sample_org.id)
     _bottle(db, sample_org, "prd_a")
     _bottle(db, sample_org, "prd_b")
 
-    client.post(
+    delivery = client.post(
         "/api/integrations/advice/orders",
         json={
             "external_order_id": "delivery_1",
@@ -283,7 +284,7 @@ def test_a_delivery_and_a_pickup_order_can_share_one_channel_connection(
         },
         headers=_headers(),
     )
-    client.post(
+    pickup = client.post(
         BASE_URL,
         json=_payload(external_order_id="pickup_1"),
         headers=_headers(),
@@ -291,6 +292,13 @@ def test_a_delivery_and_a_pickup_order_can_share_one_channel_connection(
 
     assert db.query(ChannelConnection).count() == 1
     assert db.query(Order).count() == 2
+    for response, expected in ((delivery, True), (pickup, False)):
+        order = client.get(
+            f"/api/orders/{response.json()['order_id']}",
+            headers=auth_header(owner_token),
+        )
+        assert order.status_code == 200
+        assert order.json()["requires_shipping_label"] is expected
 
 
 def test_the_wrong_key_is_refused(client, db, sample_org, monkeypatch):
