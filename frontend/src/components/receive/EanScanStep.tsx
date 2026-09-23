@@ -16,6 +16,7 @@ import type {
   Order,
   UndoScanResult,
 } from "./types";
+import { orderRequiresShippingLabel } from "./types";
 
 /**
  * Barcode picking, full flow: an on-screen picklist of the order's lines, a
@@ -38,9 +39,7 @@ type Phase = "location" | "scan" | "label" | "done";
 export function EanScanStep({ order, onBack }: { order: Order; onBack: () => void }) {
   const lines = order.lines ?? [];
   const hasLocations = lines.some((l) => l.pick_location);
-  // Only channel orders (Shopify) carry a Veloyd shipping label to verify.
-  // Manual barcode orders have no label and finish straight after picking.
-  const needsLabel = (order.channel ?? "manual") !== "manual";
+  const needsLabel = orderRequiresShippingLabel(order);
 
   const [ean, setEan] = useState("");
   const [label, setLabel] = useState("");

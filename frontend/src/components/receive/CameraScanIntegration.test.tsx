@@ -315,4 +315,40 @@ describe("camera scan integration", () => {
       expect(mocks.scanLabel).toHaveBeenCalledWith(1, "V-LABEL-1"),
     );
   });
+
+  it("finishes a Stavangerweg pickup after the last EAN without a label", async () => {
+    const user = userEvent.setup();
+    mocks.scanEan.mockResolvedValue({
+      order_id: 1,
+      order_line_id: 10,
+      remaining_quantity: 0,
+      order_completed: true,
+      booking_id: 30,
+    });
+    render(
+      <EanScanStep
+        order={order({ channel: "advice", requires_shipping_label: false })}
+        onBack={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Scan met camera" }));
+    await user.click(screen.getByRole("button", { name: "camera-result-ean" }));
+
+    expect(await screen.findByText("Alles gepickt — order afgerond.")).toBeTruthy();
+    expect(screen.queryByPlaceholderText("Scan het verzendlabel…")).toBeNull();
+    expect(mocks.scanLabel).not.toHaveBeenCalled();
+  });
+
+  it("does not offer a completed pickup as a parcel awaiting dispatch", async () => {
+    mocks.listOrders.mockResolvedValue([
+      order({ reference: "PICKUP-1", channel: "advice", status: "completed", requires_shipping_label: false }),
+      order({ reference: "DELIVERY-1", channel: "advice", status: "completed", requires_shipping_label: true }),
+    ]);
+
+    render(<OrderSelectStep onSelect={vi.fn()} onThisWeek={vi.fn()} />);
+
+    expect(await screen.findByText("DELIVERY-1")).toBeTruthy();
+    expect(screen.queryByText("PICKUP-1")).toBeNull();
+  });
 });
