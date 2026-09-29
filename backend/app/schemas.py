@@ -1741,6 +1741,10 @@ class MonthlyBoxesMonth(BaseModel):
     # Orders/lines are counted for barcode products only — hence the item_ prefix.
     item_order_count: int = 0
     item_line_count: int = 0
+    # Alle orders/regels, ongeacht product. Alleen gevuld aan de webshopkant:
+    # daar is één order één pakketje, ook als er alleen wijn in zit.
+    order_count: int = 0
+    line_count: int = 0
 
 
 class MonthlyBoxesOrganization(BaseModel):
@@ -1751,6 +1755,8 @@ class MonthlyBoxesOrganization(BaseModel):
     total_items: int = 0
     total_item_orders: int = 0
     total_item_lines: int = 0
+    total_orders: int = 0
+    total_lines: int = 0
     months: list[MonthlyBoxesMonth] = []
 
 
