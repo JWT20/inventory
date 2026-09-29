@@ -1018,6 +1018,12 @@ def _monthly_units_by_organization(
         lambda: defaultdict(set)
     )
     item_lines: dict[int | None, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    # On the webshop side every order is a parcel, whatever is in it, so there
+    # orders and lines are counted across all units — wine included.
+    all_orders: dict[int | None, dict[str, set[int]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
+    all_lines: dict[int | None, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for row in query.all():
         if not row.units or row.finalized_at is None:
             continue
@@ -1033,6 +1039,9 @@ def _monthly_units_by_organization(
         if unit == "items":
             item_orders[row.org_id][month].add(row.order_id)
             item_lines[row.org_id][month] += int(row.lines)
+        if webshop:
+            all_orders[row.org_id][month].add(row.order_id)
+            all_lines[row.org_id][month] += int(row.lines)
 
     if not buckets:
         return []
@@ -1063,6 +1072,8 @@ def _monthly_units_by_organization(
                 items=v["items"],
                 item_order_count=len(orders_by_month[m]),
                 item_line_count=lines_by_month[m],
+                order_count=len(all_orders[org_id][m]),
+                line_count=all_lines[org_id][m],
             )
             for m, v in sorted(months.items(), reverse=True)
         ]
@@ -1077,6 +1088,8 @@ def _monthly_units_by_organization(
                 # summing per-month counts cannot double-count it.
                 total_item_orders=sum(len(o) for o in orders_by_month.values()),
                 total_item_lines=sum(lines_by_month.values()),
+                total_orders=sum(len(o) for o in all_orders[org_id].values()),
+                total_lines=sum(all_lines[org_id].values()),
                 months=month_rows,
             )
         )

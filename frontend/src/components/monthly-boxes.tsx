@@ -33,6 +33,9 @@ interface MonthRow {
   items: number;
   item_order_count: number;
   item_line_count: number;
+  // All orders/lines, whatever the product. Only filled on the webshop side.
+  order_count: number;
+  line_count: number;
 }
 
 interface OrgReport {
@@ -43,6 +46,8 @@ interface OrgReport {
   total_items: number;
   total_item_orders: number;
   total_item_lines: number;
+  total_orders: number;
+  total_lines: number;
   months: MonthRow[];
 }
 
@@ -148,7 +153,11 @@ export function MonthlyBoxesPage() {
   const shown = tab === "webshop" ? webshop : report;
   // Decided per merchant, not per month row: the table has one set of headers,
   // so a month without barcode orders keeps the columns and shows 0.
-  const showItemCounts = (shown?.total_item_lines ?? 0) > 0;
+  //
+  // On the webshop tab every order is a parcel, wine or not, so the order and
+  // line counts cover all products there and always show.
+  const onWebshop = tab === "webshop";
+  const showItemCounts = onWebshop || (shown?.total_item_lines ?? 0) > 0;
 
   return (
     <>
@@ -159,7 +168,7 @@ export function MonthlyBoxesPage() {
       <p className="text-sm text-muted-foreground mb-4">
         Verwerkte hoeveelheden voor voltooide en gesloten orders, per maand waarin
         de order is afgerond. Voor barcode-producten tellen we ook het aantal orders
-        en orderregels.
+        en orderregels; bij de webshop voor alle producten.
       </p>
 
       <div className="mb-4">
@@ -248,10 +257,10 @@ export function MonthlyBoxesPage() {
                     {showItemCounts && (
                       <>
                         <TableCell className="text-right tabular-nums">
-                          {m.item_order_count}
+                          {onWebshop ? m.order_count : m.item_order_count}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {m.item_line_count}
+                          {onWebshop ? m.line_count : m.item_line_count}
                         </TableCell>
                       </>
                     )}
