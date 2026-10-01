@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { BrandFooter } from "@/components/brand-footer";
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -26,7 +27,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4">
+    <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl">Dockscan</CardTitle>
@@ -65,6 +66,7 @@ export function LoginPage() {
           </form>
         </CardContent>
       </Card>
+      <BrandFooter />
     </div>
   );
 }
