@@ -14,6 +14,7 @@ import { LocationsPage } from "@/components/locations";
 import { WeeklySummaryPage } from "@/components/weekly-summary";
 import { MonthlyBoxesPage } from "@/components/monthly-boxes";
 import { NotificationBell } from "@/components/notification-bell";
+import { BrandFooter } from "@/components/brand-footer";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { LogOut } from "lucide-react";
 
@@ -148,7 +149,7 @@ function Main() {
         </TabsList>
       </header>
 
-      <main className="flex-1 p-4 pb-20">
+      <main className="flex-1 p-4">
         {visibleTabs.map((t) => (
           <TabsContent key={t.id} value={t.id}>
             {t.id === "orders" && <OrdersPage />}
@@ -166,6 +167,10 @@ function Main() {
           </TabsContent>
         ))}
       </main>
+
+      <footer className="px-4 pb-20">
+        <BrandFooter />
+      </footer>
     </Tabs>
   );
 }
