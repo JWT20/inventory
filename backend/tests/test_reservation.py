@@ -2,7 +2,7 @@
 available already excludes it; the pick releases the reservation as on_hand
 drops, keeping available stable (no oversell window)."""
 from app.models import Customer, InventoryBalance, Order, OrderLine, Organization, SKU
-from app.services.booking import apply_booking
+from app.services.booking import apply_booking, stock_for_scan
 from app.services.stock import adjust_reservation
 
 
@@ -68,3 +68,33 @@ def test_release_clamps_at_zero_for_unreserved_product(db):
     adjust_reservation(db, sku_id=sku.id, organization_id=org.id, delta=-3)
     balance = db.query(InventoryBalance).filter_by(sku_id=sku.id, organization_id=org.id).one()
     assert balance.quantity_reserved == 0
+
+
+def test_scan_check_counts_the_orders_own_reservation(db):
+    """A channel order that reserved the last units may still pick them, while
+    a manual order may not take what that channel order holds."""
+    org = _org(db, "res-scan")
+    sku = SKU(sku_code="R3", name="R3", organization_id=org.id,
+              product_type="barcode", ean="8710000099003")
+    db.add(sku)
+    db.flush()
+    db.add(InventoryBalance(sku_id=sku.id, organization_id=org.id,
+                            quantity_on_hand=2, quantity_reserved=2))
+    customer = Customer(name="K", organization_id=org.id)
+    db.add(customer)
+    db.flush()
+    channel_order = Order(organization_id=org.id, reference="R-SCAN", status="active",
+                          channel="shopify", external_id="X-SCAN")
+    manual_order = Order(organization_id=org.id, reference="R-MAN", status="active",
+                         channel="manual")
+    db.add_all([channel_order, manual_order])
+    db.flush()
+    channel_line = OrderLine(order_id=channel_order.id, sku_id=sku.id, customer_id=customer.id,
+                             klant="K", quantity=2, booked_count=0)
+    manual_line = OrderLine(order_id=manual_order.id, sku_id=sku.id, customer_id=customer.id,
+                            klant="K", quantity=1, booked_count=0)
+    db.add_all([channel_line, manual_line])
+    db.commit()
+
+    assert stock_for_scan(db, channel_order, channel_line) == 2
+    assert stock_for_scan(db, manual_order, manual_line) == 0
