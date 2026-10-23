@@ -556,6 +556,9 @@ class OrderResponse(BaseModel):
     channel: str = "manual"
     channel_reference: str | None = None
     is_pickup: bool = False
+    # Whether this order has a parcel to verify after picking. Advice pickups
+    # are channel orders too, but have no shipping label.
+    requires_shipping_label: bool = False
     inventory_location: InventoryLocation = "warehouse"
     # "customer" (leaves the building) or "replenishment" (the merchant's own
     # stock). A replenishment order names the pool its goods land in.
@@ -879,6 +882,11 @@ class BookingResponse(BaseModel):
     booked_quantity: int = 1
     remaining_quantity: int = 0
     order_completed: bool = False
+    # True once this booking completed a channel order (advice-app, Shopify,
+    # bol) that still has to clear the shipping-label gate — vision-picked
+    # orders get one exactly like barcode-picked ones. Always False otherwise,
+    # including a completed manual/b2b order, which has no label to scan.
+    needs_label: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -1735,6 +1743,10 @@ class MonthlyBoxesMonth(BaseModel):
     # Orders/lines are counted for barcode products only — hence the item_ prefix.
     item_order_count: int = 0
     item_line_count: int = 0
+    # Alle orders/regels, ongeacht product. Alleen gevuld aan de webshopkant:
+    # daar is één order één pakketje, ook als er alleen wijn in zit.
+    order_count: int = 0
+    line_count: int = 0
 
 
 class MonthlyBoxesOrganization(BaseModel):
@@ -1745,6 +1757,8 @@ class MonthlyBoxesOrganization(BaseModel):
     total_items: int = 0
     total_item_orders: int = 0
     total_item_lines: int = 0
+    total_orders: int = 0
+    total_lines: int = 0
     months: list[MonthlyBoxesMonth] = []
 
 

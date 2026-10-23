@@ -23,6 +23,7 @@ vi.mock("./DistributionPanel", () => ({ DistributionPanel: () => null }));
 const pickup: Order = {
   id: 1, reference: "ADV-TEST", channel_reference: "JUR-2026-123",
   channel: "advice", is_pickup: true, status: "completed", pick_method: "vision",
+  requires_shipping_label: false,
   customer_name: "Anna de Vries", created_at: "2026-01-01T10:00:00Z",
   total_boxes: 0, booked_boxes: 0, total_bottles: 1, booked_bottles: 1,
   total_items: 0, booked_items: 0,
@@ -109,7 +110,7 @@ describe("Stavanger pickup flow", () => {
   it("keeps the order and an actionable error if handover fails", async () => {
     const user = userEvent.setup();
     mocks.collectOrder.mockRejectedValue(new Error("Verbinding verbroken"));
-    render(<ResultStep booking={booking} order={pickup} scanMode="bottle" onNext={vi.fn()} onDone={vi.fn()} />);
+    render(<ResultStep booking={booking} order={pickup} scanMode="bottle" onNext={vi.fn()} onDone={vi.fn()} onNeedsLabel={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Afgehaald" }));
     expect((await screen.findByRole("alert")).textContent).toBe("Verbinding verbroken");
     expect((screen.getByRole("button", { name: "Afgehaald" }) as HTMLButtonElement).disabled).toBe(false);

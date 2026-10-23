@@ -21,6 +21,7 @@ export interface Order {
   channel?: string;
   channel_reference?: string | null;
   is_pickup?: boolean;
+  requires_shipping_label?: boolean;
   // "vision" = camera + AI; "barcode" = handscanner EAN scan.
   pick_method?: "vision" | "barcode";
   delivery_week?: string | null;
@@ -35,6 +36,10 @@ export interface Order {
   total_items: number;
   booked_items: number;
   lines?: OrderLine[];
+}
+
+export function orderRequiresShippingLabel(order: Order): boolean {
+  return !order.is_pickup && (order.requires_shipping_label ?? (order.channel ?? "manual") !== "manual");
 }
 
 export interface EanBookingResult {
@@ -63,6 +68,10 @@ export interface LabelScanResult {
   order_id: number;
   status: string;
   reference: string;
+  // An order shipping in several boxes stays "completed" until every one is
+  // scanned.
+  parcels_total: number;
+  parcels_scanned: number;
 }
 
 export interface LabelOrderOpenResult {
@@ -107,6 +116,10 @@ export interface BookingResult {
   booked_quantity?: number;
   remaining_quantity?: number;
   order_completed?: boolean;
+  // True once this booking completed a channel order (advice-app, Shopify,
+  // bol) that still needs its Veloyd shipping label scanned. False for a
+  // manual/b2b order, which finishes straight onto the rolcontainer.
+  needs_label?: boolean;
 }
 
 export interface AlternativeMatch {

@@ -36,7 +36,17 @@ def _make_line(db, order, sku, customer, quantity, booked_count):
     return line
 
 
-def _month(month, *, boxes=0, bottles=0, items=0, item_orders=0, item_lines=0):
+def _month(
+    month,
+    *,
+    boxes=0,
+    bottles=0,
+    items=0,
+    item_orders=0,
+    item_lines=0,
+    orders=0,
+    lines=0,
+):
     """One expected month row, so tests only spell out what they care about."""
     return {
         "month": month,
@@ -45,7 +55,29 @@ def _month(month, *, boxes=0, bottles=0, items=0, item_orders=0, item_lines=0):
         "items": items,
         "item_order_count": item_orders,
         "item_line_count": item_lines,
+        "order_count": orders,
+        "line_count": lines,
     }
+
+
+def _webshop_order(db, org, ref, finalized_at):
+    """An advice delivery order: the advice channel plus a delivery address."""
+    order = _make_order(
+        db, org, ref, status="closed", finalized_at=finalized_at, channel="advice"
+    )
+    db.add(
+        OrderDeliveryAddress(
+            order_id=order.id,
+            recipient_name="Anna de Vries",
+            street="Turfsingel",
+            house_number="8",
+            postal_code="9712 KR",
+            city="Groningen",
+            country="NL",
+        )
+    )
+    db.flush()
+    return order
 
 
 def _seed(
@@ -198,7 +230,67 @@ def test_advice_delivery_order_with_address_counts_as_webshop_work(
     assert body["organizations"] == []
     webshop_org = body["webshop"][0]
     assert webshop_org["total_bottles"] == 3
-    assert webshop_org["months"] == [_month("2026-03", bottles=3)]
+    assert webshop_org["months"] == [_month("2026-03", bottles=3, orders=1, lines=1)]
+    assert webshop_org["total_orders"] == 1
+    assert webshop_org["total_lines"] == 1
+
+
+def test_webshop_counts_wine_orders_and_lines(client, db, courier_token, sample_org):
+    # On the webshop tab every order is a parcel, so wine orders are counted
+    # too — not only barcode ones. A line booked at 0 did not ship and an order
+    # with nothing booked at all never left the door; neither counts.
+    red = SKU(sku_code="SKU-RED", name="Rood", is_bottle=True, product_type="vision")
+    white = SKU(sku_code="SKU-WHITE", name="Wit", is_bottle=True, product_type="vision")
+    db.add_all([red, white])
+    db.flush()
+    customer = Customer(name="Anna de Vries", organization_id=sample_org.id)
+    db.add(customer)
+    db.flush()
+
+    sept = datetime.datetime(2026, 9, 10, 12, 0)
+    two_lines = _webshop_order(db, sample_org, "WS-1", sept)
+    _make_line(db, two_lines, red, customer, quantity=6, booked_count=6)
+    _make_line(db, two_lines, white, customer, quantity=6, booked_count=4)
+    short_line = _webshop_order(db, sample_org, "WS-2", sept)
+    _make_line(db, short_line, red, customer, quantity=3, booked_count=3)
+    _make_line(db, short_line, white, customer, quantity=2, booked_count=0)
+    nothing_booked = _webshop_order(
+        db, sample_org, "WS-3", datetime.datetime(2026, 8, 20, 12, 0)
+    )
+    _make_line(db, nothing_booked, red, customer, quantity=1, booked_count=0)
+    db.commit()
+
+    resp = client.get(
+        "/api/orders/reports/monthly-boxes",
+        headers=auth_header(courier_token),
+    )
+    assert resp.status_code == 200
+    webshop_org = resp.json()["webshop"][0]
+    assert webshop_org["months"] == [_month("2026-09", bottles=13, orders=2, lines=3)]
+    assert webshop_org["total_orders"] == 2
+    assert webshop_org["total_lines"] == 3
+
+
+def test_customer_side_leaves_all_order_counts_empty(
+    client, db, courier_token, sample_org
+):
+    # The customer tab keeps counting orders for barcode products only.
+    _seed(
+        db,
+        sample_org,
+        "WINE",
+        status="completed",
+        booked=12,
+        finalized_at=datetime.datetime(2026, 9, 1, 12, 0),
+    )
+
+    resp = client.get(
+        "/api/orders/reports/monthly-boxes",
+        headers=auth_header(courier_token),
+    )
+    org = resp.json()["organizations"][0]
+    assert org["total_orders"] == 0
+    assert org["months"] == [_month("2026-09", boxes=12)]
 
 
 def test_bottles_counted_separately(client, db, courier_token, sample_org):

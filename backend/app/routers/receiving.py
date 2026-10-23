@@ -18,6 +18,7 @@ from app.models import SKU, InventoryBalance, Order, OrderLine, Organization, Re
 from app.routers.skus import _check_duplicate_embedding, _sku_to_response
 from app.services.booking import (
     apply_booking,
+    needs_shipping_label,
     promote_pending_images_orders_for_sku,
     rolcontainer_label,
 )
@@ -51,6 +52,7 @@ from app.services.rerank import (
     rerank_scan,
     select_rerank_candidates,
 )
+from app.services.stock import LOCATION_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -1278,9 +1280,20 @@ async def _scan_and_propose(
             .first()
         )
         if not balance or balance.quantity_available < 1:
+            pool_label = LOCATION_LABELS.get(
+                booking_order.inventory_location, booking_order.inventory_location
+            )
+            hint = (
+                " (dit order gebruikt de voorraadpool "
+                f"'{pool_label}', niet het magazijn — de koerier-app toont alleen "
+                "magazijnvoorraad, dus die kan hier geen uitsluitsel over geven)"
+                if booking_order.inventory_location != "warehouse"
+                else ""
+            )
             raise HTTPException(
                 409,
-                f"Geen voorraad voor {matched_sku.sku_code} — is de pakbon al ingeboekt?",
+                f"Geen voorraad voor {matched_sku.sku_code} in {pool_label}{hint} "
+                "— is de pakbon al ingeboekt?",
             )
 
         remaining = order_line.quantity - order_line.booked_count
@@ -1468,6 +1481,7 @@ def confirm_booking(
         booked_quantity=result.booked_quantity,
         remaining_quantity=remaining,
         order_completed=result.order_completed,
+        needs_label=result.order_completed and needs_shipping_label(order),
     )
 
 
@@ -1723,6 +1737,7 @@ def book_more(
         booked_quantity=result.booked_quantity,
         remaining_quantity=remaining,
         order_completed=result.order_completed,
+        needs_label=result.order_completed and needs_shipping_label(order),
     )
 
 

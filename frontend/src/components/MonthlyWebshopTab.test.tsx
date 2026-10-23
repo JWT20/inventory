@@ -28,6 +28,8 @@ const month = {
   items: 0,
   item_order_count: 0,
   item_line_count: 0,
+  order_count: 0,
+  line_count: 0,
 };
 
 function report(name: string, months = [month]) {
@@ -39,6 +41,8 @@ function report(name: string, months = [month]) {
     total_items: 0,
     total_item_orders: 0,
     total_item_lines: 0,
+    total_orders: 0,
+    total_lines: 0,
     months,
   };
 }
@@ -141,5 +145,34 @@ describe("monthly overview webshop tab", () => {
     // Back on the only table there is, not on an empty webshop view.
     await waitFor(() => expect(screen.queryByText("9 flessen")).toBeNull());
     await screen.findByText("augustus 2026");
+  });
+
+  it("counts wine orders and lines on the webshop tab", async () => {
+    // A webshop parcel is one order whatever is in it, so a wine-only merchant
+    // still sees how many parcels and lines went out that month.
+    vi.mocked(api.monthlyBookedBoxes).mockResolvedValue({
+      organizations: [report("Wijn van Jurjen")],
+      webshop: [
+        report("Wijn van Jurjen", [
+          { ...month, bottles: 19, order_count: 5, line_count: 7 },
+        ]),
+      ],
+      webshop_connected: true,
+    });
+    const user = userEvent.setup();
+
+    render(<MonthlyBoxesPage />);
+    await pickTheMerchant(user);
+
+    // The customer tab has no barcode work, so no order columns there.
+    await screen.findByText("augustus 2026");
+    expect(screen.queryByRole("columnheader", { name: "Orders" })).toBeNull();
+
+    await user.click(await screen.findByRole("button", { name: "Webshop" }));
+    await screen.findByText("19 flessen");
+    expect(screen.getByRole("columnheader", { name: "Orders" })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Regels" })).toBeTruthy();
+    expect(screen.getByRole("cell", { name: "5" })).toBeTruthy();
+    expect(screen.getByRole("cell", { name: "7" })).toBeTruthy();
   });
 });

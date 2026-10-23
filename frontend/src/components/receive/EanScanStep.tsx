@@ -17,6 +17,7 @@ import type {
   Order,
   UndoScanResult,
 } from "./types";
+import { orderRequiresShippingLabel } from "./types";
 
 /**
  * Barcode picking, full flow: an on-screen picklist of the order's lines, a
@@ -40,7 +41,7 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
   const lines = order.lines ?? [];
   const hasLocations = lines.some((l) => l.pick_location);
   // Pickup orders finish with a handover, deliveries with a shipping label.
-  const needsLabel = !order.is_pickup && (order.channel ?? "manual") !== "manual";
+  const needsLabel = orderRequiresShippingLabel(order);
 
   const [ean, setEan] = useState("");
   const [label, setLabel] = useState("");

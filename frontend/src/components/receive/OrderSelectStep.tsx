@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { OrderCard } from "./OrderCard";
 import { CameraBarcodeScanner } from "./CameraBarcodeScanner";
 import { getISOWeek, shiftWeek } from "./week";
-import type { LabelOrderOpenResult, Order } from "./types";
+import { orderRequiresShippingLabel, type LabelOrderOpenResult, type Order } from "./types";
 
 export function OrderSelectStep({
   onSelect,
@@ -44,8 +44,7 @@ export function OrderSelectStep({
           (o: Order) =>
             o.status === "active" ||
             (o.status === "completed" &&
-              (o.is_pickup || (o.pick_method === "barcode" &&
-                (o.channel ?? "manual") !== "manual"))),
+              (o.is_pickup || (o.pick_method === "barcode" && orderRequiresShippingLabel(o)))),
         );
         worklist.sort((a: Order, b: Order) => {
           // Orders awaiting handover or shipping first.
