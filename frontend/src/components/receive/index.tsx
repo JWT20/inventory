@@ -5,6 +5,7 @@ import { ScanStep } from "./ScanStep";
 import { EanScanStep } from "./EanScanStep";
 import { ConfirmStep } from "./ConfirmStep";
 import { ResultStep } from "./ResultStep";
+import { PickupReadyStep } from "./PickupReadyStep";
 import { LabelScanStep } from "./LabelScanStep";
 import { getISOWeek } from "./week";
 import type {
@@ -78,7 +79,9 @@ export function ReceivePage() {
       )}
 
       {step === "scan" && selectedOrder && (
-        selectedOrder.pick_method === "barcode" ? (
+        selectedOrder.is_pickup && selectedOrder.status === "completed" ? (
+          <PickupReadyStep order={selectedOrder} onBack={reset} />
+        ) : selectedOrder.pick_method === "barcode" ? (
           <EanScanStep order={selectedOrder} onBack={reset} />
         ) : (
           <ScanStep
@@ -93,6 +96,7 @@ export function ReceivePage() {
 
       {step === "confirm" && pendingConfirmation && selectedOrder && (
         <ConfirmStep
+          order={selectedOrder}
           confirmation={pendingConfirmation}
           scanMode={scanMode}
           onConfirmed={handleConfirmed}

@@ -1,6 +1,8 @@
 """Tests for week-scoped receiving line selection."""
 
-from app.models import Booking, Customer, InventoryBalance, Order, OrderLine, SKU
+import pytest
+
+from app.models import Booking, Customer, InventoryBalance, Order, OrderDeliveryAddress, OrderLine, SKU
 from app.routers.receiving import _register_signer, _select_order_line_for_scope, _signer
 from tests.conftest import auth_header
 
@@ -271,8 +273,9 @@ def test_confirm_signals_order_completed_on_last_unit(
     assert resp.json()["order_completed"] is True
 
 
-def test_confirm_flags_needs_label_for_a_vision_picked_channel_order(
-    client, db, courier_token, courier_user, sample_org
+@pytest.mark.parametrize("pickup", [False, True])
+def test_confirm_flags_needs_label_only_for_a_vision_picked_delivery(
+    client, db, courier_token, courier_user, sample_org, pickup
 ):
     """An advice-app order ships by carrier even though wine is picked by photo —
     it must get the same shipping-label prompt a barcode order gets."""
@@ -281,6 +284,11 @@ def test_confirm_flags_needs_label_for_a_vision_picked_channel_order(
     order = _make_order(db, sample_org, "ADV-SOLO")
     order.channel = "advice"
     order.channel_reference = "8123"
+    if not pickup:
+        db.add(OrderDeliveryAddress(
+            order_id=order.id, recipient_name="Solo", street="Straat", house_number="1",
+            postal_code="9712KR", city="Groningen", country="NL",
+        ))
     customer = _make_customer(db, sample_org, "Solo")
     line = _make_line(db, order, sku, customer, quantity=1)
     _set_stock(db, sku, sample_org, 1)
@@ -303,7 +311,7 @@ def test_confirm_flags_needs_label_for_a_vision_picked_channel_order(
 
     assert resp.status_code == 200
     assert resp.json()["order_completed"] is True
-    assert resp.json()["needs_label"] is True
+    assert resp.json()["needs_label"] is not pickup
 
 
 def test_confirm_does_not_flag_needs_label_for_a_manual_order(

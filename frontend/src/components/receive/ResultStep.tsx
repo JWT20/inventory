@@ -8,6 +8,7 @@ import { ImageSlideshow } from "@/components/image-slideshow";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { QuantityPicker } from "@/components/quantity-picker";
 import { DistributionPanel } from "./DistributionPanel";
+import { PickupInstructions, PickupReadyStep } from "./PickupReadyStep";
 import { SCAN_MODE_WORD } from "./constants";
 import type { BookingResult, Order, ScanMode } from "./types";
 
@@ -31,6 +32,7 @@ export function ResultStep({
   const [moreQuantity, setMoreQuantity] = useState(1);
   const [bookingMore, setBookingMore] = useState(false);
   const [totalBooked, setTotalBooked] = useState(booking.booked_quantity ?? 1);
+  const [completed, setCompleted] = useState(booking.order_completed ?? false);
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
 
   // Celebrate when this booking was the one that completed the order — unless
@@ -52,6 +54,7 @@ export function ResultStep({
       const actualBooked = result.booked_quantity ?? moreQuantity;
       setTotalBooked((prev) => prev + actualBooked);
       setRemaining(result.remaining_quantity ?? 0);
+      setCompleted(result.order_completed ?? false);
       setMoreQuantity(1);
       toast.success(`${actualBooked}× extra geboekt`);
       if (result.order_completed) fireCompletion();
@@ -67,21 +70,36 @@ export function ResultStep({
     }
   }
 
+  if (order.is_pickup && completed) {
+    return (
+      <PickupReadyStep
+        order={{ ...order, id: booking.order_id, customer_name: booking.klant }}
+        onBack={onDone}
+      />
+    );
+  }
+
   return (
     <>
-      <div className="p-6 rounded-lg bg-green-600/20 border-2 border-green-600 text-center mb-4">
-        <p className="text-green-400 text-2xl font-bold mb-2">
-          Zet op rolcontainer
-        </p>
-        <p className="text-green-300 text-3xl font-black">
-          {booking.rolcontainer}
-        </p>
-        {totalBooked > 1 && (
-          <p className="text-green-400 text-lg mt-1">
-            {totalBooked}× geboekt
+      {order.is_pickup ? (
+        <Card className="p-4 mb-4">
+          <PickupInstructions order={{ ...order, customer_name: booking.klant }} />
+        </Card>
+      ) : (
+        <div className="p-6 rounded-lg bg-green-600/20 border-2 border-green-600 text-center mb-4">
+          <p className="text-green-400 text-2xl font-bold mb-2">
+            Zet op rolcontainer
           </p>
-        )}
-      </div>
+          <p className="text-green-300 text-3xl font-black">
+            {booking.rolcontainer}
+          </p>
+          {totalBooked > 1 && (
+            <p className="text-green-400 text-lg mt-1">
+              {totalBooked}× geboekt
+            </p>
+          )}
+        </div>
+      )}
 
       <Card className="p-4 mb-4">
         <div className="space-y-1 mb-3">

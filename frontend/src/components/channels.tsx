@@ -97,6 +97,7 @@ const ORDER_STATUS_LABELS: Record<string, string> = {
   active: "Actief",
   completed: "Voltooid",
   shipped: "Verzonden",
+  collected: "Afgehaald",
   cancelled: "Geannuleerd",
   closed: "Gesloten",
 };

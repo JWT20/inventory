@@ -19,6 +19,8 @@ export interface Order {
   reference: string;
   status: string;
   channel?: string;
+  channel_reference?: string | null;
+  is_pickup?: boolean;
   requires_shipping_label?: boolean;
   // "vision" = camera + AI; "barcode" = handscanner EAN scan.
   pick_method?: "vision" | "barcode";
@@ -37,7 +39,7 @@ export interface Order {
 }
 
 export function orderRequiresShippingLabel(order: Order): boolean {
-  return order.requires_shipping_label ?? (order.channel ?? "manual") !== "manual";
+  return !order.is_pickup && (order.requires_shipping_label ?? (order.channel ?? "manual") !== "manual");
 }
 
 export interface EanBookingResult {

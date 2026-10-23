@@ -554,6 +554,8 @@ class OrderResponse(BaseModel):
     status: str
     # Order provenance: "manual" (in-app/customer), "shopify" or "bol".
     channel: str = "manual"
+    channel_reference: str | None = None
+    is_pickup: bool = False
     # Whether this order has a parcel to verify after picking. Advice pickups
     # are channel orders too, but have no shipping label.
     requires_shipping_label: bool = False

@@ -59,7 +59,7 @@ from app.schemas import (
     UndoScanRequest,
     UndoScanResponse,
 )
-from app.services.booking import apply_booking, picking_module_for, undo_booking
+from app.services.booking import apply_booking, picking_module_for, rolcontainer_label, undo_booking
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,8 @@ def _organization_picks_this_order(order: Order) -> bool:
 def _assert_openable_label_order(order: Order, user: User) -> None:
     if not _can_access_order(user, order):
         raise HTTPException(403, "Geen toegang tot deze organisatie")
+    if order.is_pickup:
+        raise HTTPException(409, "Afhaalorders hebben geen verzendlabel")
     if order.status not in ("active", "completed"):
         raise HTTPException(409, f"Order kan niet worden geopend (status: {order.status})")
     if order.channel == "manual" or not order.channel_reference:
@@ -460,7 +462,7 @@ def scan_ean(
         confidence=None,
     )
 
-    rolcontainer = f"KLANT {line.customer_name.upper()}"
+    rolcontainer = rolcontainer_label(line)
     publish_event(
         "box_booked",
         details={
@@ -763,6 +765,8 @@ def scan_label(
     # order that is no longer fully picked.
     db.refresh(order, with_for_update=True)
 
+    if order.is_pickup:
+        raise HTTPException(409, "Afhaalorders hebben geen verzendlabel")
     if order.status == "shipped":
         raise HTTPException(409, "Order is al verzonden")
     if order.status != "completed":
