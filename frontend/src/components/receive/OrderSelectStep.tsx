@@ -22,6 +22,7 @@ export function OrderSelectStep({
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [week, setWeek] = useState(() => getISOWeek(new Date()));
+  const [search, setSearch] = useState("");
   const [label, setLabel] = useState("");
   const [labelEntryOpen, setLabelEntryOpen] = useState(false);
   const [manualLabelEntry, setManualLabelEntry] = useState(false);
@@ -37,18 +38,17 @@ export function OrderSelectStep({
       setLoading(true);
       try {
         const all = await api.listOrders(week);
-        // Active orders to pick, plus fully-picked barcode channel orders that
-        // still need their shipping label scanned ("Te verzenden") — so the
-        // label step survives a refresh or navigating away.
+        // Keep picked pickups until handover, and barcode deliveries until the
+        // shipping-label check. Both must survive a refresh or navigating away.
         const worklist = all.filter(
           (o: Order) =>
             o.status === "active" ||
             (o.status === "completed" &&
-              o.pick_method === "barcode" &&
-              (o.channel ?? "manual") !== "manual"),
+              (o.is_pickup || (o.pick_method === "barcode" &&
+                (o.channel ?? "manual") !== "manual"))),
         );
         worklist.sort((a: Order, b: Order) => {
-          // "Te verzenden" (completed) first — they are one step from done.
+          // Orders awaiting handover or shipping first.
           const shipA = a.status === "completed" ? 0 : 1;
           const shipB = b.status === "completed" ? 0 : 1;
           if (shipA !== shipB) return shipA - shipB;
@@ -131,6 +131,13 @@ export function OrderSelectStep({
     setCameraOpen(true);
   }
 
+  const query = search.trim().toLocaleLowerCase();
+  const filteredOrders = orders.filter((o) =>
+    [o.customer_name, o.reference, o.channel_reference].some((value) =>
+      value?.toLocaleLowerCase().includes(query),
+    ),
+  );
+
   return (
     <>
       {/* Week navigation */}
@@ -156,6 +163,14 @@ export function OrderSelectStep({
         Kies een order hieronder.
       </p>
 
+      <input
+        aria-label="Zoek op klant of ordernummer"
+        placeholder="Zoek op klant of ordernummer…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="w-full h-11 rounded-lg border bg-background px-3 mb-4"
+      />
+
       {loading ? (
         <div className="space-y-3">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -169,13 +184,13 @@ export function OrderSelectStep({
             </Card>
           ))}
         </div>
-      ) : orders.length === 0 ? (
+      ) : filteredOrders.length === 0 ? (
         <p className="text-center text-muted-foreground py-10">
-          Geen actieve orders in {week}
+          {query ? "Geen orders gevonden" : `Geen actieve orders in ${week}`}
         </p>
       ) : (
         <div className="space-y-3">
-          {orders.map((o) => (
+          {filteredOrders.map((o) => (
             <OrderCard key={o.id} order={o} onSelect={onSelect} />
           ))}
         </div>

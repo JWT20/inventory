@@ -104,7 +104,7 @@ def list_advice_orders(
         )
     )
     if status and status != "all":
-        if status not in ("observed", "active", "completed", "shipped", "closed"):
+        if status not in ("observed", "active", "completed", "collected", "shipped", "closed"):
             raise HTTPException(400, "Onbekende status")
         query = query.filter(Order.status == status)
 

@@ -16,6 +16,7 @@ from app.auth import (
     require_can_create_orders,
     require_merchant,
     require_module,
+    require_inbound_booker,
 )
 from app.database import get_db
 from app.events import publish_event
@@ -75,7 +76,7 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 # awaiting merchant approval are visible read-only, so the courier can see
 # what work may be coming.
 COURIER_VIEWABLE_STATUSES = (
-    "pending_approval", "active", "completed", "shipped", "cancelled", "closed",
+    "pending_approval", "active", "completed", "shipped", "collected", "cancelled", "closed",
 )
 
 # The warehouse (and the invoice built on the monthly report) runs on local time,
@@ -229,6 +230,8 @@ def _order_to_response(
         reference=order.reference,
         status=order.status,
         channel=order.channel,
+        channel_reference=order.channel_reference,
+        is_pickup=order.is_pickup,
         inventory_location=order.inventory_location,
         order_kind=order.order_kind,
         destination_location=order.destination_location,
@@ -607,7 +610,9 @@ def list_orders(
 
     Optional ``week`` filter (e.g. "2026-W16") restricts to that delivery week.
     """
-    query = db.query(Order)
+    query = db.query(Order).options(
+        selectinload(Order.delivery_address), selectinload(Order.parcels),
+    )
 
     if user.is_platform_admin:
         pass  # See everything
@@ -615,14 +620,12 @@ def list_orders(
         if include_history:
             query = query.filter(Order.status.in_((
                 "pending_approval", "pending_images", "active",
-                "completed", "shipped", "cancelled", "closed",
+                "completed", "shipped", "collected", "cancelled", "closed",
             )))
         else:
-            # Open work, plus *only* completed channel orders that still need
-            # their shipping-label step ("Te verzenden"). Completed manual orders
-            # are terminal (no label) and must stay out — otherwise a burst of
-            # them would fill the sorted limit=100 window and hide active work.
-            # "shipped"/terminal states stay behind include_history.
+            # Keep completed pickups until handover, including those without a
+            # source order number. Deliveries still await their shipping label.
+            # Completed manual orders and handed-over orders are history.
             query = query.filter(
                 or_(
                     Order.status.in_(
@@ -631,7 +634,14 @@ def list_orders(
                     and_(
                         Order.status == "completed",
                         Order.channel != "manual",
-                        Order.channel_reference.isnot(None),
+                        or_(
+                            Order.channel_reference.isnot(None),
+                            and_(
+                                Order.channel == ADVICE_CHANNEL,
+                                ~Order.delivery_address.has(),
+                                ~Order.parcels.any(),
+                            ),
+                        ),
                     ),
                 )
             )
@@ -1276,7 +1286,7 @@ def weekly_order_summary(
             # Keep approved orders visible after fulfilment so a selected week
             # remains a useful historical overview. Cancelled and unapproved
             # orders deliberately stay out.
-            Order.status.in_(("pending_images", "active", "completed", "closed")),
+            Order.status.in_(("pending_images", "active", "completed", "collected", "closed")),
             # A replenishment order is the merchant restocking their own shelf,
             # not a customer buying something. Counting it here would inflate
             # both the supplier order quantities and the customer totals with
@@ -1656,6 +1666,54 @@ def get_order(
             if user.role != "courier":
                 raise HTTPException(403, "Geen toegang tot deze order")
 
+    return _order_to_response(order, db, hide_prices=user.role == "courier")
+
+
+@router.post("/{order_id}/collect", response_model=OrderResponse)
+def collect_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_inbound_booker),
+):
+    """Hand over a fully picked Stavanger order; stock was booked at picking."""
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(404, "Order niet gevonden")
+    if not (
+        user.is_platform_admin
+        or user.role == "courier"
+        or order.organization_id == user.organization_id
+    ):
+        raise HTTPException(403, "Geen toegang tot deze organisatie")
+
+    # Same lock order as picking/undo: lines first, then the order. A concurrent
+    # undo must not reopen the order between checking and handing it over.
+    lines = (
+        db.query(OrderLine)
+        .filter(OrderLine.order_id == order_id)
+        .with_for_update()
+        .populate_existing()
+        .all()
+    )
+    db.refresh(order, with_for_update=True)
+    if not order.is_pickup:
+        raise HTTPException(409, "Dit is geen afhaalorder")
+    if order.status == "collected":
+        return _order_to_response(order, db, hide_prices=user.role == "courier")
+    if order.status != "completed" or not lines or any(
+        line.booked_count < line.quantity for line in lines
+    ):
+        raise HTTPException(409, "Order is nog niet klaar voor afhalen")
+
+    order.status = "collected"
+    db.commit()
+    publish_event(
+        "order_collected",
+        details={"order_reference": order.reference},
+        user=user,
+        resource_type="order",
+        resource_id=order.id,
+    )
     return _order_to_response(order, db, hide_prices=user.role == "courier")
 
 

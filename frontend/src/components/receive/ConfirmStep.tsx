@@ -7,14 +7,17 @@ import { ImageSlideshow } from "@/components/image-slideshow";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { QuantityPicker } from "@/components/quantity-picker";
 import { SCAN_MODE_WORD, SCAN_MODE_WORD_PLURAL } from "./constants";
-import type { BookingResult, ConfirmationData, ScanMode } from "./types";
+import { PickupInstructions } from "./PickupReadyStep";
+import type { BookingResult, ConfirmationData, Order, ScanMode } from "./types";
 
 export function ConfirmStep({
+  order,
   confirmation,
   scanMode,
   onConfirmed,
   onReject,
 }: {
+  order?: Order;
   confirmation: ConfirmationData;
   scanMode: ScanMode;
   onConfirmed: (booking: BookingResult) => void;
@@ -97,7 +100,12 @@ export function ConfirmStep({
       )}
 
       {/* Rolcontainer assignment */}
-      {confirmation.rolcontainer && (
+      {order?.is_pickup && (
+        <Card className="p-4 mb-4">
+          <PickupInstructions order={{ ...order, customer_name: confirmation.klant || order.customer_name }} />
+        </Card>
+      )}
+      {!order?.is_pickup && confirmation.rolcontainer && (
         <div className="p-4 rounded-lg bg-muted/50 border text-center mb-4">
           <p className="text-sm text-muted-foreground mb-1">Zet op rolcontainer</p>
           <p className="text-xl font-black">{confirmation.rolcontainer}</p>

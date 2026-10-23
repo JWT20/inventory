@@ -554,6 +554,8 @@ class OrderResponse(BaseModel):
     status: str
     # Order provenance: "manual" (in-app/customer), "shopify" or "bol".
     channel: str = "manual"
+    channel_reference: str | None = None
+    is_pickup: bool = False
     inventory_location: InventoryLocation = "warehouse"
     # "customer" (leaves the building) or "replenishment" (the merchant's own
     # stock). A replenishment order names the pool its goods land in.

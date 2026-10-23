@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PickupReadyStep } from "./receive/PickupReadyStep";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
@@ -177,6 +178,8 @@ interface Order {
   reference: string;
   status: string;
   channel: string;
+  channel_reference?: string | null;
+  is_pickup?: boolean;
   order_kind: "customer" | "replenishment";
   destination_location: InventoryLocation | null;
   pick_method: "vision" | "barcode";
@@ -252,6 +255,7 @@ const STATUS_LABELS: Record<string, string> = {
   active: "Actief",
   completed: "Voltooid",
   shipped: "Verzonden",
+  collected: "Afgehaald",
   cancelled: "Geannuleerd",
   closed: "Gesloten",
 };
@@ -264,6 +268,7 @@ const STATUS_VARIANT: Record<string, "active" | "inactive"> = {
   active: "active",
   completed: "active",
   shipped: "active",
+  collected: "inactive",
   cancelled: "inactive",
   closed: "inactive",
 };
@@ -272,6 +277,11 @@ const money = new Intl.NumberFormat("nl-NL", {
   style: "currency",
   currency: "EUR",
 });
+
+const orderStatusLabel = (order: Order): string =>
+  order.is_pickup && order.status === "completed"
+    ? "Klaar voor afhalen"
+    : STATUS_LABELS[order.status] ?? order.status;
 
 function OrderCardSkeleton() {
   return (
@@ -453,11 +463,13 @@ export function OrdersPage() {
     order.status === "active" && remainingUnits(order) > 0;
 
   const isHistoryOrder = (order: Order) =>
-    order.status === "completed" ||
-    order.status === "shipped" ||
-    order.status === "cancelled" ||
-    order.status === "closed" ||
-    remainingUnits(order) === 0;
+    !(order.is_pickup && order.status === "completed") &&
+    (order.status === "completed" ||
+      order.status === "collected" ||
+      order.status === "shipped" ||
+      order.status === "cancelled" ||
+      order.status === "closed" ||
+      remainingUnits(order) === 0);
 
   const isApprovalOrder = (order: Order) => order.status === "pending_approval";
 
@@ -521,10 +533,16 @@ export function OrdersPage() {
     ? []
     : visibleOrders.filter(isWaitingForPhotos);
   const pendingGroups = buildWeekGroups(pendingOrders);
+  const readyPickupOrders = visibleOrders.filter(
+    (o) => o.is_pickup && o.status === "completed",
+  );
 
   const nonPendingOrders = isCustomer
     ? visibleOrders
-    : visibleOrders.filter((o) => !isPendingOrder(o) && !isWaitingForPhotos(o));
+    : visibleOrders.filter((o) =>
+        !isPendingOrder(o) && !isWaitingForPhotos(o) &&
+        !(o.is_pickup && o.status === "completed"),
+      );
 
   const openSourceOrders = isCustomer
     ? nonPendingOrders.filter((o) => orderWeek(o) >= currentWeek)
@@ -617,7 +635,7 @@ export function OrdersPage() {
         <span className="font-semibold">{o.reference}</span>
         {(!isCustomer || o.status === "pending_approval") && (
           <Badge variant={STATUS_VARIANT[o.status] ?? "inactive"}>
-            {STATUS_LABELS[o.status] ?? o.status}
+            {orderStatusLabel(o)}
           </Badge>
         )}
       </div>
@@ -705,7 +723,7 @@ export function OrdersPage() {
             </div>
             {!isCustomer && (
               <Badge variant={STATUS_VARIANT[order.status] ?? "inactive"}>
-                {STATUS_LABELS[order.status] ?? order.status}
+                {orderStatusLabel(order)}
               </Badge>
             )}
           </button>
@@ -794,6 +812,12 @@ export function OrdersPage() {
           </p>
         ) : (
           <>
+            {!isCustomer && readyPickupOrders.length > 0 && (
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold">Klaar voor afhalen</h3>
+                {readyPickupOrders.map((o) => renderOrderCard(o))}
+              </div>
+            )}
             {!isCourier && approvalOrders.length > 0 && (
               <div>
                 <div className="flex items-center gap-2 mb-2">
@@ -1952,13 +1976,16 @@ function OrderDetailDialog({
                 variant={STATUS_VARIANT[order.status] ?? "inactive"}
                 className="ml-2"
               >
-                {STATUS_LABELS[order.status] ?? order.status}
+                {orderStatusLabel(order)}
               </Badge>
             )}
           </DialogTitle>
         </DialogHeader>
 
         <DialogBody className="space-y-3">
+          {!isCustomer && order.is_pickup && order.status === "completed" && (
+            <PickupReadyStep order={order} onBack={() => { onUpdated(); onClose(); }} />
+          )}
           <p className="text-sm text-muted-foreground">
             {isCustomer
               ? `${order.organization_name}${order.created_by_name ? ` — ${order.created_by_name}` : ""}`

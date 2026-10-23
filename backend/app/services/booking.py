@@ -48,7 +48,7 @@ def recompute_order_status(order: Order, lines: list[OrderLine]) -> None:
     Orders awaiting approval stay pending_approval regardless of line edits;
     approval is an explicit merchant action.
     """
-    if order.status in ("completed", "shipped", "cancelled", "closed", "pending_approval"):
+    if order.status in ("completed", "shipped", "collected", "cancelled", "closed", "pending_approval"):
         return
     all_have_images = all(len(l.sku.reference_images) > 0 for l in lines)
     all_booked = all(l.booked_count >= l.quantity for l in lines)
@@ -107,6 +107,8 @@ def rolcontainer_label(line: OrderLine) -> str:
     goes back to the merchant, so naming a customer there would send the goods
     to the wrong place.
     """
+    if line.order.is_pickup:
+        return ""
     if line.order.order_kind == "replenishment":
         return line.klant.upper()
     return f"KLANT {line.customer_name.upper()}"
@@ -365,6 +367,8 @@ def undo_booking(db: Session, *, booking_id: int, performed_by: int) -> UndoResu
 
     if order.status == "shipped":
         raise HTTPException(409, "Order is al verzonden; terugdraaien niet mogelijk")
+    if order.status == "collected":
+        raise HTTPException(409, "Order is al afgehaald; terugdraaien niet mogelijk")
 
     line = next((l for l in lines if l.id == booking.order_line_id), None)
     if line is None:

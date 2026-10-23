@@ -6,11 +6,14 @@ task, which is exactly what a plain counter pickup (settled through
 /reservations) never gets.
 """
 
+import pytest
+
 import app.routers.integrations as integrations
 from app.config import settings
 from app.models import (
     ChannelConnection,
     ChannelSyncLog,
+    Booking,
     InventoryBalance,
     Order,
     OrderDeliveryAddress,
@@ -18,7 +21,9 @@ from app.models import (
     Organization,
     ReferenceImage,
     SKU,
+    StockMovement,
 )
+from tests.conftest import auth_header
 
 
 API_KEY = "test-advice-write-key"
@@ -395,3 +400,130 @@ def test_the_poll_wrong_key_is_refused(client, db, sample_org, monkeypatch):
     )
 
     assert response.status_code == 401
+
+
+def _live_pickup(client, db, org, monkeypatch):
+    _configure(monkeypatch, org.id)
+    monkeypatch.setattr("app.routers.picking.push_inventory_to_channels", lambda *a: None)
+    sku = _bottle(db, org, "prd_a")
+    sku.product_type = "barcode"
+    sku.ean = "8711111111111"
+    db.add(ReferenceImage(sku_id=sku.id, image_path="f.jpg", processing_status="done"))
+    _go_live(db, org)
+    response = client.post(BASE_URL, json=_payload(), headers=_headers())
+    assert response.status_code == 200, response.text
+    return db.get(Order, response.json()["order_id"]), sku
+
+
+def _pick_all(client, order, sku, token):
+    for _ in range(2):
+        response = client.post(
+            "/api/picking/scan-ean",
+            json={"order_id": order.id, "ean": sku.ean},
+            headers=auth_header(token),
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["rolcontainer"] == ""
+    assert response.json()["order_completed"] is True
+    return response.json()["booking_id"]
+
+
+def test_pickup_stays_findable_until_handover_without_deducting_stock_twice(
+    client, db, sample_org, monkeypatch, courier_token
+):
+    order, sku = _live_pickup(client, db, sample_org, monkeypatch)
+    booking_id = _pick_all(client, order, sku, courier_token)
+    headers = auth_header(courier_token)
+    db.refresh(order)
+    finalized_at = order.finalized_at
+    before = (
+        db.query(StockMovement).count(), db.query(Booking).count(),
+        db.query(InventoryBalance).one().quantity_on_hand,
+    )
+
+    # No delivery week: still present when the customer arrives in a later week.
+    ready = client.get("/api/orders?week=2027-W01", headers=headers).json()
+    assert len(ready) == 1
+    assert ready[0]["status"] == "completed"
+    assert ready[0]["is_pickup"] is True
+    assert ready[0]["customer_name"] == "Anna de Vries"
+    assert ready[0]["channel_reference"] == "JUR-2026-8CERZC"
+    label = client.post(
+        "/api/picking/scan-label",
+        json={"order_id": order.id, "label_reference": order.channel_reference},
+        headers=headers,
+    )
+    assert label.status_code == 409
+
+    for _ in range(2):  # A retry/double tap is harmless.
+        collected = client.post(f"/api/orders/{order.id}/collect", headers=headers)
+        assert collected.status_code == 200, collected.text
+        assert collected.json()["status"] == "collected"
+
+    assert client.get("/api/orders", headers=headers).json() == []
+    history = client.get("/api/orders?include_history=true", headers=headers).json()
+    assert history[0]["status"] == "collected"
+    assert client.get(f"/api/orders/{order.id}", headers=headers).status_code == 200
+    assert client.post(
+        "/api/picking/undo", json={"booking_id": booking_id}, headers=headers,
+    ).status_code == 409
+    db.refresh(order)
+    assert order.finalized_at == finalized_at
+    assert before == (
+        db.query(StockMovement).count(), db.query(Booking).count(),
+        db.query(InventoryBalance).one().quantity_on_hand,
+    )
+    poll = client.get(
+        STATUS_URL, params={"external_order_id": "order_123"}, headers=_headers(),
+    )
+    assert poll.json()["orders"][0]["status"] == "collected"
+    assert db.query(OrderParcel).count() == 0
+
+
+@pytest.mark.parametrize("token_fixture", ["owner_token", "merchant_token", "admin_token"])
+def test_merchant_and_admin_can_hand_over_a_picked_order(
+    client, db, sample_org, monkeypatch, courier_token, request, token_fixture
+):
+    token = request.getfixturevalue(token_fixture)
+    order, sku = _live_pickup(client, db, sample_org, monkeypatch)
+    _pick_all(client, order, sku, courier_token)
+    response = client.post(f"/api/orders/{order.id}/collect", headers=auth_header(token))
+    assert response.status_code == 200, response.text
+
+
+def test_handover_rejects_unpicked_delivery_and_unauthorized_orders(
+    client, db, sample_org, monkeypatch, courier_token, owner_token, customer_token
+):
+    order, sku = _live_pickup(client, db, sample_org, monkeypatch)
+    url = f"/api/orders/{order.id}/collect"
+    assert client.post(url, headers=auth_header(courier_token)).status_code == 409
+    _pick_all(client, order, sku, courier_token)
+    assert client.post(url, headers=auth_header(customer_token)).status_code == 403
+    other = Organization(name="Other", slug="other-pickup")
+    db.add(other)
+    db.flush()
+    order.organization_id = other.id
+    db.commit()
+    assert client.post(url, headers=auth_header(owner_token)).status_code == 403
+
+    db.add(OrderDeliveryAddress(
+        order_id=order.id, recipient_name="Anna", street="Straat", house_number="1",
+        postal_code="9712KR", city="Groningen", country="NL",
+    ))
+    db.commit()
+    db.expire(order, ["delivery_address"])
+    assert client.get(f"/api/orders/{order.id}", headers=auth_header(courier_token)).json()["is_pickup"] is False
+    assert client.post(url, headers=auth_header(courier_token)).status_code == 409
+
+
+def test_pickup_without_source_reference_stays_in_the_courier_list(
+    client, db, sample_org, monkeypatch, courier_token
+):
+    order, sku = _live_pickup(client, db, sample_org, monkeypatch)
+    order.channel_reference = None
+    db.commit()
+    _pick_all(client, order, sku, courier_token)
+    orders = client.get("/api/orders", headers=auth_header(courier_token)).json()
+    assert len(orders) == 1
+    assert orders[0]["is_pickup"] is True
+    assert orders[0]["reference"] == order.reference

@@ -19,6 +19,8 @@ export interface Order {
   reference: string;
   status: string;
   channel?: string;
+  channel_reference?: string | null;
+  is_pickup?: boolean;
   // "vision" = camera + AI; "barcode" = handscanner EAN scan.
   pick_method?: "vision" | "barcode";
   delivery_week?: string | null;

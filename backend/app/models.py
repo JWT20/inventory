@@ -496,7 +496,7 @@ class CustomerSKU(Base):
     sku: Mapped["SKU"] = relationship()
 
 
-VALID_ORDER_STATUSES = ("pending_approval", "pending_images", "pending_product", "needs_review", "active", "completed", "cancelled", "closed", "observed")
+VALID_ORDER_STATUSES = ("pending_approval", "pending_images", "pending_product", "needs_review", "active", "completed", "collected", "cancelled", "closed", "observed")
 # "observed": a channel order imported in observe-mode — visible for
 # reconciliation but inert (not pickable, no stock movement). Promoted to
 # "active" at cutover (live mode).
@@ -629,6 +629,16 @@ class Order(Base):
     delivery_address: Mapped["OrderDeliveryAddress | None"] = relationship(
         back_populates="order", cascade="all, delete-orphan", uselist=False
     )
+
+    @property
+    def is_pickup(self) -> bool:
+        # Advice pickup-orders have no address or parcel. Also recognise legacy
+        # deliveries whose parcel exists without a locally stored address.
+        return (
+            self.channel == "advice"
+            and self.delivery_address is None
+            and not self.parcels
+        )
 
     def mark_finalized(self) -> None:
         """Stamp ``finalized_at`` the first time the order reaches a terminal

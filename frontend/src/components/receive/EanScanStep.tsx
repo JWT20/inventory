@@ -5,6 +5,7 @@ import { api, ApiError } from "@/lib/api";
 import { fireCompletion } from "@/lib/celebrate";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { PickupInstructions, PickupReadyStep } from "./PickupReadyStep";
 import {
   CameraBarcodeScanner,
   type CameraBarcodeMode,
@@ -38,9 +39,8 @@ type Phase = "location" | "scan" | "label" | "done";
 export function EanScanStep({ order, onBack }: { order: Order; onBack: () => void }) {
   const lines = order.lines ?? [];
   const hasLocations = lines.some((l) => l.pick_location);
-  // Only channel orders (Shopify) carry a Veloyd shipping label to verify.
-  // Manual barcode orders have no label and finish straight after picking.
-  const needsLabel = (order.channel ?? "manual") !== "manual";
+  // Pickup orders finish with a handover, deliveries with a shipping label.
+  const needsLabel = !order.is_pickup && (order.channel ?? "manual") !== "manual";
 
   const [ean, setEan] = useState("");
   const [label, setLabel] = useState("");
@@ -454,7 +454,15 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
         </Card>
       )}
 
-      {phase === "done" && (
+      {order.is_pickup && phase !== "done" && (
+        <Card className="p-4 mb-3"><PickupInstructions order={order} /></Card>
+      )}
+
+      {phase === "done" && order.is_pickup && (
+        <PickupReadyStep order={order} onBack={onBack} />
+      )}
+
+      {phase === "done" && !order.is_pickup && (
         <Card className="p-4 mb-3 bg-emerald-50 border-emerald-200">
           <p className="text-sm font-semibold text-emerald-800">
             {needsLabel ? "Verzendklaar" : "Order klaar"}
@@ -503,12 +511,12 @@ export function EanScanStep({ order, onBack }: { order: Order; onBack: () => voi
         />
       )}
 
-      <button
+      {!(phase === "done" && order.is_pickup) && <button
         onClick={onBack}
         className="text-sm text-muted-foreground underline w-full text-center block mt-3"
       >
         Terug naar orders
-      </button>
+      </button>}
     </>
   );
 }

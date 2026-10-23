@@ -30,7 +30,7 @@ export function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (ord
         <div className="flex gap-1 items-center">
           {o.status === "completed" && (
             <Badge variant="active" className="text-xs">
-              Te verzenden
+              {o.is_pickup ? "Klaar voor afhalen" : "Te verzenden"}
             </Badge>
           )}
           <Badge
@@ -55,6 +55,9 @@ export function OrderCard({ order: o, onSelect }: { order: Order; onSelect: (ord
       <p className="text-sm text-muted-foreground">
         {o.customer_name ?? "—"}
       </p>
+      {o.is_pickup && o.channel_reference && (
+        <p className="text-sm font-mono">{o.channel_reference}</p>
+      )}
       <p className="text-sm text-muted-foreground">
         {formatBookedBoxesBottles(
           o.booked_boxes,

@@ -424,6 +424,8 @@ export const api = {
     return request(`/orders${query ? `?${query}` : ""}`);
   },
   getOrder: (id: number) => request(`/orders/${id}`),
+  collectOrder: (id: number) =>
+    request(`/orders/${id}/collect`, { method: "POST" }),
   approveOrder: (
     id: number,
     options: { week?: string; deliveryDay?: string; splitUnimaged?: boolean } = {},
