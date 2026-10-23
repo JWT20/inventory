@@ -12,9 +12,10 @@ from datetime import datetime
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models import SKU, Booking, Order, OrderLine
+from app.models import SKU, Booking, InventoryBalance, Order, OrderLine
 from app.modules import PICKING_MODULE_BY_PRODUCT_TYPE
 from app.services import advice_holds
+from app.services.advice_channel import ADVICE_CHANNEL
 from app.services.advice_holds import hold_for_order
 from app.services.stock import (
     BOTTLES_PER_BOX,
@@ -184,6 +185,40 @@ def replenishment_credit(
             "koppel de fles voordat deze doos gepickt wordt",
         )
     return sku.bottle_sku_id, quantity * BOTTLES_PER_BOX
+
+
+def stock_for_scan(db: Session, order: Order, line: OrderLine) -> int:
+    """How many units of ``line``'s product a scan on ``order`` can take.
+
+    The scan screen asks this before it shows the confirmation, so it must
+    count stock the way :func:`apply_booking` spends it: what this order already
+    set aside is its own, not taken. Counting it as taken made an order that
+    reserved the last bottles block its own pick.
+
+    Locks the hold before the balance row, the same order ``apply_booking``
+    takes them in.
+    """
+    hold = hold_for_order(db, order)
+    held = advice_holds.open_for_sku(db, hold, line.sku_id) if hold is not None else 0
+    balance = (
+        db.query(InventoryBalance)
+        .filter(
+            InventoryBalance.sku_id == line.sku_id,
+            InventoryBalance.organization_id == order.organization_id,
+            InventoryBalance.inventory_location == order.inventory_location,
+        )
+        .with_for_update()
+        .first()
+    )
+    if balance is None:
+        return held
+    free = balance.quantity_on_hand - balance.quantity_reserved
+    if order.channel not in ("manual", ADVICE_CHANNEL):
+        # A channel order reserved its open units at activation; the pick
+        # releases that reservation before it deducts. An advice order only
+        # ever reserves through its hold, counted above.
+        free += min(remaining_for_line(line), balance.quantity_reserved)
+    return held + max(free, 0)
 
 
 def apply_booking(

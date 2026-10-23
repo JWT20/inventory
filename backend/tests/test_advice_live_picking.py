@@ -20,7 +20,7 @@ from app.models import (
     SKU,
     StockMovement,
 )
-from app.services.booking import apply_booking, undo_booking
+from app.services.booking import apply_booking, stock_for_scan, undo_booking
 from app.services.channel_credentials import store_carrier_api_key
 
 
@@ -250,6 +250,48 @@ class TestPickSettlesTheHold:
 
         db.expire_all()
         assert _balance(db, sku.id, "webshop").quantity_on_hand == 4
+
+
+class TestScanStockCheck:
+    """The check the scan screen runs before it offers the booking."""
+
+    def test_an_order_holding_the_last_bottles_may_pick_them(
+        self, client, db, sample_org, monkeypatch
+    ):
+        """Three on the shelf, all three held for this order: not "no stock"."""
+        _configure(monkeypatch, sample_org.id)
+        _live(db, sample_org)
+        _bottle(db, sample_org, webshop=3)
+        assert _reserve(client, quantity=3).status_code == 200
+        assert _order(client, quantity=3).status_code == 200
+        order = db.query(Order).one()
+
+        assert stock_for_scan(db, order, order.lines[0]) == 3
+
+    def test_a_hold_on_the_shop_shelf_counts(
+        self, client, db, sample_org, monkeypatch
+    ):
+        """The webshop shelf is empty; the hold fell back to the shop."""
+        _configure(monkeypatch, sample_org.id)
+        _live(db, sample_org)
+        _bottle(db, sample_org, store=2)
+        assert _reserve(client, quantity=2).status_code == 200
+        assert _order(client, quantity=2).status_code == 200
+        order = db.query(Order).one()
+
+        assert stock_for_scan(db, order, order.lines[0]) == 2
+
+    def test_bottles_held_for_another_order_stay_taken(
+        self, client, db, sample_org, monkeypatch
+    ):
+        _configure(monkeypatch, sample_org.id)
+        _live(db, sample_org)
+        _bottle(db, sample_org, webshop=3)
+        assert _reserve(client, quantity=3, external="other").status_code == 200
+        assert _order(client, quantity=1, external="mine").status_code == 200
+        order = db.query(Order).filter_by(external_id="mine").one()
+
+        assert stock_for_scan(db, order, order.lines[0]) == 0
 
 
 class TestUndo:

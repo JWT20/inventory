@@ -75,6 +75,11 @@ def _lines_for(
     )
 
 
+def open_for_sku(db: Session, reservation: AdviceReservation, sku_id: int) -> int:
+    """Bottles of ``sku_id`` this hold still keeps aside, over all shelves."""
+    return sum(line.open_quantity for line in _lines_for(db, reservation, sku_id))
+
+
 def consume(
     db: Session, reservation: AdviceReservation, sku_id: int, quantity: int
 ) -> list[tuple[str, int]]:

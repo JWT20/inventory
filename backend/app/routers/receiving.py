@@ -21,6 +21,7 @@ from app.services.booking import (
     needs_shipping_label,
     promote_pending_images_orders_for_sku,
     rolcontainer_label,
+    stock_for_scan,
 )
 from app.schemas import (
     AlternativeMatch,
@@ -1269,17 +1270,7 @@ async def _scan_and_propose(
             ))
 
         # Pre-check stock availability (with row lock to prevent race conditions)
-        balance = (
-            db.query(InventoryBalance)
-            .filter(
-                InventoryBalance.sku_id == matched_sku.id,
-                InventoryBalance.organization_id == booking_order.organization_id,
-                InventoryBalance.inventory_location == booking_order.inventory_location,
-            )
-            .with_for_update()
-            .first()
-        )
-        if not balance or balance.quantity_available < 1:
+        if stock_for_scan(db, booking_order, order_line) < 1:
             pool_label = LOCATION_LABELS.get(
                 booking_order.inventory_location, booking_order.inventory_location
             )
